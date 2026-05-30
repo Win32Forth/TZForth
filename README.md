@@ -9,7 +9,7 @@ This project aims to bring the powerful, traditional Forth kernel sources (the `
 ## Current State
 
 - Basic SwiftUI macOS/iOS app structure (`FPCForthApp.swift` + `ContentView.swift`)
-- Initial integration of `KERNEL1.SEQ` (core kernel definitions, assembler primitives, vocabulary setup, etc.)
+- Initial integration of `KERNEL1.SEQ.swift` (the original KERNEL1.SEQ with every line individually commented out for embedding as Swift source)
 - Many additional kernel modules referenced (commented FLOAD list in `ContentView.swift`): VIDEO, KERNEL2–4, POINTER, SAVEREST, HANDLES, etc.
 
 ## Structure

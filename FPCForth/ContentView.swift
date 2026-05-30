@@ -23,7 +23,7 @@ struct ContentView: View {
     ContentView()
 }
 
-//FLOAD KERNEL1.SEQ
+//FLOAD KERNEL1.SEQ.swift
 //FLOAD VIDEO.SEQ
 //FLOAD KERNEL2.SEQ
 //FLOAD VIDEO2.SEQ

@@ -1,0 +1,97 @@
+TCOMREAD.ME      Welcome to the F-PC Target Compiler   by Tom Zimmer
+øTCOM?
+
+  TCOM is an optimizing Forth target compiler, that builds small ".COM"
+programs that contain only the functions in Forth that are needed to run
+your application.  TCOM is excellent for building those small little
+utilities to do things around the house, like text filters, user query
+programs, mode change utilities, etc.  Programs can be as small as few
+hundred bytes depending on the functions needed.
+
+
+Files in TCOM.ZIP
+
+  TCOM consists of several .ZIP files containing the compiler,
+documentation, compilable examples, utilities, and the source code for
+TCOM (The source will only be useful if you have F-PC 3.56).  Since TCOM
+is provided in pre-compiled form, you will probably not need to unzip
+TCOMSRC.ZIP unless you want to study TCOM's internals, or want to
+re-compile or modify it.
+
+Installing TCOM
+
+You will need a couple of megabytes of disk space to unzip everything.
+To start the install process, type:
+
+        A:TCOMINST enter
+
+  This will create a directory on your hard drive called \TCOM, and
+allow you to specify what parts of TCOM to install.
+
+TCOM Starting out
+
+  If you are just starting to examine TCOM, you might want to just type
+TCOM <enter>. This will give you a single screen of helpful
+information. Also, print the .DOC files and read through them.
+
+  The simplest example of using TCOM to compile a program, is as
+follows, move to the "\TCOM\SAMPLES" directory and type:
+
+        TCOM SAMPLE enter
+
+  If you have installed TCOM correctly and added "\TCOM" to your PATH
+statment, then TCOM will be able to open SAMPLE.SEQ, and compile it into
+a new file SAMPLE.COM. Various commandline options can modify the output
+of TCOM to optimize the .COM file created, and make symbol files for use
+while debugging.
+
+Further Exploration
+
+  As with F-PC, TCOM is NOT A SIMPLE PROGRAM. It is intended to be
+simple to use, and I hope it succeeds in this area, but you do need to
+know Forth to use it. If you are an experienced Forth programmer, and
+you use a lot of esoteric programming techniques that are
+implementation specific in your programs, then TCOM will probably not
+be able to compile them. TCOM compiles directly to machine code, and as
+such can make up for a lot of seemingly inefficient coding techniques
+automatically.  Try writing your programs using simple straight forward
+methods, and you will minimize your problems in getting TCOM to compile
+your programs properly.
+
+  I (Tom Zimmer) am generally available for one (1) phone call when you
+have problems with TCOM. Since TCOM is in the public domain, I cannot
+provide in-depth support, it is just too expensive, and I don't have
+the time. If you are a professional programmer, and have a project that
+will require continuing support from myself, then some financial
+arraingment will need to be made.  If you can't figure out how to get
+TCOM to work for you, and can't afford consulting rates for help, then
+you should find a friend to help you, or consider using another
+compiler.
+
+
+MONEY
+
+  The F-PC Forth system and TCOM are Public Domain programs, you may
+do with them what you wish.  If you find either or both programs
+Amazingly Useful, you may want to send 60.00 dollars to:
+
+                Tom Zimmer
+                292 Falcato Drive
+                Milpitas, Ca. 95035
+
+                        Home (408) 263-8859
+                        Work (408) 432-4643
+
+  You will receive the latest version of F-PC and the TCOM compiler. Be
+sure to specify the disk format, 1.4meg(3 1/2) is my prefered format.
+If you need 360k(5 1/4), 720k(3 1/2) or 1.2meg(5 1/4) please add $5.00
+for additional handling. Please include a day and evening telephone
+number. Overseas orders should either send CASH (risky) or include an
+additional US$20.00 for bank charges.
+
+WARNING!!
+This version of TCOM should only be compiled and run on F-PC version
+3.5612 or higher. Earlier versions of F-PC have incompatabilities that
+prevent TCOM from working.
+
+

@@ -1,0 +1,674 @@
+TCOM.TXT         Welcome to the F-PC Target Compiler   by Tom Zimmer
+øFeatures         What is the TCOM compiler??     (advertisement)
+
+  The files in this archive build a compiler that has the following
+features:
+
+        Creates stand-alone applications (.COM files, tiny model).
+
+        Space efficient. Only those definitions required by the
+        application are included (Space optimizing). The smallest
+        creatable Forth application ("Hello world!") is about 900 bytes.
+
+        TCOM generates subroutine (CALL) threaded code (pure
+        assembly, no Forth or NEXT in the application). The top of
+        stack is kept in the BX register to maximize performance.
+
+        A set of user enableable (/OPT) optimizers looks for machine
+        compiled instruction sequences that often occur between library
+        macros. The optimizers then adjust the compiler output to
+        produce more efficient code. The optimizers can save up to
+        twenty percent in code space, with significant improvements in
+        execution performance as well.
+
+        Additional user libraries can easily be added to the basic
+        system which currently includes over 500 functions.
+
+        Automatic forward reference resolution for functions.
+
+        Small code routines are expanded in-line as MACROS.
+
+        Handles and files supported.
+
+        Spawn DOS shell supported.
+
+        Direct video memory output of text supported.
+
+        Color output with direct video writes are supported.
+
+        Defered word support, defered words must be initialized at
+        program startup time before use (no default initialization).
+
+        VALUE support, with pre-initialized values.
+
+        Simple graphics support for plotting, line, arc and circle
+        drawing. Color (CGA/EGA/VGA) and Hercules is supported. With
+        auto-switch capability.
+
+        Menu support, you can add pull down menus to your applications.
+
+        Virtual BLOCK mass storage support.
+
+        The FPC line editor is available in the target.
+
+        Window file selection tool supported in the target application.
+
+        Added the ability to create ROMable code. (currently UNTESTED!!)
+
+        Branches are normally limited to +/- 127 bytes, but the command
+        LONG_BRANCH will switch the compiler to eliminate the limit.
+
+        LINEREAD support
+
+        Floating point support
+
+        User create defining words supported in a limited form.
+
+        A TCOM created symbolic dis-assembler is included for examining
+        the compilers output with imbeded labels and source code. A
+        seperate listing program (LS86) allows creation of a true listing
+        file for a compile.
+
+        Application programs can now include an interpretive Forth
+        system as part of their target image. A disassembler and
+        debugger are also available.
+
+        Expanded memory and pointer support is now included.
+
+        A listing file generator is included to build traditional
+        listings.
+
+        A source level debugger (BUG.COM) is supplied in source and
+        compiled form for debugging TCOM applications.
+
+        Full TSR (Terminate and Stay Resident) support.
+
+        More than 50 example programs included.
+
+øLimits         This compiler does have a few limitations, as follows:
+
+        The current version of the compiler supports nested DO ..
+        LOOPs, but not nested ?DO .. LOOPs.
+
+        64k total on Code and Static Data together.
+
+        No USER variables and no multi-tasking.
+
+        No VOCABULARY support.
+
+øWhy?           Why was TCOM written??
+
+          F-PC the Forth system I use, has continued to evolve into my
+        "IDEAL Forth system", but as it evolved, it became larger. This
+        made it more difficult to create small applications, the
+        information needed by the programmer to be able to create small
+        applications increased as well. It seemed to me that most users
+        would find it very difficult to use this FULL Forth system for
+        anything but the largest projects. Sooo, the idea of a forth
+        compiler that would create applications containing only the
+        needed words for the application occured to me, as it no doubt
+        has for many others. As with all relatively large projects, it
+        was some time before I could find time to work on the compiler,
+        and that time was often spent thinking of ways to solve its
+        various problems.  When the project was finally undertaken, it
+        was only a few weeks from no-code to functional prototype. The
+        current version of TCOM works well for developing small to
+        medium size programs. The performance of the code generated is
+        quite good. Since the output of the compiler is direct machine
+        code, you will rarely need assembly subroutines. The SZ editor,
+        CLOCK, CARD, BANNER, LINES, MIDNIGHT and other programs are
+        included with TCOM as examples of small to medium size projects
+        that use many of the features of the compiler. They also
+        illustrate how to dynamically allocate arrays at runtime keeping
+        them from taking up .COM file space.
+
+
+øFiles?         File descriptions:
+
+        SMALTCOM.BAT
+        MAKETCOM.BAT    Builds the target compiler called TCOM.EXE.
+                        F-PC must have been previously installed, and
+                        the F-PC directory must be included in your
+                        system PATH statment.
+                        Type: MAKETCOM <enter>
+
+        TARGET.SEQ      The file that loads COMPILER.SEQ, LIBRARY.SEQ,
+                        and other libraries on top of F-PC Forth. It
+                        then creates TCOM.EXE the compiler.
+
+        COMPILE1.SEQ
+        COMPILE2.SEQ    The main source files for the target compiler.
+
+        TCOMNDX.SEQ     The compiler source file that generates the index
+                        records for the LS86 external listing gnerator
+                        program.
+
+        HYPER.NDX       The index file for the hypertext help system.
+
+        LIBRARY.SEQ     The source for the function library used by
+                        the target compiler to build your
+                        application. This library is for the 80x86
+                        family of processors.
+
+        TBLOCK.SEQ      The library source for VERY simple BLOCK support.
+
+        TBOX.SEQ        The library source for the box drawing
+                        functions.
+
+        TCOLOR.SEQ      The library source for the color support
+                        functions.
+
+        TEXEC.SEQ       The library source for the spawn DOS shell
+                        function.
+
+        TENVIRON.SEQ    The library source for DOS environment access.
+                        Requires THANDLES.SEQ, and TSEARCH.SEQ.
+
+        FLOAT4TH.SEQ
+        TFLOAT.SEQ      The library source for the floating point
+                        functions. You will need to FLOAD this at the
+                        start of your program to make it available.
+                        FLOAT4TH.SEQ is a support file that provides
+                        the same floating point support to FPC as
+                        TFLOAT, it is also needed to allow TFLOAT to
+                        handle floating point number input while target
+                        compiling in interpret mode.
+
+        TGRAPH.SEQ      The library source for SIMPLE graphics support
+                        for TCOM. Only PLOT, POINT, LINE, LINETO and
+                        COLOR are supported. All use the BIOS.
+
+        THANDLES.SEQ    The library source for the functions that
+                        interface to the DOS file system.
+
+        THERC.SEQ       Simple hercules graphics plot support.
+
+        TLEDIT.SEQ      The library source for the LINEEDITOR function.
+                        Added about 4k to any application that uses it.
+
+        TMENU.SEQ       The library source for application pull down
+                        menu support. See CARD.SEQ for a usage example.
+
+        TPATH.SEQ       The library source for the prepend current path
+                        functions.
+
+        TSAVESCR.SEQ    The library source for the screen save and
+                        restore functions.
+
+        TSEARCH.SEQ     The library source for a text search word.
+
+        TSHAPES.SEQ     The library source for the ISIN and ICOS
+                        functions. Also contains ARC and CIRCLE drawing
+                        routines.
+
+        TSREAD.SEQ      Support for LINEREAD.
+
+        TTIMER.SEQ      Time date support.
+
+        TTIMSTUF.SEQ    Elapsed time and delay support.
+
+        TVIDEO.SEQ      The library source for direct video write
+                        functions. Initialized with VMODE.SET
+
+        TWFL.SEQ        The library source for the window file selection
+                        tool. Using this tool adds about 11k to an
+                        application.
+
+        TPOINT.SEQ      The library source for limited POINTER support
+                        for TCOM.
+
+        LIBRARY.DOC     The supported word list for the target compiler.
+                        About 500 functions are currently provided.
+
+        TCOM.TXT        This file.
+
+        TCOMHELP.TXT    The hypertext help system for TCOM.
+
+
+øExamples       Example programs included with TCOM
+
+
+        BANNER.SEQ      The BANNER program from F-PC, slightly modified
+                        to allow it to be compile with TCOM.
+                        Type: TCOM BANNER <enter> to compile
+
+        CAPSOFF.SEQ     An example of how to make an extreamly small
+                        program, compiles to a 52 byte .COM file.
+                        Type: TCOM CAPSOFF <enter> to compile
+
+        CARD.SEQ        A sample cardfile database, uses BLOCKs of 1k
+                        bytes for records.
+                        Type: TCOM CARD <enter> to compile
+
+        CLOCK.SEQ       A sample application source file that builds
+                        a small screen clock.
+                        Type: TCOM CLOCK <enter> to compile
+
+        CSUM.SEQ        A program that reads a file and calulates its
+                        checksum. The checksum is then displayed.
+                        Type: TCOM CSUM <enter> to compile
+
+        CURSOR.SEQ      A program that turns on the computers screen
+                        cursor. Another example of a very small program.
+                        Type: TCOM CURSOR <enter> to compile
+
+        FILTER.SEQ      A sample application that processes an input
+                        file, and writes it to an output file using
+                        standard I/O.
+                        Type: TCOM FILTER <enter> to compile
+
+        FORM.SEQ        A program to send a formfeed to the PRN printer
+                        port.
+                        Type: TCOM FORM <enter> to compile
+
+        G.SEQ           A sample application that allows quick movement
+                        from the current directory to another directory
+                        by searching through a list of directory alias's
+                        stored in a file GO.DAT. Any one or more
+                        character name can be assigned to a drive and
+                        directory. GO.DAT must be in the boot drive's
+                        root directory.
+                        Type: TCOM G <enter> to compile
+
+        LINES.SEQ       A sample application to draw lines on either
+                        a CGA or a HERCULES graphics card.
+                        Type: TCOM LINES <enter> to compile
+
+        LOOK.SEQ        An example of how to use the LINEREAD functions.
+                        Performs a string search across a set of file
+                        specs. Processes text files at 40000 bytes per
+                        second on a 6 MHz PC-AT clone system.
+                        Type: TCOM LOOK <enter>
+
+        MIDNIGHT.SEQ    A sample Towers of Hanoi solution from Peter
+                        Midnight, modified very slightly to allow
+                        target compilation.
+                        Type: TCOM MIDNIGHT <enter> to compile
+
+        PASCAL.SEQ      An upgraded version of my much earlier
+                        implementation of tiny pascal. Translates simple
+                        pascal source into Forth.
+                        Type: TCOM PASCAL <enter> to compile
+
+        PROMPTER.SEQ    A program that prompts for user input, and
+                        passes that input off to another program. Shows
+                        how to get user input, and how to shell out to
+                        perform a DOS command.
+                        Type: TCOM PROMPTER <enter>
+
+        RS232IB.SEQ     A VERY simple teminal program, including
+                        interrupt driven buffered receive serial port
+                        driver. This file is setup to be compiled
+                        either with F-PC, or TCOM, it uses compile
+                        time words to select the proper lines for the
+                        compiler environment.
+                        Type: TCOM RS232IB <enter>
+
+        SAMPLE.SEQ      An application source file for the "Hello
+                        world!" program.
+                        Type: TCOM SAMPLE <enter> to compile
+
+        SETMODE.SEQ     A program that allows the setting of any numeric
+                        video mode desired.
+                        Type: TCOM SETMODE <enter> to compile
+
+        SHELL.SEQ       An simple file shell application, allows .BAT,
+                        .EXE and .COM file to be executed, and various
+                        text files to be edited. Uses less than 30k of
+                        memory at runtime.
+                        Type: TCOM SHELL <enter> to compile
+
+        SPLAT.SEQ       A neat little screen saver, draws pretty pictures
+                        on the screen in graphics mode. Works with many
+                        modes.
+                        Type: TCOM SPLAT <enter> to compile
+
+        SZ.SEQ          A sample application source file that builds
+                        a small version of my Z editor. Only about
+                        20k bytes.
+                        Type: TCOM SZ <enter> to compile
+
+        TETRA.SEQ       An example of a simple game of TETRAS.
+                        Type: TCOM TETRA <enter> to compile
+
+        TIMEIT.SEQ      A sample application source file that times
+                        DOS commands or programs, displaying the
+                        execution elapes time when the program
+                        completes.
+                        Type: TCOM TIMEIT <enter>
+
+        ZLIST.SEQ       A file browser, small and fast. Works with very
+                        large files.
+                        Type: TCOM ZLIST <enter> to compile
+
+        ZMOVE.SEQ       A simple file transfer program for moving a file
+                        at a time between two computers that already have
+                        ZMOVE.COM.
+                        Type: TCOM ZMOVE <enter> to compile
+
+        ZTREE.SEQ       Builds and displays a list of the sizes of each
+                        directory on your hard disk. Useful for finding
+                        where all your hard disk space is going. (I will
+                        give you one guess, ... RIGHT its WINDOWS)
+
+        Other example programs are added on a continuing basis, see
+        SAMPLES.DOC in the "\TCOM\SAMPLES" directory.
+
+øDescribe       Compiler description
+
+          The TCOM compiler works by compiling a library of routines
+        into a series of MACROs that when executed (used in the target)
+        cause actual code to be compiled into the target image space.
+        In effect the entire Forth kernel is added on top of F-PC as a
+        set of words that compile themselves (macros) when used in the
+        target application.
+
+          When compiling your application, the target compiler loads
+        your source files into memory, and compiles to a 64k memory
+        buffer. When the compile is complete, the memory buffer (your
+        application) is written to a file with the same name as the
+        file you are compiling, but with a .COM extension. Additional
+        files containing a symbol list (.SYM), index (.INX), file list
+        (.FIL) and error messages (.MSG) are generated. A listing file
+        (.LST) can also be created using the /LST command line options.
+        Type TCOM by itself at the DOS command-line to see a list of
+        compiler options.
+
+øDef_Init       Default Initialization
+
+          When TCOM starts compiling your application, it automatically
+        includes some code at the beginning of the program to
+        initialize some of the things Forth needs to use. Such things
+        as the two stacks and the DS register adjusted to their
+        appropriate locations. In addition to these, TCOM initializes
+        the execution vectors for EMIT, TYPE and SPACES to their
+        default BDOS functions. It also selects the DECIMAL number
+        base, and sets FUDGE to 50 so the MS delay word will at least
+        function. If you are doing your own initialization, or using
+        VMODE.SET to select direct screen output words, then you can
+        reduce the application program size by performing your own
+        subset of the following initialization:
+
+                DECIMAL                 \ always select decimal
+                INIT-CURSOR             \ get intial cursor shape
+                50 FUDGE !              \ init MS timer, GUESS!!
+                CAPS ON                 \ ignore cAsE
+                ?DS: SSEG !             \ init search segment
+                DOSIO_INIT              \ init EMIT, TYPE & SPACES
+                $FFF0 SET_MEMORY        \ default to about 64k DATA space
+                DOS_TO_TIB              \ move command tail to TIB
+                COMSPEC_INIT            \ init command specification
+
+          The command line option /NOINIT will tell TCOM not to
+        perform the above initialize, which will save some code space
+        and require you to do any initialization needed. The complete
+        list of initialization functions is contained in the file
+        DEFINIT.SEQ in the \TCOM\SRC directory. It may be more upto
+        date than this list.
+
+        Single Pass
+
+          TCOM is a single pass compiler. Here is a description of the
+        compile process steps for building a new definition:
+
+
+                1. Get ":" from the input stream, and execute it.
+                2. ":" gets the word following and makes a target
+                        symbol from it. It then starts compiling.
+                3. Get a word from the input file.
+                4. Is the word immediate, if it is, execute it.
+                5. Is the word defined?
+                   5.1 Is word a data item?
+                       5.1.1 Is item resolved?
+                             5.1.1.1 Resolve data item to data space.
+                       5.1.2 Compile data item as a literal number.
+                   5.2 Is word a library macro?
+                       5.2.1 Execute/compile the macro.
+                   5.3 Is word a subroutine?
+                       5.3.1 Is subroutined already compiled?
+                             5.3.1.1 If not, add to resolve stack.
+                       5.3.2 Compile a subroutine call.
+                   5.4 If word is none of the above, it is illegal.
+                6. Is word a number?
+                   6.1 If it is, compile a literal number.
+                7. If word is not defined & is not a number,
+                   then compile a new symbol for a subroutine to
+                   be resolved later. (forward reference)
+                8. Repeat steps 3 through 7 until ";" reached.
+                9. Execute the items on the resolve stack until
+                   the resolve stack is empty.(resolving forward refs)
+
+
+          TCOM uses a stack to hold references that need to be
+        resolved.  While compiling a COLON definition, if a word is
+        encountered that is not yet compiled, for example TYPE. The
+        word TYPE being a kernel library word, already exists, but has
+        not been compiled so its address is placed on the resolution
+        stack to be resolved after the current definition has been
+        compiled. The location where TYPE would have been compiled, is
+        filled with a CALL and is linked into the TYPE resolve chain.
+        After the current definition finishes compiling, the words on
+        the resolve stack are executed (causing them to be compiled)
+        one at a time until the resolution stack is empty. Using this
+        technique all needed words are compiled, and all forward
+        references are resolved. Compiling then proceeds with the next
+        line of the application file we are compiling.
+
+        A similar process is used to handle user forward references.
+        When a user word is forward referenced, a symbol header is
+        created when the symbol is first encountered. An unresolved
+        call is installed and linked to the symbols resolve chain. When
+        the symbol is later defined, the resolve chain is used to link
+        all forward references to the actual location of the symbol in
+        target code space. If the symbol is never defined, then the
+        compiler will display the symbol as unresolved when the compile
+        completes. This is done by evaluating all symbols in the target
+        vocabulary, looking at the use count, and the resolution
+        address. If a symbol is used (count not zero), but does not
+        contain a resolution address (resolution address is minus one),
+        then it is printed as unresolved.
+
+øRegisters              Register & Memory Usage
+
+        The 80x86 family target provided with TCOM use registers and
+        memory as follows:
+
+                Registers:
+
+                CS      Points to beginning of CODE space
+                DS      Points to beginning of DATA space.
+                          NOT the same as CS !!!
+                ES      Temorary use, should be preserved.
+                SS = DS Stack segment is set to the DATA segment.
+                BP      Holds a zero, must be preserved. Used to
+                          improve execution performance.
+                SI      Data stack pointer.
+                BX      Holds current top of data stack.
+                AX      Temporary use.
+                CX      Temporary use.
+                DX      Temporary use.
+                DI      Temporary use.
+
+        The processor memory is used as follows:
+
+              ÚÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ¿CS:0100  All executable code is
+              ³ Executable Code  ³         placed in this area.
+              ³                  ³
+              ÃÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´DS:0000  All variables and data
+              ³ Variables,       ³         are placed in this area.
+              ³ Strings &        ³
+              ³ Arrays           ³
+              ÃÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´         HERE at end of compile.
+              ³ Free space       ³         Use DS:ALLOC to use this
+              ³                  ³         space.
+              ³                  ³
+              ÃÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´
+              ³    ^^^^^^^       ³
+              ³   Data Stack     ³
+              ÃÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´SP0, TIB
+              ³      TIB         ³
+              ³       |          ³
+              ³    vvvvvvv       ³
+              ÃÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´
+              ³    ^^^^^^^       ³
+              ³  Return Stack    ³
+              ÀÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙRP0
+
+
+Library Description
+
+  The library included with TCOM includes all of the basic Forth words
+needed to create an application. Library routines do not compile
+immediately, but instead are like macros that compile themselves when
+they are used in an application. Here is the set of defining words
+supported in the library:
+
+        >LIBRARY        Select the library functions for the defered
+                        .", ", ASCII, CODE, END-CODE, : and ;
+                        definitions.
+
+        >TARGET         Select the target functions for the defered
+                        words listed under >LIBRARY.
+
+        >FORTH          Select the Forth functions for the defered
+                        words listed under >LIBRARY.
+
+        MACRO           Make a code definition that gets compiled
+                        IN-LINE.
+
+        CODE            Make a code definition that is accessed with
+                        a CALL, and therefore MUST end in a RET
+                        instruction. These definitions can be forced to
+                        be compiled inline if the INLINE directive
+                        preceeds each use of the definition.
+
+        LABEL           Make a subroutine accessed from another CODE word.
+                        Labels return their address when used in the
+                        target program.
+
+        :               Make a colon definition that causes itself to
+                        be included in the target application when it
+                        is referenced.
+
+                        User created defining words are supported in the
+                        following form:
+
+                        : NEWCON ( n1 -- )   \ make defining word
+                                  CREATE , DOES> @ ;
+
+                        25 NEWCON MYCON         \ define a new word
+
+        M:              Like ":", but makes a colon definition that is
+                        compiled "inline". Not much call for this, but
+                        its available.
+
+        DEFER           Make a defered function. Store a function name
+                        into the defered word with !>, =: or IS .
+
+        FCONSTANT
+        2CONSTANT
+        CONSTANT        Just like a normal constant, but it is
+                        compiled as an inline literal register load
+                        in the application.
+
+        FVARIABLE
+        2VARIABLE
+        VARIABLE        Just like a normal variable, but its space is
+                        only allocated in the target application if
+                        it is referenced.
+
+        VALUE           Similar to a constant, but actually has a location
+                        in the targets memory where it resides. Think of
+                        it as an auto-fetching variable. Use =: or !> to
+                        change the contents of a VALUE.
+
+        ARRAY           Like a variable, but you can specify how much
+                        space to allocate to it.
+
+        HANDLE          Like an array with a specific number of bytes
+                        "B/HCB" allocated to it.
+
+        TABLE           Used to build tables of litaral values in the
+                        target image. Use TABLE as shown in the following
+                        example:
+                                TABLE <table_name>
+                                        1 C,    2 C,    3 C,
+                                        4 C,    5 C,    6 C,
+                                END-TABLE
+
+                        Tables return their address when used in a
+                        program, and tables DONOT start with a
+                        count byte.
+
+        CREATE          Like normal CREATE, creates a symbol, that is
+                        resolved to the next available data byte, but
+                        doesn't allocate any data space. Typically
+                        used with ," (comma quote) or ALLOT-D which
+                        will immediately allocate some bytes in data
+                        space. May be used ONLY in the target
+                        application, NOT in a library file. Use ARRAY
+                        in libraries.
+
+        NEWMENUBAR
+        NEWMENU
+        ENDMENU
+        MENULINE"       Pull down menus can be added to a user
+                        application. See the file TMENU.SEQ at the end
+                        for an example of how to use menus.
+
+        ALLOT           Like the normal ALLOT, allocates space in the
+                        target data space. Used after CREATE, ONLY in
+                        the target, may NOT be used in the LIBRARY, use
+                        the ARRAY word in the LIBRARY.
+
+        ,"              Compile a string into data space. Used after
+                        CREATE. May be used ONLY in the target
+                        application, NOT in a library file.
+
+        , C,            Compile a word or character into data space.
+                        May be used ONLY in the target application, NOT
+                        in a library file.
+
+        CSEG
+        DSEG            Used ONLY with cross compiled target
+        END-SEG         processors, creates a segment or area of memory
+                        starting at a particular address, and gives it
+                        a name. Used as follows:
+
+                        $2000 CSEG my_code1     \ define code area1
+                        #FF00 CSEG start_up2    \ define code area2
+                        $0100 DSEG my_data      \ define where data goes
+
+                        my_data                 \ select DATA area
+
+                        create data_stuff       \ compile some data
+                                0 , 0 ,
+
+                        my_code1                \ select CODE area1
+
+                        <your code words go here>
+
+                        start_up2               \ select CODE area2
+
+                        <start up code goes here>
+
+                        END-SEG                 \ finished compiling
+
+
+                        The defined names are used to switch between
+                        the various areas of the target processors
+                        memory while compiling CODE, or DATA. Each time
+                        a segment is re-selected, new code or data is
+                        APPENDED to the selected segment.
+
+  See the file LIBRARY.DOC for a complete list of supported functions.
+
+  As mentioned in the description of CODE above, all CODE words MUST
+end with a RET instruction, since they are accessed with a CALL. You
+MUST NOT use NEXT, 1PUSH, or 2PUSH to end an CODE definition, as they
+are NOT supported.  The word NEXT is in fact matched to FOR as in
+the "FOR .. NEXT" looping structure.
+
+  The inline string operators " and ." can be used in colon
+definitions as they are in normal Forth.
+

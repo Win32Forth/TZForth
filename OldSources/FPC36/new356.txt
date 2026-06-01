@@ -1,0 +1,24 @@
+02/25/91            FPC 3.56 Changes and additions
+
+     FPC 3.56 is primarily a bugfix update. Most of the bugs listed in
+   the file FPC350.BUG were fixed in 3.56. In addition to bug fixes,
+   the VIEWFIX by Robert Patten was incorporated to allow VIEW to
+   function properly when nesting FLOAD's. The "HEADER", "HEADERLESS"
+   words have been re-arrainged a little bit, since some words that
+   were marked headerless needed to be available.  A few compiler
+   control words have been added to make allow making program code more
+   compatible with the TCOM compiler.
+
+   The way F-PC uses memory has been changed from using ALLOC many times
+   in the various places in the program, to using only SETBLOCK, and a
+   POINTER scheme to keep all of the memory F-PC uses together and under
+   control. See the file POINTER.SEQ for more details.
+
+   An updated copy of Robert Smith's SFLOAT is included, as is his new
+   FFLOAT for the 80x87 floating point processor. SFLOAT is very fast,
+   but FFLOAT provides a three to seven times performance improvement
+   when a floating point processor is available.
+
+   Other changes have been made, see the file FPCNOTES.TXT after installing
+   F-PC.
+

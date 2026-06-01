@@ -1,0 +1,315 @@
+\ TCOMINTF.SEQ    This file documents the TCOM compiler target interface
+
+  The TCOM compiler can compile code only if it knows how to compile
+into your target.  The following defered words (in COMPILE1.SEQ) provide
+a mechanism for linking your target into the compiler.  In many cases,
+you can just leave the default assigned functions in place, and implement
+only those needed by your target.  Of the fifty or so defered words
+listed here, only the 24 marked "***REQUIRED***" actually MUST be
+implemented for most targets.  Others will need to be implimented for
+targets that have special characteristics.
+
+Word Name       Default Func   Compile Stack
+---------------------------------------------------------------------------
+!-T                %!-T          ( n taddr -- )
+        Stores a word into the target in low byte to low address, high
+        byte to high address order.  You will only need to change this
+        for target processors that use a different type, order or size
+        address or data.
+
+%T"                %%T"          ( a1 -- )
+        Compiles a string into target data memory. Will need to be
+        changed if your target keeps its fixed data like string in an
+        address space other than where it keeps its variables.  Typically
+        you will need to change this if you are making a ROM system since
+        strings will normally be in ROM not RAM.
+
+,"                 %%T,"         ( | string" -- )
+        Compiles a string into target data memory. See also the note for
+        %T".
+
+,-T                %,-T          ( n -- )
+        Compile the word "n" into the target.  See also the note for !-T.
+
+.ASYMBOL           %.ASYMBOL     ( a1 -- )
+        Display the symbol a1. Used by the /CODE and /SHOW options to
+        display symbols to the user as they are defined.
+
+?.CALL             %?.CALL       ( a1 -- )
+        Display symbol a1 in the form CALL <name> if the /CODE option
+        has been used.
+
+?.MACRO            %?.MACRO      ( a1 -- )
+        Display symbol a1 in the form --M-- <name> if the /CODE option
+        has been used.
+
+@-T                %@-T          ( a1 -- n1 )
+        Fetch a word from the target. See also !-T.
+
+COMP_CALL          %COMP_CALL    ( a1 -- )
+        ***REQUIRED***
+        This function compiles a CALL to the target function specified by
+        the symbol address a1.
+
+COMP_DECR          DECR          ( -- )
+        ***REQUIRED***
+        Compiles the code required to decrement the contents of an
+        address on the stack. DECR must either be a MACRO, or a F-PC
+        Forth word that uses RES_COMP_CALL if DECR is a CODE word. See
+        the following:
+
+        MACROs are installed in the COMP_ type functions as follows:
+
+                MACRO DECR      ( a1 -- )
+                                ...
+                                END-MACRO
+
+                ' DECR >EXECUTE IS COMP_DECR
+
+        Terget words in TCOM have two code fields, the first code field
+        (the own returned by ') is used while interpreting, and the
+        second code field (at >EXECUTE) is used when compiling.
+
+        If DECR were a CODE word instead of a MACRO, then you would need
+        to make a definition like this:
+
+                CODE DECR       ( a1 -- )
+                                ...
+                                RET     END-CODE
+
+                >FORTH FORTH
+                : xDECR         ( -- )
+                                F['] DECR RES_COMP_CALL ;
+                ' XDECR IS COMP_DECR
+                TARGET >TARGET
+
+        This creates a Forth definition that the compile will execute.
+        Its function is to compile a CALL to DECR, and make sure DECR
+        gets resolved in the target.
+
+COMP_FETCH         @             ( -- )
+        ***REQUIRED***
+        Compiles the code required to fetch the contents of an address
+        on the stack.  See also the note for DECR.
+
+COMP_FPUSH         FPUSH         ( -- )
+        ***REQUIRED***
+        Only required if you are trying to support floating point in your
+        target. If you aren't using floating point, just don't try to use
+        FCONSTANT.
+
+COMP_INCR          INCR          ( -- )
+        ***REQUIRED***
+        Compiles the code required to increment the contents of an
+        address on the stack.  See also the note for DECR.
+
+COMP_JMP_IMM       %COMP_JMP_IMM ( a1 -- )
+        ***REQUIRED***
+        A Forth word that compiles the code required to jump to the
+        address a1 on the stack.  a1 is not a symbol, but an actual
+        target address.
+
+COMP_OFF           OFF           ( -- )
+        ***REQUIRED***
+        Compiles the code required to set the contents of an address
+        on the stack to zero.  See also the note for DECR.
+
+COMP_ON            ON            ( -- )
+        ***REQUIRED***
+        Compiles the code required to set the contents of an address
+        on the stack to $FFFF.  See also the note for DECR.
+
+COMP_PERFORM       PERFORM       ( -- )
+        ***REQUIRED***
+        Compiles the code required to do a "FETCH EXECUTE" of the address
+        on the stack.  See also the note for DECR.
+
+COMP_PSTORE        +!            ( -- )
+        ***REQUIRED***
+        Compiles the code required to do a plus-store to the contents of
+        an address on the stack with the value under the address.  See
+        also the note for DECR.
+
+COMP_REST          %R>REST       ( -- )
+        ***REQUIRED***
+        Compiles the code required to store the top value of the RETURN
+        STACK into the contents of an address on the stack. See also the
+        note for DECR. Used by RESTORE>
+
+COMP_SAVE          %SAVE>R       ( -- )
+        ***REQUIRED***
+        Compiles the code required to save the contents of the address on
+        the stack to the RETURN STACK. See also the note for DECR.
+        Used by SAVE>
+
+COMP_SAVEST        %SAVE!>R      ( -- )
+        ***REQUIRED***
+        Compiles the code required to save the contents of the address on
+        the stack to the RETURN STACK, and then store the second item on
+        the stack into the address. See also the note for DECR.
+        Used by SAVE!>
+
+COMP_SINGLE        (LIT)         ( -- )
+        ***REQUIRED***
+        Compiles the code required to push a literal value onto the
+        stack. See also the note for DECR.
+
+COMP_STORE         !             ( -- )
+        ***REQUIRED***
+        Compiles the code required to store into the contents of an
+        address on the stack, the second item on the stack.  See also
+        the note for DECR.
+
+END-L:             %END-L:       ( -- )
+        ***REQUIRED***
+        A Forth word that performs whatever is needed for this target to
+        end a library COLON definition.
+
+END-LCODE          %END-LCODE    ( -- )
+        ***REQUIRED***
+        A Forth word that does whatever is needed to end a library CODE
+        word.
+
+END-LM:            %END-LM:      ( -- )
+        ***REQUIRED***
+        A Forth word that does whatever is needed to end a library MACRO
+        COLON word.  M: words are like normal COLON definitions except
+        they are layed inline, like a MACRO whereever they are used.
+
+END-MACRO          %END-MACRO    ( -- )
+        ***REQUIRED***
+        A forth word that does whatever is needed to end a MACRO.
+
+END-LMACRO          %END-MACRO    ( -- )
+        ***REQUIRED***
+        A forth word that does whatever is needed to end a LMACRO.
+        Normally this word differs from END-MACRO only in that is compiles
+        code that DOESN'T perform a local label stack pop (LLSET-).
+
+END-T:             %END-T:       ( -- )
+        ***REQUIRED***
+        A Forth word that does whatever is needed to end a COLON
+        definition.
+
+LCODE-START        %LCODE-START  ( -- )
+        ***REQUIRED***
+        A Forth word that does whatever is needed to start a library CODE
+        definition.  Typically selecting the assembler vocabulary, and
+        performing any assembler initialization needed.
+
+LMACRO-START        %MACRO-START  ( -- )
+        ***REQUIRED***
+        A Forth word that does whatever is needed to start a MACRO.  See
+        also LCODE-START. Normally this word differs from MACRO-START only
+        in that it DOESN'T perform a local label stack push (LLSET+).
+
+MACRO-START        %MACRO-START  ( -- )
+        ***REQUIRED***
+        A Forth word that does whatever is needed to start a MACRO.  See
+        also LCODE-START.
+
+RESOLVE_1          %RESOLVE_1    ( A1 -- )
+        Resolves address a1 to here in the target, as relative.  If your
+        branches are absolute, or byte oriented, then you will need to
+        re-define this word.
+
+SAVE-IMAGE.COM     %SAVE-IMAGE.COM ( | -- )
+        Save the current memory image after comping is complete, to disk
+        in a binary format.  You can re-define this to your liking if you
+        have a special disk file format you need.  A file HEXSAVE.SEQ
+        will save the image the Intel Hex format.
+
+SET_COLD_ENTRY     %SET_COLD_ENTRY ( -- )
+        A Forth word that sets the COLD entry vector in the target to
+        point (relative) to here of the target.  used to mark each new
+        COLON definition as the entry point of the program.
+
+START-T:           NOOP          ( -- )
+        A Forth word that does whatever is needed to start a COLON
+        definition.
+
+SUB_RET            %SUB_RET      ( -- )
+        ***REQUIRED***
+        A Forth word that backs up as many bytes is needed to UNASSEMBLE
+        the RET just compiled for the current COLON definition.  In an
+        indirect threaded target, this would be something like
+        "-2 ALLOT-T".  In a subroutine threaded target like the 8086,
+        this is "-1 ALLOT-T".
+
+TARGET-FINISH      NOOP          ( -- )
+        A Forth word that does whtever cleanup is required after a
+        compile is completed.
+
+TARGET-INITIALIZE  TARGET-INIT   ( -- )
+        A Forth word that performs whatever initialization is needed for
+        the target. This will usually include things like setting the
+        default target origin for code and data, and compiling any needed
+        assembly code needed to initialize the target stacks and other
+        things.
+
+TCODE-START        %TCODE-START  ( -- )
+        A Forth word that does whatever is needed to start a CODE word.
+
+C!-T               %C!-T         ( char taddr -- )
+        A Forth word that stores a character into the target. See also
+        the description for !-T.
+
+C,-T               %C,-T         ( char -- )
+        A Forth word that compiles a character into the target. See also
+        the description for !-T.
+
+C@-T               %C@-T         ( taddr -- char )
+        A Forth word that fetches a character from the target. See also
+        the description for !-T.
+
+COMP_HEADER        DROP          ( a1 -- )
+        A Forth word that compiles a terget HEADER for the symbol a1.
+        Invoked when the /HEADER option is used.
+
+DATA-SEG-FIX       %DATA-SEG-FIX ( -- )
+        A Special fixup word for the 8086, that adjusts a special piece
+        of code in the 8086 startup to point to where the DATA segment
+        will be when the program is later run from DOS.  Probably not
+        needed for other targets.
+
+FLOAT_POP          ????          ( -- ? )
+        Used by FCONSTANT to get a floating point number off of the
+        floating point stack at COMPILING time in preperation for
+        compiling a target floating point constant.  Probably only useful
+        on the 8086 target.
+
+FOR_DOES>          %FOR_DOES>    ( a1 -- )
+        A Forth word that causes the proper code to be compiled into the
+        target when you use the form:
+
+                @> name         -- OR --        123 !> name
+
+        Emulates the functionality provided by the forward operators in
+        F-PC, but in TCOM a literal value is compiled, followed by a
+        fetch, or a store.
+
+LINE-DONE          NOOP          ( -- )
+        A Forth word that is invoked at the end of each source line
+        processed. Useful when creating listing files.
+
+SYMFOOTER          %SYMFOOTER    ( -- )
+        A Forth word that writes the footer or end portion to the symbol
+        file after compiling is complete. Currently writes a Control-Z to
+        the symbol file to be compatible with the Brand-X debugger.
+        Invoked only if /SYM is used.
+
+SYMHEADER          %SYMHEADER    ( -- )
+        A Forth word that writes the header or beginning portion to the
+        symbol file before compiling starts. Currently does nothing.
+        Invoked only if /SYM is used.
+
+SYMWRITE           %SYMWRITE     ( A1 -- A1 )
+        A Forth word that writes the target symbol a1 to the symbol file.
+        You only need to change this if you change the symbol file
+        format. Invoked only if /SYM is used.
+
+TVERSION           TVER          ( -- )
+        A Forth word that displays the current target library version
+        number.
+
+

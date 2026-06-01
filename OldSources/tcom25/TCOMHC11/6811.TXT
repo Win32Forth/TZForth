@@ -1,0 +1,48 @@
+6811.TXT                Read me file for TCOM6811       by Tom Zimmer
+
+Version 0.02                                          Date: 05/02/94
+
+This archive TCOM6811.ZIP contains a  prototype (incomplete) release
+of a TCOM compiler for the Motorola 68HC11 processor.  In its current
+form, the compiler compiles simple test code, but the target is a
+simple direct instruction for instruction translation from the 6805
+to the 6811, so it will probably not actually run.
+
+What remains to be done, is the target LIB6811.SEQ file needs to be
+rewritten for whatever actual target architecture is optimal for the
+6811.
+
+Once this is unzipped into a directory, to build the compiler,
+listing generator, and to compile the sample test program, you must
+follow these steps:
+
+        1. Install F-PC into the default directory C:\FPC.
+
+        2. Install TCOM into the default directory C:\TCOM.
+
+        3. Be sure you have included "C:\FPC;C:\TCOM" in your PATH,
+           and restart your computer to activate the new path.
+
+        4. Unzip TCOM6811.ZIP into the directory C:\6811.
+
+        5. Switch to the C:\6811 directory, and build the compiler
+           with the following command:
+
+                C:\6811> MAKE6811 <enter>
+
+        6. Build the listing generator with the following command:
+
+                C:\6811> TCOM LS11 <enter>
+
+        7. Then you can compile the test application by typing:
+
+                C:\6811> TCOM11 TEST /LST <enter>
+
+ These steps will result in the creation of TCOM6811.EXE, LS11.COM
+and a series of data files including TEST.HEX and TEST.LST files for
+the TEST.SEQ sample.
+
+ Thats about all there is too it.
+
+
+

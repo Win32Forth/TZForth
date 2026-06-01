@@ -1,0 +1,685 @@
+\ LIBRARY.DOC    The Function Library Wordset for Target Compiler
+
+Arrays, Constants & Variables available in TCOM
+
+ARRAY CMDPATH      ( -- a1 )    holds the command spec location used by $SYS
+ARRAY DTBUF        ( -- a1 )    holds date time conversion $    See TTIMER
+ARRAY OUTBUF       ( -- a1 )    holds the LINEREAD line         See TSREAD
+
+CONST B/HCB        ( -- n1 )            bytes per handle = 72
+CONST BL           ( -- c1 )
+CONST BLACK        ( -- n1 )    black                           See TCOLOR
+CONST BLUE         ( -- n1 )    blue                            See TCOLOR
+CONST BROWN        ( -- n1 )    brown                           See TCOLOR
+CONST CYAN         ( -- n1 )    cyan                            See TCOLOR
+CONST DKGRAY       ( -- n1 )    dark gray        blink in Bg    See TCOLOR
+CONST DOS_CMD_TAIL ( -- cs:a1 ) DOS command line pointer in ?CS: space
+CONST GREEN        ( -- n1 )    green                           See TCOLOR
+CONST LTBLUE       ( -- n1 )    light blue       blink in Bg    See TCOLOR
+CONST LTCYAN       ( -- n1 )    light cyan       blink in Bg    See TCOLOR
+CONST LTGRAY       ( -- n1 )    light gray                      See TCOLOR
+CONST LTGREEN      ( -- n1 )    light green      blink in Bg    See TCOLOR
+CONST LTMAGENTA    ( -- n1 )    light magenta    blink in Bg    See TCOLOR
+CONST LTRED        ( -- n1 )    light red        blink in Bg    See TCOLOR
+CONST MAGENTA      ( -- n1 )    magenta                         See TCOLOR
+CONST RED          ( -- n1 )    red                             See TCOLOR
+CONST WHITE        ( -- n1 )    white            blink in Bg    See TCOLOR
+CONST YELLOW       ( -- n1 )    yellow           blink in Bg    See TCOLOR
+
+HNDLE COMSPEC$          command spec $, filled by COMSPEC@      See TENVIRON
+HNDLE ME$               my program name, filled by ME@          See TENVIRON
+HNDLE BLKHNDL           handle used for BLOCK I/O               See TBLOCK
+HNDLE LREADHNDL         lineread handle                         See TSREAD
+
+VALUE #COLORS      ( -- n1 )    Number of screen colors         See TGRAPH
+VALUE B/BUF        ( -- n1 )    size of block buffer            See TBLOCK
+VALUE COLS         ( -- n1 )    Screen columns, default 80      See TVIDEO
+VALUE GCH.MAX      ( -- n1 )    Maximum read characters         See TSTDIO
+VALUE HDOTS        ( -- n1 )    width of graphic screen in dots See THERC
+VALUE LRHNDL       ( -- a1 )    return addr of cur file handle  See TSREAD
+VALUE MCOLUMN      ( -- n1 )    screen menu left column         See TMENU
+VALUE MLINE        ( -- n1 )    screen menu top line            See TMENU
+VALUE PCH.MAX      ( -- n1 )    Maximum write characters        See TSTDIO
+VALUE ROWS         ( -- n1 )    Screen rows, default 25         See TVIDEO
+VALUE SVMAX        ( -- n1 )    save screen max save depth      See TSAVESCR
+VALUE SVSIZE       ( -- n1 )    size of screen to save in bytes See TSAVESCR
+VALUE VDOTS        ( -- n1 )    height of graphic screen in dots
+
+VAR   'TIB         ( -- a1 )
+VAR   #EXSTRT      ( -- a1 )
+VAR   #LINE        ( -- a1 )    current line on screen or printer
+VAR   #OUT         ( -- a1 )    current column on screen or printer
+VAR   #TIB         ( -- a1 )    number of chars in TIB
+VAR   >IN          ( -- a1 )    input offset position for WORD
+VAR   ATTRIB       ( -- a1 )                                    See TVIDEO
+VAR   BASE         ( -- a1 )    the current number base
+VAR   BLK          ( -- a1 )    current block number
+VAR   CAPS         ( -- a1 )    case sensitivity control variable, normally=on
+VAR   COLOR        ( -- a1 )    Color of the next plotted point with LINE
+VAR   DP           ( -- a1 )
+VAR   DPL          ( -- a1 )
+VAR   ESC_FLG      ( -- a1 )
+VAR   FUDGE        ( -- A1 )
+VAR   HLD          ( -- a1 )
+VAR   LINE_LIMIT   ( -- a1 )    holds read limit if no LF found in LINEREAD
+VAR   LMARGIN      ( -- a1 )    left margin, default 0          See LIBRARY
+VAR   LOADLINE     ( -- a1 )    most recently read line         See TSREAD
+VAR   RMARGIN      ( -- a1 )    right margin default 64         See LIBRARY
+VAR   RP0          ( -- a1 )
+VAR   RWERR        ( -- a1 )    most recent error code
+VAR   SAVECUR      ( -- a1 )
+VAR   SP0          ( -- a1 )
+VAR   SPAN         ( -- a1 )
+VAR   SSEG         ( -- a1 )                                    See TSEARCH
+VAR   STIME        ( -- a1 )    binary start time double variable   TTIMER
+VAR   TABSIZE      ( -- a1 )    tab size defaults to 8          See LIBRARY
+VAR   TTIME        ( -- a1 )    DOS time format double variable See TTIMER
+VAR   VIDEO-SEG    ( -- a1 )    holds current physical scrn SEG See TVIDEO
+
+Functions available in TCOM
+
+MACRO !            ( n addr -- )
+      !>           ( n1 | <name> -- )   Store n1 into VALUE <name>.
+CODE  !L           ( n1 seg addr -- )
+:     "            ( | string" -- a1 n1 )
+:     ">$          ( a1 n1 -- a2 )
+:     "envfind     ( a1 n1 -- n2 f1 )   find string a1,n1 in environment
+:     #            ( d1 -- d2 )
+:     #>           ( d# -- addr len )
+:     #EXPECT      ( a1 n1 n2 -- )      get n1 chars to a1. begin at n2.
+:     #S           ( d -- 0 0 )
+:     $>HANDLE     ( a1 a2 -- )         move counted string to handle
+:     $>TIB        ( a1 -- )            move string to TIB      See LIBRARY
+:     $SYS         ( cmd_line -- f1 )   pass command line to DOS shell
+CODE  %DOSEXPECT   ( addr +n -- n2 )    low level DOS expect
+:     %KEY         ( -- c1 )            get a key, filter func keys to > 127
+:     %SPACES      ( n1 -- )            DOS display n1 spaces
+:     %TYPE        ( a1 n1 -- )         DOS display string
+:     %VSPACES     ( n1 -- )            video display n1 spaces See TVIDEO
+:     %VTYPE       ( addr len -- )      video display string    See TVIDEO
+MACRO (+LOOP)      ( n -- )             primitive
+:     (.)          ( n -- a l )
+:     (D.)         ( d -- a l )
+:     (FNUMBER?)   ( a1 -- f1 ; F: -- r ) convert string to floating #
+MACRO (LIT)        ( n1 -- )            macro to compile an inline literals
+MACRO (LOOP)       ( -- )
+:     (NUMBER?)    ( adr -- d flag )
+:     (U.)         ( u -- a l )
+:     (UD.)        ( ud -- a l )
+MACRO *            ( n1 n2 -- n3 )
+:     */           ( n1 n2 n3 -- n1*n2/n3 )
+CODE  */MOD        ( n1 n2 n3 -- rem quot )
+CODE  *D           ( n1 n2 -- d# )
+MACRO +            ( n1 n2 -- sum )
+MACRO +!           ( n addr -- )        increment the variable by n
+      +!>          ( n | <name> -- )    increment the value following by n
+:     +LOOP        ( -- )
+CODE  +PLACE       ( a1 n1 a2 -- )      append string a1,n1 to counted a2
+:     +PLACEL      ( seg a1 n1 a2 -- )  append in DS at a1 from far a1 n1
+MACRO -            ( n1 n2 -- n1-n2 )
+CODE  -ROT         ( n1 n2 n3 -- n3 n1 n2 )
+CODE  -SCAN        ( a1 n1 c2 -- a2 n2 ) scan char backwards  uses SSEG
+CODE  -SKIP        ( a1 n1 c1 -- a2 n2 ) skip char backwards  uses SSEG
+CODE  -TRAILING    ( a1 n1 - a2 n2 )    strip trailing blanks from string
+:     .            ( n -- )
+:     ."           ( | string" -- )
+:     .COMSPEC     ( -- )               show command spec       See TENVIRON
+:     .DATE        ( -- )               display the date        See TTIMER
+:     .ELAPSED     ( -- )               display elapsed time    See TTIMSTUF
+:     .ENV         ( -- )               show environment string See TENVIRON
+:     .ENVCHR      ( i -- )                                     See TENVIRON
+:     .LRHNDL      ( -- )               display the cur file    See TSREAD
+:     .ME          ( -- )               show my programs name   See TENVIRON
+:     .PATH        ( -- )               show the path string    See TENVIRON
+:     .R           ( n l -- )
+:     .TIME        ( -- )               display the time        See TTIMER
+CODE  /            ( num den -- quot )
+CODE  /MOD         ( num den -- rem quot )
+CODE  /STRING      ( a1 n1 n2 -- a2 n3 ) split n2 chars from string a1,n1
+MACRO 0<           ( n -- f )
+:     0<=          ( n1 n2 -- f )
+MACRO 0<>          ( n -- f )
+MACRO 0=           ( n -- f )
+CODE  0>           ( n -- f )
+:     0>=          ( n1 n2 -- f )
+:     0FL          ( -- )               set first file          See TWFL
+MACRO 0MAX         ( n1 -- n2 )         clip a1 to zero or above
+:     10TH-ELAPSED ( -- n1 )            elapsed time in 10ths   See TTIMSTUF
+MACRO 1+           ( n1 -- n2 )
+MACRO 1-           ( n1 -- n2 )
+CODE  2!           ( d addr -- )
+MACRO 2*           ( n -- 2*n )
+MACRO 2+           ( n1 -- n2 )
+MACRO 2-           ( n1 -- n2 )
+MACRO 2/           ( n -- n/2 )
+MACRO 2>R          ( n1 n2 -- )
+CODE  2@           ( a1 -- d1 )         return the double word at a1
+MACRO 2DROP        ( d -- )
+CODE  2DUP         ( d -- d d )
+CODE  2OVER        ( d1 d2 -- d1 d2 d1 )
+MACRO 2R>          ( -- n1 n2 )
+MACRO 2R@          ( -- n1 n2 )
+:     2ROT         ( a b c d e f - c d e f a b )
+CODE  2SWAP        ( d1 d2 -- d2 d1 )
+      2VARIABLE    ( | <name> -- )      defind <name> as a double variable
+      2CONSTANT    ( d1 | <name> -- )   define <name> as a double constant
+MACRO 3DROP        ( n1 n2 n3 -- )
+CODE  3DUP         ( n1 n2 n3 -- n1 n2 n3 n1 n2 n3 )
+:     320x200x16   ( -- )               EGA,VGA graphics mode   See TGRAPH
+:     320x200x256  ( -- )               VGA graphics mode
+:     320x200x4    ( -- )               CGA graphics mode       See TGRAPH
+:     320x200x4M   ( -- )               CGA COMPOSITE graphics mode
+:     4DUP         ( a b c d -- a b c d a b c d )
+:     640x200x2    ( -- )               CGA graphics mode       See TGRAPH
+:     640x200x16   ( -- )               EGA,VGA graphics mode
+:     640x350x2    ( -- )               EGA,VGA MONO graphics mode
+:     640x350x16   ( -- )               EGA,VGA graphics mode
+:     640x480x2    ( -- )               EGA,VGA graphics mode
+:     640x480x16   ( -- )               VGA graphics mode
+CODE  8*           ( n -- 8*n )
+      :            ( | <name> -- )      define a new target definition
+      ::           ( | <name> -- )      define compile time user defining word
+CODE  <            ( n1 n2 -- f )
+:     <#           ( -- )
+:     <=           ( n1 n2 -- f )
+MACRO <>           ( n1 n2 -- f )
+CODE  <HRENAME>    ( handle1 handle2 -- ax cf=0 | ecode 1 )     See THANLDES
+MACRO =            ( n1 n2 -- f )
+      =:           ( n1 | <name> -- )   Assign n1 into VALUE <name>.
+CODE  >            ( n1 n2 -- f )
+:     >=           ( n1 n2 -- f )
+:     >ATTRIB      ( handle -- attrib-addr )           move to attrib addr
+:     >BG          ( n1 -- )            set background color    See TCOLOR
+:     >BOLD        ( -- )               BRIGHT                  See TVIDEO
+:     >BOLDBLNK    ( -- )               BOLD BLINK              See TVIDEO
+:     >BOLDUL      ( -- )               BOLD UNDERLINE          See TVIDEO
+:     >BOX         ( -- )               select full around BOX  See TBOX
+:     >FG          ( n1 -- )            set forground color     See TCOLOR
+:     >HNDLE       ( handle -- handle-addr )           move to DOS hndl #
+:     >MENU        ( -- )               select menu type BOX    See TBOX
+:     >NAM         ( handle -- name-string-addr )      move to frst name chr
+:     >NORM        ( -- )               NORMAL                  See TVIDEO
+MACRO >R           ( n -- )
+:     >REV         ( -- )               REVERSE                 See TVIDEO
+:     >REVBLNK     ( -- )               REVERSE BLINK           See TVIDEO
+:     >UL          ( -- )               UNDERLINE               See TVIDEO
+:     ?CR          ( -- )               need CR?                See LIBRARY
+MACRO ?CS:         ( -- cs )            where the code is located.
+:     ?DNEGATE     ( d1 n -- d2 )
+MACRO ?DO          ( l i -- )           ?DO .. LOOP or ?DO .. +LOOP
+MACRO ?DS:         ( -- ds )            where all the data is located
+MACRO ?DUP         ( n1 -- [n1] n1 )    duplicate if not zero
+MACRO ?EXIT        ( f1 -- )            exit definition if f1 is true
+:     ?KEYPAUSE    ( -- )               Pause if key pressed
+MACRO ?LEAVE       ( f -- )             leave loop if f1 true
+:     ?LINE        ( n1 -- )            conditional CR check    See LIBRARY
+:     ?NEGATE      ( n1 n2 -- n3 )
+:     ?PRINTER.READY ( -- f1 )          is LPT1 ready for a character
+:     ?SYSERROR    ( n1 -- )            leave prog if n1 = 2 or 8 See TEXEC
+:     ?UPPERCASE   ( a1 -- a1 )         conditionally convert $ to uppercase
+CODE  ?VMODE       ( -- n1 )            get the video mode from DOS
+MACRO @            ( a1 -- n1 )         return the word contents of a1
+CODE  @L           ( seg a1 -- n1 )     get word from external memory
+:     ABORT        ( -- )               Terminate the program, return to DOS.
+      ABORT"       ( f1 | string" -- )  if f1 true, display string and ABORT.
+MACRO ABS          ( n1 -- n2 )         return the absolute value of n1
+MACRO AGAIN        ( -- )               BEGIN .. AGAIN
+CODE  ALLOC        ( n1 -- n2 n3 f1 )   allocate DOS memory
+:     ALLOT        ( n1 -- )            allot target data space.
+MACRO AND          ( n1 n2 -- n3 )      logical and of n1,n2
+:     ARC          ( x y radius start-ang end-ang -- )          see TSHAPES
+      ARRAY        ( n1 | <name> -- )   define <name> as an array of size n1
+:     AT           ( X Y -- )           set current cursor position
+:     AT?          ( -- X Y )           return current cursor position
+:     B>SEC        ( d1 -- n1 )         convert bin time to seconds TTIMER
+:     B>T          ( d1 -- )            save bin time to TTIME var  TTIMER
+:     BCR          ( -- )               BOX carraige return     See TBOX
+CODE  BDOS         ( DX AH -- AL )      DOS call interface
+CODE  BDOS2        ( CX DX AL -- CX DX AX )
+:     BDOSKEY      ( -- c1 )            get key using DOS call redirectable
+:     BDOSKEY?     ( -- c1 )            get key DOS no wait redirectable
+:     BEEP         ( -- )               beep the speaker
+MACRO BEGIN        ( -- )               BEGIN .. UNTIL
+CODE  BETWEEN      ( n lo hi -- flag )  perform range check
+:     BIG-CURSOR   ( -- )               set block cursor
+:     BLANK        ( a1 n1 -- )         fill an array a1 with n1 blanks
+:     BLOCK        ( n1 -- a1 )         get block n1 from current file as a1
+CODE  BOUNDS       ( n1 n2 -- n3 n4 )   Calculate limits used in DO-loop
+:     BOX          ( x y x' y' -- )     draw a BOX on the screen  See TBOX
+:     BOX&FILL     ( x y x' y' -- )     draw BOX & fill it with spaces
+:     BUFFER       ( n1 -- a1 )         allocate buffer to block n1 return a1
+:     BUFIO_INIT   ( -- )               Initialize buffered I/O See TSTDIO
+:     BYE          ( -- )               leave program
+MACRO C!           ( char addr -- )
+CODE  C!L          ( byte seg addr -- )
+MACRO C+!          ( n addr -- )
+MACRO C@           ( addr -- char )
+CODE  C@L          ( seg addr -- byte )
+CODE  CAPS-COMP    ( addr1 addr2 len -- -1 | 0 | 1 )
+      CASE         ( -- )               start CASE OF ENDOF ENDCASE stmnt.
+:     CIRCLE       ( x y radius -- )    draw a circle           See TSHAPES
+:     CLR-HCB      ( handle - )         clear out the handle
+ALIAS CLS          ( -- )               An ALIAS for DARK, clears the screen.
+CODE  CMOVE        (  from to count -- )
+CODE  CMOVE>       ( from to count -- )
+CODE  CMOVEL       ( sseg sptr dseg dptr cnt -- )
+CODE  CMOVEL>      ( sseg sptr dseg dptr cnt -- )
+      CODE         ( | <name> -- )      start an assembly definition <name>
+CODE  COMP         ( addr1 addr2 len -- -1 | 0 | 1 )
+:     COMPARE      ( addr1 addr2 len -- -1 | 0 | 1 )
+:     COMSPEC@     ( -- )               extract the command specification
+:     COMSPEC_INIT ( -- )               initalize CMDBUF for $SYS
+:     COM_EXTRACT  ( a1 -- )            extract the command specification
+      CONSTANT     ( n1 | <name> -- )   define <name> as a constant number
+:     CONVERT      ( +d1 adr1 -- +d2 adr2 )
+CODE  COUNT        ( a1 -- a2 n1 )      return addr and length of counted $
+:     CR           ( -- )               perform a carraige return
+      CREATE       ( | <name> -- ) make <name> like a variable, but no bytes
+MACRO CRESET       ( b addr -- )
+      CSEG         ( a1 | <name> -- )   create a new CODE segment in memory
+MACRO CSET         ( b addr -- )
+MACRO CTOGGLE      ( b addr -- )
+:     CURSOR-OFF   ( -- )               turn off the cursor display
+:     CURSOR-ON    ( -- )               turn on the cursor display
+CODE  CURPOINTER   ( hndle -- d1 )      get file pos in cur file See TSREAD
+CODE  D+           ( d1 d2 -- dsum )    double number add
+CODE  D+!          ( d addr -- )        double number plus store
+:     D-           ( d1 d2 -- d3 )      double number subtract
+:     D.           ( d -- )             display double number
+:     D.R          ( d l -- )           display double number right in field
+:     D.M.Y        ( -- )               select D.M.Y date format See TTIMER
+:     D0=          ( d -- f )           double number zero equals
+MACRO D2*          ( d -- d*2 )         double number shift left
+MACRO D2/          ( d -- d/2 )         double number shift right
+:     D<           ( d1 d2 -- f )       double number less than
+:     D=           ( d1 d2 -- f )       double number equal
+:     D>           ( d1 d2 -- f )       double number greater than
+CODE  DABS         ( d1 -- d2 )         absolute value of top double number
+:     DARK         ( -- )               clear screen
+CODE  DEALLOC      ( n1 -- f1 )         release DOS allocated memory
+:     DECIMAL      ( -- )               select the decimal number base
+MACRO DECR         ( addr -- )          decrement contants of addr
+      DECR>        ( | <name> -- )      decrement value following
+      DEF-RWMODE   ( -- )               sets HOPEN R/W mode.    See THANDLES
+      DEFER        ( | <name> -- )      define <name> as a defered word
+MACRO DEPTH        ( -- n1 )            return data stack depth
+CODE  DIGIT        ( char base -- n f )
+:     DIRINIT      ( -- )               init GETFILE's memory   See TWFL
+:     DMAX         ( d1 d2 -- d3 )      maximum of top two double numbers
+:     DMIN         ( d1 d2 -- d3 )      minimum of top two double numbers
+MACRO DNEGATE      ( d# -- d#' )`       change sign of top double number
+MACRO DO           ( l i -- )           DO .. LOOP or DO .. n1 +LOOP
+MACRO DO?          ( -- )
+:     DOSVER       ( -- n1 )            return the DOS version
+:     DOSIO_INIT   ( -- )               initialize EMIT, TYPE & SPACES to DOS
+:     DOS_EXPECT   ( a1 n1 -- )         DOS expect
+:     DOS_TO_TIB   ( -- )               Move the DOS commandline to TIB
+:     DOUBLE?      ( -- f )             last num convert result in double?
+MACRO DROP         ( n1 -- )            discard the top of stack
+MACRO DS:!         ( ds -- )            set DS to the value on the stack
+MACRO DS:->SS:     ( -- )               set SS to DS
+:     DS:ALLOC     ( n1 -- a1 )         alloc some DS: ram return addr
+:     DS:FREE?     ( -- a1 )            return amount of free DS: ram
+      DSEG         ( a1 | <name> -- )   create a new DATA segment in memory
+:     DU<          ( ud1 ud2 -- f )     return f1 true is ud1 lessthan ud2
+:     DUMP         ( addr len -- )      simple display memory
+MACRO DUP          ( n1 -- n1 n1 )      duplicate the top of stack
+MACRO DUP>R        ( n1 -- n1 )         put copy on return stack
+:     EEOL         ( -- )               Erase to end of line
+MACRO ELSE         ( -- )               IF .. ELSE .. THEN
+DEFER EMIT         ( c1 -- )            emit a char to console
+:     EMPTY-BUFFERS ( -- )              initialize block system See TBLOCK
+      END-CODE     ( -- )               terminate an assembly word
+      END-CSEG     ( -- )               finish all CODE compiling in target
+      END-DSEG     ( -- )               finish all DATA compiling in target
+      END-MACRO    ( -- )               terminate a MACRO definition
+      END-TABLE    ( a1 -- )            terminate building a TABLE
+      ENDCASE      ( -- )               resolve ENDOF's in CASE statment
+CODE  ENDFILE      ( handle -- double-end ) move to file end    See THANDLES
+      ENDMENU      ( n1 -- )            finish menu definition  See TMENU
+      ENDOF        ( -- )               finish OF statment in CASE
+:     ENVSIZE      ( -- n1 )            calculate environ size  See TENVIRON
+:     ERASE        ( addr len -- )      fill array with zero
+:     EVSEG        ( -- n1 )            return the segment of environment $.
+CODE  EXEC:        ( n1 -- )            execute the n-th CALL following
+CODE  EXECF        ( string PARMS -- ecode )
+MACRO EXECUTE      ( cfa -- )           execute routine cfa
+:     EXHREAD      ( a1 n1 handle seg -- len-read )     read external
+:     EXHWRITE     ( a1 n1 handle seg -- len-written )  write external
+MACRO EXIT         ( -- )               leave the current definition
+:     EXPECT       ( a1 n1 -- )         expect chars n1 into addr a1
+MACRO FALSE        ( -- false )         put a false (0) on stack
+CODE  FILL         ( a1 n1 c1 -- )      fill array with c1
+:     FINDFIRST    ( string -- f1 )     return first matching dir to string
+:     FINDNEXT     ( -- f1 )            return next matching dir to string
+MACRO FLIP         ( n1 -- n2 )         flip hi/lo bytes of n1
+:     FLUSH        ( -- )               save and empty memory blocks
+:     FLUSH_B      ( -- )               Flush the I/O channel   See TSTDIO
+MACRO FOR          ( n1 -- )            FOR .. NEXT
+:     GET-CURSOR   ( -- shape )         get the current cursor shape
+CODE  GETCH        ( -- c1 )            get char from STDIN     See TSTDIO
+:     GETCHAR_B    ( -- c1 )            Read one buffered char  See TSTDIO
+:     GETDATE      ( -- y md )          get the current date
+:     GETFILE      ( -- a1 f1 )         pick file from popup select window
+:     GETTIME      ( -- hm sh )         get the current time
+:     GRAPH-INIT   ( -- f1 )            init graphics, color=true & herc=0
+:     H.           ( n1 -- )            display n1 in HEX
+:     H.R          ( n1 n2 -- )         display n1 right justified in HEX
+      HANDLE       ( | <name> -- )      make <name> an array of B/HCB size
+:     HCLOSE       ( handle -- return-code ) close file         See THANDLES
+:     HCREATE      ( handle -- error-code )  create file        See THANDLES
+:     HDARK        ( -- )               clear screen to black hercules graph
+:     HDELETE      ( handle -- return-code ) delete file        See THANDLES
+:     HERCULES     ( -- )               set hercules graphics   See THERC
+CODE  HDOS1        ( cx dx fun -- ax cf | errcode 1 )           See THANDLES
+CODE  HDOS3        ( bx cx dx ds fun -- ax cf | ecode 1 )       See THANDLES
+CODE  HDOS4        ( bx cx dx fun -- ax cf | ecode 1 )          See THANDLES
+:     HERE         ( -- a1 )            return addr of free ram space
+:     HEX          ( -- )               set the HEX number base
+:     HLIGHT       ( -- )               clear screen to white hercules graph
+:     HOLD         ( char -- )
+:     HOPEN        ( handle -- error-code )  open file          See THANDLES
+:     HOURS        ( n1 -- )            delay for n1 hours      See TTIMSTUF
+:     HPAGED       ( n1 -- )            graphics DISPLAY page   See THERC
+:     HPAGEW       ( n1 -- )            page to write graphics  See THERC
+:     HREAD        ( a1 n1 handle -- length-read )     read file
+:     HRENAME      ( handle1 handle2 -- return-code )  rename file
+:     HTEXT        ( -- )               switch back to text mode hercules
+:     HWRITE       ( a1 n1 handle -- length-written )  write to file
+MACRO I            ( -- n )             return loop index
+:     ICOS         ( deg -- cos*10k)    integer COS times 10000 of degrees
+CODE  ISIN         ( deg -- sin*10k)    integer SIN times 10000 of degrees
+MACRO IF           ( f -- )             branch if flag is zero
+MACRO INCR         ( addr -- )          increment contents of addr
+      INCR>        ( | <name> -- )      increment value following
+:     INIT-CURSOR  ( -- )               init the cursor shape control words
+MACRO J            ( -- n )             return second loop index
+MACRO K            ( -- n )             return third loop index
+DEFER KEY          ( -- c1 )            get key, defered through KEY-F
+CODE  KEY?         ( -- f1 )            test, key waiting. BIOS, no redirect
+MACRO LEAVE        ( -- )               leave loop immediately
+MACRO LEAVE?       ( -- )               primitive
+CODE  LENGTH       ( a1 -- a2 n1 )      get length of word counted string
+CODE  LFILL        (  seg a1 n1 c1 -- ) fill external memory with c1
+:     LINE         ( x y x' y' -- )     draw line in COLOR between points
+:     LINEEDITOR   ( x y a1 n1 -- f1 )  edit line in a1 at xy, max len n1
+:     LINEFROM     ( x y -- )           prepares origin for LINETO segments
+:     LINETO       ( x y -- )           draw line from cur in COLOR to xy
+:     LINEREAD     ( -- a1 )            read a line from cur file See TSREAD
+:     LINEREAD_INIT ( -- )              initialize LINEREAD     See TSREAD
+      LONG_BRANCH  Switches the compiler to using +/- 32767 byte branches.
+:     LOOP         ( -- )               DO .. LOOP
+:     M/D/Y        ( -- )               select M/D/Y date format See TTIMER
+:     M/MOD        ( d# n1 -- rem quot )
+      MACRO        ( | <name> -- )      make <name> a code type word in-line
+MACRO MAX          ( n1 n2 -- n3 )      return maximum of n1, n2
+:     ME@          ( -- )               extract my own execution name string
+:     ME_EXTRACT   ( a1 -- )            extract my program name DOS3 & up
+      MENULINE"    ( | strint" func --) add a line to a menu    See TMENU
+:     MENU         ( -- )               See TMENU, show&process menu select
+:     MENUBOX      ( x y x' y' -- )     draw a menu type box    See TBOX
+MACRO MIN          ( n1 n2 -- n3 )      return minimum of n1, n2
+:     MINUTES      ( n1 -- )            delay for n1 minutes    See TTIMSTUF
+:     MOD          ( n1 n2 -- rem )     return n1 MOD n2
+CODE  MOVEPOINTER  ( double-offset handle -- )         set file pointer
+:     MS           ( n1 -- )            delay for n1 Milli-Seconds. ABOUT?
+:     MU/MOD       ( ud# un1 -- rem d#quot )
+MACRO NEGATE       ( n1 -- n2 )         change sign of n1
+      NEWMENU      ( n1 | <name> -- a1) create a new menu       See TMENU
+      NEWMENUBAR   ( n1 | <name> -- a1) create a new menu bar   See TMENU
+MACRO NEXT         ( -- )               NEXT as in FOR ... NEXT
+MACRO NIP          ( n1 n2 -- n2 )      discard second item on stack
+      NOOP         ( -- )               a subroutine to do nothing
+:     NORM-CURSOR  ( -- )               set a normal cursor shape (underline)
+MACRO NOT          ( n -- n' )
+:     NUMBER?      ( adr -- d flag )    convert string to number
+:     OCTAL        ( -- )               set the OCTAL number base
+      OF           ( n1 n2 -- n1 | )    start OF portion of CASE statment
+MACRO OFF          ( addr -- )          set contents of addr to zero
+      OFF>         ( | <name> -- )      set value following to zero
+MACRO ON           ( addr -- )          set contents of addr to -1
+      ON>          ( | <name> -- )      set the value following to -1
+MACRO OR           ( n1 n2 -- n3 )
+MACRO OVER         ( n1 n2 -- n1 n2 n1 )
+MACRO P!           ( n port# -- )       I/O port WORD store
+MACRO P@           ( port# -- n )       I/O port WORD fetch
+:     PAD          ( -- a1 )
+:     PATH@        ( -- )               extract the path string
+:     PATH_EXTRACT ( a1 -- )            extract the path string
+:     PATHSET      ( handle -- f1 )     prepend cur path to file in handle
+MACRO PC!          ( n port# -- )       I/O port character store
+MACRO PC@          ( port# -- n )       I/O port character fetch
+CODE  PDOS         ( addr drive# -- f1 ) get directory for drive#
+CODE  PEMIT        ( c1 -- )            emit a character to LPT1
+MACRO PERFORM      ( addr-of-cfa -- )   execute function pointed to by
+MACRO PICK         ( nm ... n2 n1 k -- nm ... n2 n1 nk )
+CODE  PLACE        ( a1 n1 a2 -- )      fill buffer a2 with string a1,n1
+:     PLACEL       ( seg a1 n1 a2 -- )  place in DS at a1 from far a1 n1
+:     PLOT         ( x y -- )           plot point at x y, graphics in color
+MACRO PLUCK        ( n1 n2 n3 -- n1 n2 n3 n1 )
+:     POINT        ( x y -- color )     get color of point x y in graphics
+CODE  PR-STATUS    ( n1 -- b1 )         get the status byte for printer n1
+:     PREPEND.PATH ( handle -- f1 )     prepend cur path to file in handle
+CODE  PUTCHAR      ( c1 -- )            write a char to STDOUT  See TSTDIO
+:     PUTCHAR_B    ( c1 -- )            Write one buffered char See TSTDIO
+      QUERY        ( -- )               accept a line of text into TIB
+MACRO R>           ( -- n1 )            move n1 from return to data stack
+MACRO R>DROP       ( -- )               discard one item from return stack
+MACRO R@           ( -- n )             copy n1 from return to data stack
+CODE  RAW_STDIN    ( -- )               make DOS STDIN "raw", unbuffered
+      READ-ONLY    ( -- )               makes HOPEN read only   See THANDLES
+      READ-WRITE   ( -- )               makes HOPEN read/write  See THANDLES
+:     RECOVERSCR   ( -- )               copy saved screen back  See TSAVESCR
+:     RECOVERLINE  ( n1 -- )            copy saved screen line back TSAVESCR
+MACRO REPEAT       ( -- )               BEGIN .. WHILE .. REPEAT
+      RESTORE>     ( | <name> -- )      restore contents of <name> from RSTK
+:     RESTSCR      ( -- )               restore saved screen    See TSAVESCR
+:     ROLL         ( n1 n2 .. nk k -- n2 n3 .. nk n1 )
+CODE  ROT          ( n1 n2 n3 -- n2 n3 n1 )
+MACRO RP!          ( n -- )             set return stack pointer
+MACRO RP@          ( -- addr )          get return stack pointer
+MACRO RPICK        ( nm ... n2 n1 k -- nm ... n2 n1 nk )
+CODE  S>D          ( n -- d )
+:     SAVE-BUFFERS ( -- )               save any changed blocks to disk
+      SAVE>        ( | <name> -- )      save contents of <name> on RSTK
+      SAVE!>       ( n1 | <name> -- )   save contents to RSTK, and set to n1
+:     SAVESCR      ( -- )               save screen to restoral See TSAVESCR
+CODE  SCAN         ( a1 n1 c1 -- a2 n2 ) scan forward for characters
+CODE  SCANW        ( a1 w1 w2 -- a2 w3 ) scan forward for words
+CODE  SEARCH       ( sadr slen dadr dcnt -- offset found? )     See TSEARCH
+:     SEC-ELAPSED  ( -- n1 )            return elapsed seconds  See TTIMSTUF
+      SECONDS      ( n1 -- )            delay for n1 seconds    See TTIMSTUF
+CODE  SET-CURSOR   ( n1 -- )            set the cursor shape
+:     SET-DTA      ( a1 -- )            set data transfer adr
+:     SET_MEMORY   ( n1 -- )            adj DOS memory usage down to n1.
+CODE  SETBLOCK     ( seg siz -- f1 )    adjust an allocated DOS block
+:     SETDATE      ( MD Y -- )          set DOS date            See TTIMER
+:     SETTIME      ( HM Sh -- )         set DOS time            See TTIMER
+CODE  SETDIR       ( a1 -- f1 )         set directory           See THANDLES
+CODE  SETDRIVE     ( n1 -- )            set DRIVE               See THANDLES
+      SHORT_BRANCH Switches the compiler back to using +/- 127 byte branches.
+:     SIGN         ( n1 -- )
+CODE  SKIP         ( a1 n1 c1 -- a2 n2 ) skip chars c1 forward
+MACRO SP!          ( n -- )             set stack pointer
+MACRO SP@          ( -- n )             return stack pointer
+:     SP>COL       ( n1 -- )            space over to column n1
+:     SPACE        ( -- )               display a space using DOS
+DEFER SPACES       ( n1 -- )            display n1 spaces
+CODE  SPLIT        ( n1 -- n2 n3 )      split hi/lo of n1 into n2 n3
+:     STDIN_INIT   ( -- )               set "raw" and redirectable KEY
+MACRO SWAP         ( n1 n2 -- n2 n1 )   swap the two top stack items
+:     T>B          ( -- )               convert time to binary See TTIMER
+:     TAB          ( -- )               move to next TAB stop
+      TABLE        ( | <name> -- )      DEFINING word to build tables
+:     TENTHS       ( n1 -- )            delay for n1 tenths     See TTIMSTUF
+DEFER TEXT-MODE    ( -- )               restore text mode after graphics
+MACRO THEN         ( -- )               resolve branch
+:     TIME-ELAPSED ( -- d1 )            return elapsed time     See TTIMSTUF
+:     TIME-RESET   ( -- )               reset elapsed time      See TTIMSTUF
+CODE  TIB          ( -- a1 )            TIB is after top of stack
+MACRO TRUE         ( -- true )          put a true on data stack
+CODE  TUCK         ( n1 n2 -- n2 n1 n2 )copy top under second stack item
+DEFER TYPE         ( a1 n1 -- )         display the string a1,n1
+:     U*D          ( n1 n2 -- d1 )      unsigned multiply, n1 * n2 = d1
+:     U.           ( u -- )             unsigned number print
+:     U.R          ( u l -- )           unsigned right justified # print
+:     U,.R         ( u l -- )           unsigned rtjust # prt with commas
+CODE  U16/         ( u -- u/16 )        right shift by four bits
+MACRO U2/          ( u -- u/2 )         right shift by one bit
+CODE  U8/          ( u -- u/8 )         right shift by three bits
+MACRO U<           ( n1 n2 -- f )
+:     U<=          ( u1 u2 -- f )
+MACRO U>           ( n1 n2 -- f )
+:     U>=          ( u1 u2 -- f )
+:     UD.          ( ud -- )            unsigned double number print
+:     UD.R         ( ud l -- )          unsigned double right justified # prt
+:     UD,.R        ( ud l -- )          unsigned dbl rtjust # prt with commas
+CODE  UM*          ( n1 n2 -- d )
+CODE  UM/MOD       ( ud un -- URemainder UQuotient )
+MACRO UMAX         ( n1 n2 -- n3 )      return unsigned maximum of n1, n2
+MACRO UMIN         ( n1 n2 -- n3 )      return unsigned minimum of n1, n2
+MACRO UNDO         ( -- )               DO .. UNDO EXIT .. LOOP
+MACRO UNTIL        ( f1 -- )            BEGIN .. UNTIL
+:     UPC          ( c1 -- c2 )         convert a character to uppercase
+:     UPDATE       ( -- )               mark current block as changed
+:     UPPER        ( addr len -- )      convert string to uppercase
+      VALUE        ( n1 | <name> -- )   define <name> as a changable constant
+      VARIABLE     ( | <name> -- )      define <name> as a variable
+CODE  VIDEO        ( DX CX BX AX -- DX AX ) perform a video BIOS function
+CODE  VIDEO-TYPE   ( string length x y -- ) direct display type See TVIDEO
+:     VMODE!       ( n1 -- )            set video mode
+:     VMODE.SET    ( -- )               sets direct video type  See TVIDEO
+:     VMODE@       ( -- n1 )            get video mode
+MACRO WHILE        ( f1 -- )            BEGIN .. WHILE .. REPEAT
+:     WINKEY       ( c1 -- c1 )         window key processing   See TWFL
+:     WINMSG       ( -- )               extra window message    See TWFL
+CODE  WITHIN       ( n lo hi -- flag )  within bounds range check
+:     WORD         ( c1 -- a1 )         return a1 a word from TIB
+      WRITE-ONLY   ( -- )               makes HOPEN write only. See THANDLES
+MACRO XOR          ( n1 n2 -- n3 )      logical XOR of n1 n2
+:     Y-M-D        ( -- )               set date format to Y-M-D See TTIMER
+CODE  [']          ( -- a1 )            get address of routine following
+
+Floating point wordset
+
+F#BYTES   Size of a floating point number in bytes.
+FPSSIZE   The size of the floating point stack, in bytes.
+FPSTACK   The floating point stack.
+FSP0      The base of the floating point stack.
+FSP       Contains the pointer to the F.P. Stack top.
+FDEPTH    The depth of the floating point stack, in FPSSIZE
+          units.
+FCLEAR    Empties the floating point stack.
+FDROP     Drop one floating point element from the F.P. stack.
+FNSWAP    Exchange the n-th item on the F.P. stack with the
+          zeroth item.
+FPICK     Push a copy of the nth element of the F.P. stack
+          onto the F.P. stack.
+FDUP      Duplicate the top element on the F.P. stack.
+FOVER     Push a copy of the second element on the F.P. stack
+          onto the F.P. stack.
+FSWAP     Interchange the top two elements on the F.P. stack.
+FNEGATE   Reverse the sign of the element at the top of the
+          F.P. stack.
+FNIP      Drop the second item from the F.P. stack.
+FROT      Rotate the top three items on the F.P. stack,
+          bring the third element to the top.
+F-ROT     Rotate the top three items on the F.P. stack,
+          bringing the second item to the top, and moving the
+          former top item to the third position.
+FPOP      Pop the top number from the F.P. stack, and push it
+          onto the parameter stack as a double number.
+FPUSH     Pop the top double number and
+FPCOPY    Get a copy of the top number on th F.P. stack and push
+          it on the parameter stack.
+F0=       Pop the top member of the F.P. stack and test its value.
+          If the value is zero, push true, else push false onto
+          the parameter stack.
+F0<       Pop and test the number at the top of the F.P. stack.
+          If the sign is negative and the value is non-zero, push
+          a true flag.  Otherwise push a false flag.
+FPOP0=    Pop the top member of the F.P. stack, test, and push it
+          onto the parameter stack.  If the number has a value of
+          zero, also push a true flag; otherwise push a false
+          flag.
+F=        Pop the top two elements from the F.P. stack.  If the
+          two numbers are equal, push a true flag.  Otherwise,
+          push a false flag.
+F<        Pop the top two F.P. numbers from the F.P. stack and
+          compare them.  If the second number is arithmetically
+          less than the first number, push a true flag.
+          Otherwise push a false flag.
+F>        Pop the top two numbers from the F.P. stack and
+          compare them.  If the second number is arithmetically
+          greater than the top, push a true flag onto the
+          parameter stack.  Otherwise push a false flag.
+FABS      Set the sign of the top of the F.P. stack to 0.
+FMIN      Pop the top two members from the F.P. stack.  Push the
+          arithmetically smaller back onto the F.P. stack.
+FMAX      Pop the top two members from the F.P. stack.  Push the
+          arithmetically larger back onto the F.P. stack.
+F@        Fetch the F.P. variable at the address specified by the
+          top of the parameter stack.  Push the contents of the
+          variable onto the F.P. stack.  Pop and discard the
+          address at the top of the parameter stack.
+F!        Store the number at the top of the F.P. stack into
+          memory at the address at the top of the parameter stack.
+          Pop the number from the F.P. stack, and pop the address
+          from the parameter stack.
+FCONSTANT Create a F.P. constant with a value equal to the
+          number poped off the F.P. stack.
+FVARIABLE Create a F.P. variable.
+F1.0      Floating point 1.
+PI        Floating point pi
+F0.0      Floating point 0.
+FLOG10E   Floating point log base 10 of e
+FLN10.0   Floating point natural log of 10
+F10.0     Floating point 10.
+F0.5      Floating point 0.5
+FLOAT     Convert the double number on the parameter stack to a
+          floating point number on the floating point stack.
+DINTABS   Pop the top number from the floating point stack.
+          Take the absolute value and convert it to a double
+          number on the parameter stack.  If the resulting
+          number is positive, push a 0 onto the stack.
+          Otherwise, push a true flag (-1) onto the stack.
+INT       Pop a floating point number from the f.p. stack and
+          convert it to a double number.
+FINT      Convert the number at the top of the f.p. stack to its
+          integer part represented as a floating point number.
+F+        Floating point addition.
+F-        Floating point subtraction.
+FIX       Pop a number from the floating point stack, convert it
+          to a double number and push the result on the parameter
+          stack.  Issue an error message if the number cannot be
+          properly converted.
+F/        The floating point division routine.
+F*        Floating point multiplication function.
+F**+N     Raise the floating point number at the top of the f.p.
+          stack to the positive integer power at the top of the
+          parameter stack.
+F**N      Raise the number at the top of the f.p. stack to the
+          power specified at the top of the parameter stack.
+F**N*     Raise the number at the top of the f.p. stack to the
+          power specified at the top of the parameter stack,
+          then multiply by the number second on the f.p. stack.
+FSQRT     Replace the number at the top of the f.p. stack with
+          its square root.
+FLN       Replace the number at the top of the f.p. stack with
+          its natural logarithm.
+FLOG      Replace the number at the top of the f.p. stack with
+          its common (base 10) logarithm.
+FPARTS    An auxillary function for  (E.) .
+E.        The floating point output routine. Scientific notation.
+E.R       floating point output right justified. Sientific notation
+F.        Another floating point output routine.
+F.R       floating point output right justified.
+.FS       A utility for checking the contents of the F.P. stack.
+$F#       This function converts a counted string into a floating point
+          number.
+F#        This is the function used to get a floating point number
+          from the input stream.  Usage examples follow:
+          F# -2.34 F# 34.5e6 F# -.1E-2 F# 2.34(5)
+[F#]      Floating point input in a definition. Use as above, but in a
+          definition.
+

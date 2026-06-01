@@ -1,0 +1,27 @@
+ 12/18/94             Release Notes FPC version 3.6000
+
+  What is F-PC you may ask. F-PC is a Forth system optimized for the
+IBM-PC, XT & AT machines. F-PC can use all of your machines memory for
+programs and data. F-PC uses stream (text) files for its source, and
+includes a built-in WordStar-like text editor with pull down menus. Many
+tools are provided to make writing programs with F-PC fun and efficient.
+A very good Laser printed users manual is available for a small
+additional cost from OFFETTE ENTERPRISES. F-PC is a public domain
+package.
+
+  FPC 3.6000 is the final update to fpc 3.50.  The only significant
+changes are a minor bug fix in the software floating point package, and
+the removal of the one year version old check.  This final version
+performs no out of date check.
+
+  MAKE SURE YOU HAVE A COUPLE OF MEGABYTES OF FREE SPACE ON YOUR HARD DISK,
+type the following command and follow the instructions:
+
+        A:INSTALL <enter>       be sure to put disk #1 in drive A:
+
+  INSTALL will ask you where to install F-PC. A directory will then be
+created to hold the F-PC files. If this bothers you, read INSTALL.TXT.
+
+Comments to:    Tom Zimmer              (408) 263-8859  home
+                292 Falcato Drive       (408) 432-4643  work
+                Milpitas, Ca. 95035

@@ -1,0 +1,141 @@
+\ UTILS.DOC             Utilities provided for TCOM     by Tom Zimmer
+
+  Most of the library functions available in TCOM are precompiled into
+the TCOM.EXE file provided on disk, but some functions are specialized
+enough that I have decided to include them in source form only. This
+means you will need to "FLOAD" or "NEEDS" them at the beginning of your
+program source file to make these functions available.
+
+  Two classes of files are included in this ZIP file. The first group
+are utilities that provide additional library functionality. These are
+true library functions, in that only those portions of a library file
+that are used in an application will be included in the application:
+
+        TCOMI.SEQ
+        TCOMI.COM       Dump Index utility. Dumps the contents of a .INX
+                        file following. Useful for debugging.
+
+        DIS.SEQ
+        DIS.COM         A disassembler that allows you to specify at
+                        which symbol you want disassembly to begin.  It
+                        is not as powerful as LS86, but it can be very
+                        useful. It also allows a /D switch, to display
+                        only data space.
+
+        TCOMS.SEQ
+        TCOMS.COM       Dump Symbol utility. Dumps the contents of a .SYM
+                        file following. Useful for debugging.
+
+        FLOAT4TH.SEQ    needed by TFLOAT for compile time operations,
+                        and for use with F-PC to provide identical
+                        floating point functionality to the TCOMed
+                        TFLOAT.SEQ.
+
+        GSDUMP.SEQ      A donation from Mike Mayo, that dumps a graphics
+                        screen to an IBM or EPSON graphics printer. Must
+                        be used with THERC.SEQ and TGRAPH.SEQ, or with
+                        F-PC using GRAPH.SEQ and HERC.SEQ.
+
+        TFILEIO.SEQ     Provides multiple file buffered line read and
+                        write support to TCOM.  The matching file
+                        FILEIO.SEQ provides similar support to F-PC.
+
+        TFLOAT.SEQ      Floating point support for TCOM, needs
+                        FLOAT4TH.SEQ to perform the compile time
+                        operations. Slower than SFLOAT, but target
+                        compilable.
+
+        TGRAPH.SEQ      Color graphics support for TCOM. Identical
+                        functionality to GRAPH.SEQ which can be used in
+                        F-PC. Includes LINE drawing support. THERC.SEQ
+                        must be loaded before TGRAPH is loaded.
+
+        THERC.SEQ       Hercules monochrome support for TCOM. Identical
+                        functionality to HERC.SEQ which can be used
+                        with F-PC. Includeds only POINT and PLOT
+                        support, TGRAPH must be loaded for LINE
+                        drawing.
+
+        THERCTXT.SEQ    Hercules monochrome text support for TCOM. This
+                        file along with THERC.SEQ are equivelant to
+                        HERC.SEQ for F-PC.
+
+        TSHAPES.SEQ     CIRCLE and ARC graphics additions for TCOM.
+
+        GRAPH.SEQ
+        HERC.SEQ        Provides F-PC with identical graphics support
+                        to the TCOM "T" functions discribed above.
+
+        TPOINT.SEQ      Pointer (memory allocation) support for TCOM.
+
+        XREF.SEQ
+        XREF.COM        A Cross Reference Generator for TCOM, works on
+                        the listing file, and generates a .XRF output
+                        file.
+
+
+  The second group of files in UTILS.ZIP are debugging support files
+that allow TCOM to add an interpretive Forth environment to an
+application program for debugging purposes. Three command line options
+add varying levels of debug support to an application the options are
+as follows:
+
+        /FORTH          Adds a Forth interpretive shell to any program.
+                        Adds about 6k to an application program.
+
+        /DIS            Includes a Forth shell, an also includes a CODE
+                        disassembler in the application. (SEE) Adds
+                        about 17k total to an application program.
+
+        /DEBUG          Includes a Forth shell, the disassembler, and a
+                        CODE debugger to the application. (DEBUG) and
+                        (DBG). Adds about 24k total to an application
+                        program.
+
+  The files used to support these commands are:
+
+        TFORTH.SEQ      The source for the Forth interpretive
+                        environemnt.
+
+        DIS.SEQ         The source for the CODE disassembler.
+
+        TDEBUG.SEQ      The source for the CODE debugger.
+
+  These files must be available to load either in the current directory
+with the application, or in the FPATH directory as specified in the
+environment SET statement "TPATH" for the command line options
+described above to work.
+
+BUG the Debugger
+
+  The TCOM package now includes BUG.COM, a source level debugger for
+TCOM compiled applications.  BUG provides very powerful debugging
+facilities, and full online help for all of its functions.
+
+        BUG program <enter>
+
+  The above line will start BUG and load "program" into memory. Various
+source, index and symbol files are also opened and BUG will display a
+split source/code screen ready to being debugging your program.
+
+DIS the Disassembler
+
+  The DIS.SEQ file is also an example program that can be compiled by
+TCOM to build DIS.COM a symbolic disassembler that can take any TCOM
+application apart and produce a listing file containing symbolic
+disassembly. Compile DIS as follows:
+
+        TCOM DIS /OPT /NOINIT enter
+
+  This will produce DIS.COM which is used as follows:
+
+                DIS filename <enter>
+        or      DIS filename hexaddress <enter>
+        or      DIS filename symbol <enter>
+        or      DIS filename /D <enter>
+
+  The file being disassembled should have been compiled with the /SYM
+command line option, so that a .SYM file will be available for the
+disassembler.
+
+

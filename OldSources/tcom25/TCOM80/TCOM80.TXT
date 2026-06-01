@@ -1,0 +1,74 @@
+TCOM80.TXT      Notes on TCOM for the 8080              by Tom Zimmer
+
+  TCOM80 is a relatively simple version of TCOM for the 8080 processor.
+It has been minimally tested, and is believed to generate programs that
+will in fact run on a CPM system.  I say this is a simple version of the
+compiler, because it was created as a test case to determine if TCOM
+would support indirect threaded code generation.  TCOM did need a few
+modifications to support this type of target.
+
+  TCOM80 is compiled on top of my F-PC Forth, I am currently using
+version 3.5609.  It will probably work on earlier version though.  TCOM
+is currently at version 2.16, and that version is the one that should be
+used with this version of TCOM80.
+
+  The library for TCOM80 is essentially F83 Forth for the 8080.  As such
+it imposes some interesting requirements on the compiler.  F83 supposes
+that many variables are at specific places in memory, usually quite low
+in the image. To get TCOM to generate a target program in this form, I
+have had to make the IMAGE-INIT word in OPT80.SEQ compile some unusual
+things.  If you look at it you will see that the image initialization
+macro compiles some code, and several of the basic functions that F83
+nees, and even compiles some variable and constants.   That is another
+interesting caracteristic of TCOM80, its constants are actually in memory
+like F83, not compiles as literals as in my other targets.  To get TCOM
+to do this, CONSTANT and VARIABLE are redefined in OPT80.SEQ.
+
+  Here is a list of files in TCOM80.ZIP that make up TCOM80 the compiler:
+
+   MAKE80   BAT              \ batch file to build TCOM80.EXE
+   TARGET80 SEQ              \ the load file for the following files
+        HEAD2    SEQ    ***  \ not part of TCOM80, loaded from \TCOM\SRC
+        COMPILE1 SEQ    ***  \ not part of TCOM80, loaded from \TCOM\SRC
+        COMPILE2 SEQ    ***  \ not part of TCOM80, loaded from \TCOM\SRC
+        TCOMNDX  SEQ    ***  \ not part of TCOM80, loaded from \TCOM\SRC
+        HOST     SEQ    ***  \ not part of TCOM80, loaded from \TCOM\SRC
+        ASM80    SEQ         \ an assembler for the 8080
+        OPT80    SEQ         \ the target linkage to the compiler
+        LIB80    SEQ         \ the F83 kernel is in the library
+
+  The primary load file above is TARGET80.SEQ which loads the other files
+and creates TCOM80.EXE in the same directory.  You can simplify the
+generation of TCOM80 by using the MAKE80.BAT batch file provided.
+
+  Here is a list of utility files that make development somewhat simpler:
+
+        DMP      COM        \ A simple decompiler for TCOM80 output files
+        DMP      SEQ        \ the source for the decompiler
+        DIS80    SEQ        \ A disassembler used by DMP.
+        INC80    SEQ        \ a list to force inclusion of entire library
+        DUMP     COM        \ just a simple file dump utility
+
+  The file TEST.SEQ is a sample Forth program that TCOM80 can compile.
+It is truely a very simple program, but it shows how TCOM will
+automatically include what is needed to run your program.
+
+        TEST     SEQ        \ a test source file for TCOM80
+        TEST     SYM        \ symbol table used by DMP
+        TEST     INX        \ Instruction index table, used by DMP
+        TEST     CPM        \ a CPM style .COM file
+
+  To compile TEST, enter the following line:
+
+        TCOM80 TEST
+
+  This will generate the remaining files listed above.  You can then see
+what is in TEST.CPM by typing:  DMP TEST <enter>
+
+  DMP will open the TEST files needed, and display a decompiled dump of
+the contents of TEST.CPM.
+
+  See also Z80MU.TXT for information on the included Z80 emulator. It can
+be used for testing TCOM80's output on an IBM-PC type computer.
+
+

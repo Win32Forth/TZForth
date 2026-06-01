@@ -1,0 +1,203 @@
+INSTALL.TXT             Installing F-PC                 by Tom Zimmer
+
+  F-PC includes an installation program, but since installation
+programs are nebulous black boxes, this file will tell you where
+things go.
+
+WHAT INSTALL DOES.
+
+  The first thing INSTALL.COM does is ask you whether you are
+installing F-PC on your hard disk, or configuring a copy of F-PC
+already present on your hard disk. To this question, you would answer
+"I" for Install, or "C" for configure. The default is "I".
+
+  Question two is "Where you want F-PC placed on your hard disk?". You
+will need to answer that question for yorself now. The default is
+"C:\FPC".
+
+  Question three is "Where are you installing F-PC from?", which is usually
+drive "A:", but can be "B:" or any drive and directory (like "C:\MASTER").
+
+  At this point you are asked six (6) yes or no questions about what
+portions of F-PC to install. I will discuss those below.
+
+  Lastly you are prompted to insert F-PC disk number one, and press
+Enter to start the installation.
+
+  INSTALL.COM proceeds to create directories and expand .ZIP files
+onto your hard disk. This process takes only a few minutes, and will
+consume about 2.5 megabytes if all portions are installed. After
+installation completes, the program proceeds into the configuration
+section. You are asked questions about your hardware. Then an
+installed copy of F-PC is created.
+
+  If the above process makes you uncomfortable, or you just want to
+do it yourself, proceed to the next section. Otherwise just type:
+A:INSTALL <Enter>.
+
+
+
+INSTALLING F-PC WITHOUT USING INSTALL.COM
+
+
+      ÚÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ¿
+      ³   In this section I am assuming you are an experienced ³
+      ³ DOS user. If you are not, then please go ahead and use ³
+      ³ INSTALL.COM. The process is pretty painless.           ³
+      ÀÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ
+
+
+  Unlike F-PC Version 2.25, F-PC Version 3.56 makes its own Forth PATH
+command and several directories to hold its files. This keeps the
+clutter down in the main F-PC directory while keeping files available
+when needed. F-PC's directory structure looks like this:
+
+
+                C:\ ÄÄÄÄÄÄÄÄÄÄÄ \FPC ÄÄÄÄÄÂÄÄÄÄ \SRC
+                                          ³
+                                          ÃÄÄÄÄ \HLP
+                                          ³
+                                          ÃÄÄÄÄ \TOOLS
+                                          ³
+                                          ÀÄÄÄÄ \NEWZ
+
+
+  You can of course put F-PC on a drive other than C:, and in
+directories other than \FPC etc. but for this discussion we will
+assume you will be using the above directory structure.
+
+  NOTE: A known bug in the install program prevents its working on a
+        drive higher than "F:".
+
+  Create the above directory structure on your hard disk using the
+dos "MKDIR" (make directory) command.
+
+  Use PKUNZIP.EXE to "unzip" the .ZIP files from floppy into the
+directories as shown below:
+
+                Directory               .ZIP File
+              ÚÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÄ¿
+              ³ \FPC                  ³ FPC.ZIP     ³
+              ÃÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄ´
+              ³ \FPC\SRC              ³ FPCSRC.ZIP  ³
+              ÃÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄ´
+              ³ \FPC\HLP              ³ FPCDOC.ZIP  ³
+              ³                       ³ FPCHLP.ZIP  ³
+              ÃÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄ´
+              ³ \FPC\TOOLS            ³ SAMPLES.ZIP ³
+              ³                       ³ SMITH.ZIP   ³
+              ³                       ³ CURLEY.ZIP  ³
+              ³                       ³ ZIMMER.ZIP  ³
+              ÃÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄ´
+              ³ \FPC\NEWZ             ³ NEWZ.ZIP    ³
+              ÀÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÙ
+
+  A typical PKUNZIP command line looks like this:
+
+        C:> PKUNZIP A:FPC C:\FPC <Enter>
+
+
+  When you have finished the above, copy the following files from
+floppy to the "\FPC" directory:
+
+        README      FLOPPY.TXT      INSTALL.TXT     INSTALL.COM
+
+  This completes installation, and leads us into configuration.
+
+
+
+CONFIGURING F-PC WITHOUT USING INSTALL.COM
+
+  The following section will allow you to configure F-PC for your
+hardware without using INSTALL.COM. It is however MUCH EASIER to
+configure F-PC using the install program, so PLEASE USE IT.
+
+  F-PC uses a configuration file to hold several default
+configuration commands. The F-PC.CFG file is automatically loaded
+each time you startup F-PC from the DOS command line. Part of the
+installation process is creating a configuration file for your
+hardware environment. Since we are doing the installation manually,
+we need to create a configuration file.
+
+  Using your favorite text editor (One that doesn't insert TABs or
+other special characters into the file.), place the following lines
+in a file named "F-PC.CFG" (don't include the box around the text).
+
+        ÚÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ¿
+        ³ FPATH C:\FPC;C:\FPC\SRC;C:\FPC\HLP;C:\FPC\TOOLS ³
+        ³ FAST                                            ³
+        ³ COLORIZEON                                      ³
+        ³ BLANKOFF                                        ³
+        ³ ' >COLOR IS INITCOLOR                           ³
+        ³ BACKUPON                                        ³
+        ³ IBM-PROPRINT                                    ³
+        ÀÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ
+
+  When creating F-PC.CFG, if you installed F-PC on a hard drive other
+than "C:", change each occurance of "C:" following the FPATH command
+above to the drive letter you used.
+
+  The above words setup F-PC for a normal configuration. It will work
+even if you have a MONOCROME system. The commands have the following
+meaning:
+
+        FPATH C:\FPC;C:\FPC\SRC;C:\FPC\HLP;C:\FPC\TOOLS
+                        The Forth PATH tells F-PC which directories
+                        to search when you open or load a file. You
+                        can include other directories as well up to a
+                        maximum of 132 characters.
+
+        FAST            Select direct video writes. The opposite
+                        option is "SLOW" DOS i/o.
+
+        COLORIZEON      Use colors when displaying various Forth word
+                        classes. This is automatically disabled on
+                        Monocrome systems. The opposite option is
+                        "COLORIZEOFF".
+
+
+        BLANKOFF        Don't blank the screen when writing to the
+                        display. If you have a CGA display you may
+                        want to use "BLANKON"; all other displays
+                        use BLANKOFF.
+
+        ' >COLOR is INITCOLOR
+                        Allow F-PC to support a color monitor if one
+                        is available. Will support monocrome even
+                        with this command included.
+
+        BACKUPON        Keep a single backup file for each file
+                        edited. If you are very short on disk space,
+                        or are using F-PC on a floppy system, you may
+                        want to use "BACKUPOFF".
+
+       IBM-PROPRINT    Select the IBM Proprinter driver for printer
+                       control. The alternative is "LASERJET" if you
+                       have an HP Laserjet compatible printer.
+
+  After the configuration file is saved to disk, issue the following
+command from the DOS prompt while in the "\FPC" directory:
+
+        C:> F-PC - FSAVE F BYE <Enter>
+
+  This command will startup F-PC, which automatically reads in the
+configuration file we just created. The "-" above signifies no other
+file is to be opened. The next two words "FSAVE F", save F-PC to disk
+with the new name "F.EXE". You can of course use a name other than
+"F". "BYE" leaves F-PC and returns to DOS. This process creates a
+fully configured copy of F-PC called F.EXE that contains all of the
+default configuration parameters you specified. If you are doing this
+on a floppy based system, use "FSAVE F-PC" to save the executable back
+to the same file since there is not room for an additional executable.
+
+  Be sure to include the "C:\FPC" directory in your system PATH
+command in AUTOEXEC.BAT.
+
+  After rebooting your computer, you can run F-PC from any drive and
+directory by typing "F <filename> <enter>", and Forth will be able to
+find its source files, help files, and tools from wherever you are.
+
+  I hope this clears up any questions you may have about what INSTALL
+does to your computer. Now if you haven't already done so, go ahead and
+use it to install F-PC, its really pretty painless.
+

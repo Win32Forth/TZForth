@@ -1,0 +1,1049 @@
+NOTES354.TXT  This file documents changes in F-PC, Version 2.25 => 3.5402
+øWhats-New
+
+             SUMMARY of some new things  (item number):
+
+DELETED WORDS:  XFDOS (26), TYPESEG (83)
+
+NEW WORDS:      FPATH  FPATH+  .FPATH (4), DELIMITER (5), MCROWS (9),
+                CLOSEALL (11), { } (19) (20), VIEWFROM (34), TONE (54),
+                +PLACE (107), 14 more words (83), FPCVER# (109),
+                LEAVEPROMPTON LEAVEPROMPTOFF (111),
+                OTHER.CHECK MLOAD (115),
+
+NEW FEATURES:   Hypertext (24) (31) (36) (42) (43)
+                Mouse     (25) (40) (41)
+                Pull-down stack (15)
+                Rotate thru files (44) (45) (46) (47)
+                Scroll PgUp, PgDn (51)
+                Escape sequences in ."  (57)
+                Help in editor (16) (23) (33)
+                Visual vocabulary stack (86)
+                Load marked lines from editor (115)
+
+1.      Fixed bug in SEQDOWN.
+
+2. ***  Increased maximum nest of file loads from 4 to 7.
+
+3.      Discarded this change.
+
+4. ***  Added multi directory search to OPEN. F-PC now has a path list
+        like DOS. The pathlist is set by a configuration file that is
+        loaded automatically at F-PC execution time. The words to do
+        this wonderful stuff are as follows:
+
+        FPATH <path-string> <enter>     \ sets the Forth PATH
+        FPATH+ <path-string> <enter>    \ adds more to the Forth PATH
+        .FPATH <enter>                  \ displays the Forth PATH
+
+        The words $FILE, $FLOAD, FILE and FLOAD now search the Forth
+        PATH while trying to open and or load the file specified.
+        The search order is controled by the order path specs are placed
+        in the path string. In the following example:
+
+                FPATH E:\FPC\SRC;E:\FPC\HLP;E:\FPC\TOOLS <enter>
+
+        Here the E:\FPC\SRC directory is searched before the E:\FPC\HLP
+        directory which in turn is searched before the E:\FPC\TOOLS
+        directory.  The Forth PATH may be up to 132 characters long.
+
+5.      Added a word DELIMITER, which is a VALUE that holds the
+        delimiter character used by LINEREAD as the end of a line to be
+        read. DELIMITER defaults to $0A, a linefeed. It is useful at
+        times to be able to read lines from a file that does not
+        contain linefeeds, but only carriage returns. Changing
+        DELIMITER to $0D will allow this. Also useful for "ASCIIZ" files
+        delimited by a zero -- change DELIMITER to $0.
+
+6.      The print menu bug has been fixed; it caused the cursor to
+        disappear after re-directing printing to a file.
+
+7.      Fixed an undocumented bug in SEDSHELL.SEQ. For some reason
+        unknown to me I had changed version 2.25 so it could not
+        recover ram while editing, when it wanted to spawn a DOS shell.
+        Thus it was not possible to perform any but the most trivial
+        DOS operations when spawning a shell from the editor. This has
+        been fixed. The editor recovers all of the ram it can while
+        leaving enough room in memory for the file currently being
+        edited, then spawns the DOS shell.  The space is recovered when
+        the shell terminates.
+
+8.      Fixed a bug in the assembler that was found by Bill Muench.  It
+        seems there was code in the assembler to allow a register
+        indirect operation without having to specify the index value if
+        the offset was 0. Unfortunately the way the assembler was
+        checking for the stack depth change, didn't work, and you
+        always had to specify the index for the assembler to work.  The
+        usless code to test the stack depth has been removed.  The
+        local label array which defaults to a size of 32 labels, has
+        been modified to allow adjusting the number of local labels at
+        runtime. Normally you would not need to do this, but it seems
+        Robert Smith needed HUNDREDS OF LABELS for some reason.  If you
+        create a new array of B/LLAB times the number of labels you
+        need bytes, and plug the address of the array into the VALUE
+        LLAB[], then change the VALUE MAX-LLABS to the new maximum, you
+        can use however many local labels you might need.
+
+9.      Added a VALUE to VIDEO.SEQ called MCROWS. If you have problems
+        with your cursor disappearing on an EGA or other video card,
+        you can change the value of MCROWS in the F-PC.CFG file to a
+        smaller number, and thus get your cursor to re-appear. MCROWS
+        stands for "Maximum Cursor ROWS", and is used at boot time to
+        limit the number of cursor rows used when changing the cursor
+        size in the word BIG-CURSOR.
+
+10.     Changed the default for headerless words to FALSE. F-PC will
+        normally be shipped with all headers present; the EXTEND.BAT
+        word will extend the system will all headers present.  The
+        EXTENDA.BAT file has been deleted, and has been replaced with
+        EXTENDH.BAT for headerless extension.  I and several people I
+        have talked to have run into problems because many words in
+        F-PC 2.25 were headerless, so the default now is to have the
+        headerless mechanism present, but turned off.
+
+11.     Added CLOSEALL, to make it easy to close all open files. Also
+        modified the too many files open message to suggest using
+        CLOSEALL to remedy the problem. Also modified SEQDOWN to clip
+        the VALUE SEQHANDLE to be within the valid range of the handle
+        stack.  Some programs may change SEQHANDLE to point to some
+        other handle; this protects us from crashing if this has been
+        done and not restored.
+
+12.     Fixed minor bug in >VIEWFILE, that was preventing view from
+        working on the names of files in the FILES directory. Also
+        adjusted 1FILE and FILES_SET so they use HERE+1000 rather than
+        HERE+500, so they would not conflict spacewise with WORDS.
+        Added a new utility called ID, that works like WORDS, but
+        displays the first line of the source file for each matching
+        word.  The line is preceeded by the word name so you can easily
+        sort the file in the editor.
+
+13. *** ****** BUG FIX, for possible SERIOUS error condition!! ******
+        In the routine that writes edited text to disk, there is a
+        routine called FLUSHWRITE.  This word is supposed to return a
+        boolean flag FALSE if the write was successful, but in the
+        release version of F-PC, it would only return a flag if there
+        was text that needed to be written. If the amount of text to be
+        written happened to have been divisible by the write buffer
+        size, then FLUSHWRITE would not have had any text to write, and
+        would not have returned a flag, causing unpredictable results.
+        Usually a crash back to DOS, but sometimes a system HANG.
+        FORTUNATELY the data being edited was secure, having already
+        been written to disk and the file closed, and the bug would
+        ONLY show it self in one (1) out of a thousand edits, since the
+        write buffer size was 1k. FIXED  This bug was also affecting
+        the Z editor.
+
+14.     Fixed bug in LINEEDITOR: it was pulling in text from the right
+        when you press backspace even when in OVERTYPE mode mode.  It
+        should have simply been erasing the character to the left of
+        the cursor and left the line length alone.
+
+15.     Added Window type Pulldown stack: try pressing BOTH SHIFT KEYS
+        together when there is something on the stack. See the source
+        in the file WINSTACK.SEQ.
+
+16.     Added Word HELP within the editor: position the cursor on a
+        word while editing a file, and press Alt-H. A HELP and VIEW
+        window will pop up, giving you information about the word the
+        cursor is positoned on. You can use the arrow keys and PgUp,
+        PgDn to move through the source file. Pressing Enter copies the
+        top visible source file line to the Cut/Copy/Paste file and
+        moves down to the next source line.  Alt-V can then be used to
+        insert the lines that were copied back into the file you are
+        editing. ESC returns to the edit. VERY HANDY at those times
+        when you know what word to use, but can't remember how it is
+        used exactly.
+17. *** Corrected the sensitivity of F-PC to think a file terminated
+        with a ^Z was an error. It now scans the file end on loading
+        for ^Z's, and changes them to blanks. Also if any line of a
+        file is not terminated with a CRLF, F-PC won't just stuff two
+        blanks at the line end anyway.
+
+18.     Screen wouldn't clear in SLOW mode. Fixed by adding a BIOS call
+        to clear the screen when DARK was used in SLOW mode rather than
+        using the fill memory routine in both SLOW and FAST.
+
+19.     Added Glen Haydon's { } tool to F-PC, allowing a file to
+        contain comments with imbeded source rather than the other way
+        around. See the file BRACES.SEQ for more information.
+
+20.     Adjusted the file load mechanism so the contents of the deferred
+        word RUN is saved before and restored after the load of a file.
+        This allows Glen's { } tool to not terminate a file with { and
+        still function properly.
+
+21. *** 03/27/89       ** THIS CHANGE REVERSED IN 102 **
+        Changed the name of F-PC to F-TZ to make Dr. Ting happy. He
+        thinks there will be confusion if I send out any versions of
+        F-PC that are not exactly version 2.25.
+
+22.     Removed the user tools from the system disk. From now on these
+        will be an extra item available on a seperate disk.
+
+23.     Modified word help in the editor. It now consists of three
+        commands, Alt-E, Alt-B, and Alt-H, used as follows:
+
+                Alt-E   Nest and EDIT the file containing the word
+                        under the cursor.
+
+                Alt-B   Nest and BROWSE the file containing the word
+                        under the cursor. No changes can be made.
+
+                Alt-H   Nest and BROWSE the file containing the HELP
+                        for the word under the cursor. No changes can
+                        be made.
+
+        These EDITOR commands are complemented with new commands at the
+        FORTH command level:
+
+                REPAIR <name>   Starts Editing the file containing
+                E <name>         <name>.
+
+                BROWSE <name>   Starts browsing/viewing a file
+                VIEW <name>      containing <name>.
+                B <name>
+                V <name>
+
+                HELP <name>     Starts browsing the help file for
+                H <name>         <name>.
+
+        When in BROWSE mode, no changes can be made to the file, but
+        you can still copy sections out to the TEMP.SEQ file for
+        insertion into the file you were editing.
+
+        The above commands used in the editor actually save the
+        current edit context, and nest into a new edit. A "+1" to "+5"
+        will appear in the upper right hand corner of the screen to
+        help you remember how deeply you are nested. When you quit an
+        edit, you will pop back one level to the previous file you were
+        editing, with the cursor in the same place where you left off.
+        Changes to a file are automatically saved when you nest edits.
+
+24. *** In line with the previous changes, I have added a sort of Hyper
+        text mechanism. Thanks to George Hawkins for the inspiration for
+        this feature. A word \HYPER has been added that is used to start a
+        hyper text file. Within the file is ordinary text, as well as a
+        marker to signify a destination for a hyper text link. The marker
+        is then placed at the source where you want a branch to occur.
+        While this may not be a clear explanation, you can look at the
+        editor help file for a good example of how these linkages work.
+        Just press F1 whenever you are using the SED editor.
+
+        These linkages can be setup in any file, and are made available
+        when the hyper text file is compiled on F-PC. Now you don't have
+        to be concerned about space, as only the markers take up room in
+        the dictionary, and then only for the header and NOOP CFA. All
+        hyper words are placed in the HYPER| vocabulary which is always
+        searched first when a browse (Alt-B) command is performed.
+
+25. *** 04/10/89
+        Completed first pass a mouse support for F-PC. The mouse can now be
+        used for many things. At the Forth command level, you can use the
+        mouse and left button to position the cursor on the current command
+        line being edited. The right button is the same as ESC, and
+        enables and disables the menubar. When the menu is enabled, you
+        can use the left button to pull down menus like any other program
+        with pull down menus and mouse support (press and drag).
+
+        The mouse is also available while in the editor for cursor
+        position adjustments, etc.
+
+        Mouse support costs about 3k of memory, and is optional. If you
+        don't want mouse support, just don't load the files MOUSE.SEQ, and
+        MOUSEY.SEQ.
+
+        You can add mouse support to your programs by writing a button
+        driver. Look at the file MOUSEY.SEQ for some examples of button
+        drivers.  A button driver is required for each "MODE" in your
+        program, typically involving a test for where the mouse is on the
+        screen, and then the performance of a function.  The mouse button
+        can also return keystrokes as if they were typed on the keyboard.
+
+26.     04/11/89
+        Deleted the word XFDOS from KERNEL2.SEQ. It was only used by
+        MEMSET, which has been replaced with the code word SETBLOCK which
+        was being loaded at extend time, but has been moved into
+        KERNEL2.SEQ. For those of you using XFDOS, you will have to copy
+        the XFDOS definition out of your existing systems kernel file and
+        load the code definition on top of F-PC.
+
+27.     Un-wound several CODE words that were calling sections of other
+        CODE words. This costs a few more bytes, but facilitates testing I
+        am doing.
+
+28.     Modified Meta Compiler to allow local labels to work. It seems the
+        new local label mechanism was not compatible with the meta
+        compiler, and has thus been modified to make it compatible. This
+        also resulted in some small changes to PASM.SEQ.
+
+29.     04/12/89
+        Found and stomped on an insidious bug in %FIND. The instruction
+        sequence:
+
+                MOV PRIOR # 0
+
+                should read
+
+                MOV PRIOR # 0 WORD
+
+        Under VERY RARE conditions (i.e. a vocabulary on a 256 byte
+        boundry), %FIND would not be able to find words in a particular
+        vocabulary. This cost me a WHOLE DAY to find.  This bug is also in
+        all earlier versions of F-PC.
+
+30. *** 04/13/89
+        Corrected another condition that has been present since the
+        beginning of my sequential file editor design. Horizontal
+        scrolling is now being done a single character at a time rather
+        than the half screen scroll I used to use. The half screen scroll
+        was intended to minimize whole screen re-displays, but since I can
+        re-display the entire screen 10 times a second on an XT class
+        machine, there is no real reason for the half screen scroll. This
+        new way of scrolling is much better.  Mouse support has also been
+        added for horizontal scrolling.  Keyboard support for horizontal
+        scrolling is done with SHIFT SPACE to scroll RIGHT, and ALT SPACE
+        to scroll LEFT.  This is as yet not documented any other place.
+
+31.     04/18/89
+        I have reworked the hypertext mechanism to remove the link
+        destinations from the dictionary. I got up to about 80 links, and
+        they were consuming about 2k of dictionary space. Since I want to
+        be able to handle many more (hundreds of) links, the dictionary
+        overhead seemed excessive.  I moved the links into a file called
+        HYPER.NDX, which is compiled by the batch file MAKINDEX.BAT. The
+        index file consists of link names followed by line number offset
+        into the target file.  The filenames are included in the same
+        file, as the first line of a group of links for that file.  The
+        filename is flagged by a graphic character 249 as the first
+        character in the line.  As you would expect there is an increase
+        in the time required to find a link when the word being found is
+        in the index file.  The tests I have done indicate I can find a
+        single link in a 1000 link file in less than 1/2 second on an 8
+        MHz AT. On an XT class machine or from floppy, it will take
+        longer.
+
+32.     I have finally standardized on one way of using the variable
+        LOADLINE. It used to be used to hold either a line number, or the
+        offset into a file, depending on where it was being used. This
+        caused some problems, and has been changed. LOADLINE always
+        contains the line number of the most recent line read from
+        LINEREAD, or the line number of the most recent edit line when you
+        leave the editor.
+
+33. *** The meanings of some of the F83 words have been modified. The
+        Editor/Browser provides two basic modes, Edit-Change, and
+        View-N0-Change. A number of the familear F83 words can be used to
+        invoke either the editor or the browser depending on the word used.
+        Here is a list of words and their function:
+
+                VIEW <name>     Enter browser on definition <name>.
+
+                                Aliases for VIEW are: BROWSE V B L
+
+                ED <name>       Enter the editor on definition <name>.
+
+                                Alias for ED is: E
+
+                HELP <name>     Enter browser on help for <name>.
+
+                                Alias for HELP is: H
+
+                n1 EDIT         Enter editor on current file at line n1.
+
+                n1 LIST         Enter browser on current file at line n1.
+
+        The F10 key can be used to leave any of the above browse or edit
+        modes.
+
+34.     04/18/89 Evening
+        Added VIEWFROM and an alias VF to allow viewing very large files
+        from a specified starting line number. It is used in the form:
+
+                OPEN FPCGLOS.TXT                A very large file
+                300 VIEWFROM <enter>
+
+        Skips the first 300 lines of the file and starts reading at line
+        300. This is useful for examining very large files.
+
+        You should of course be carful not to switch to edit mode and
+        change such a file lest it get written back to the original file
+        on disk. You can use Alt-W to write the read portion of the file
+        out to a new filename.
+
+35.     04/22/89
+        Adjusted KERNEL4.SEQ to save and restore the status of the CONTROL
+        BREAK flag on entry and exit.  F-PC was setting the flag, and
+        leaving it set when you leave Forth, which of course could confuse
+        some other programs.
+
+36. *** Adjusted COLD so it won't crash if you execute it again from the
+        keyboard. Its initialization is only done once, after which it
+        performs BOOT then QUIT.
+
+37. *** 04/24/89
+        Much thanks to Robert Berkey, who has lately been working with
+        F-PC.  He gave me a multi-page list of small bug fixes, cleanups
+        and optimizations, most of which I have installed.  Here is a list
+        of the effected areas:
+
+                Adjusted decompiler SEE to handle the following words
+                properly:
+
+                        [']  IS  CASE OF ENDOF ENDCASE
+
+                Changed name of 2+! to D+!.
+
+                Added save and restore of BP and SI to BIOS level INT's.
+
+                Added CODE optimizations to the following words:
+
+                        0<  0=  0<>  0>  =  <>  U<  U>  ?DUP  *D
+                        WITHIN  BETWEEN  DUP>R  ?BRANCH  -TRAILING
+                        OVER  2DUP  3DUP  2OVER  PICK
+
+                Added the following new CODE words:
+
+                        PLUCK  RPICK  DOENDOF  DOENDCASE
+
+                VFIND was added to make it easy to search a particular
+                vocabulary for a word.
+
+                Adjusted (KEY) so it can return a null ^@ character.
+
+                Fixed bug in FLOOK and all words that use FALLOF.
+
+                Fixed bug in printer typing. If you simply typed
+                "1 PRINTING !" F-PC would seem to go crazy and print
+                a lot of junk to the printer. This was caused by the
+                command line editor. It now switches to the old
+                version of expect if it detects the printer being
+                turned on.
+
+        Again thanks to Bob for the above modifications.  They have been
+        individually installed and tested.
+
+38.     04/26/89
+        I discovered that KEY? is somewhat slower now that mouse support
+        has been added. This resulted in a slower search in the editor
+        because I was checking the keyboard on every line searched. I have
+        changed it to only check the keyboard once every 128 lines are
+        searched. This seems to speed the search up to normal again.
+
+39.     I discovered that when you were entering a string to do a search
+        while in the editor, you could press Alt-O and the file selection
+        box would popup just as if you were at the Forth command level.
+        This is clearly a bug, and in fact caused the editor to crash back
+        to Forth when I canceled the selection.  The problem stems from
+        the table of functions assigned to function keys when you are
+        using the line editor.  I resolved the problem by duplicating the
+        line editor's function key table, and installing the menu alternate
+        keys only in the table being used by XEXPECT.
+
+40.     04/27/89
+        Added mouse MARK to the editor. If you position the mouse at an
+        upper line, press the left button and drag the mouse down, lines
+        will be shown in reverse video indicating they are marked for a
+        subsequent cut or copy operation with Alt-X or Alt-C.
+
+41.     04/29/89
+        Added page up and down to the screen mouse support.
+
+        Minor cleanup in the file PRINTING.SEQ adjusted the CUT command to
+        properly cut all of the lines specified even if it's the last line
+        in the file. Several other minor fixes associated with this in the
+        file SEDITOR.SEQ. It is now not possible to write a zero length
+        file, you will always get at least two characters even if you
+        delete all of the lines in the file.  It seems you used to be able
+        to delete all lines in a file, causing WRITE.FILE to try to write a
+        negative size file which translated to an infinitely large file.
+        FIXED
+
+        Added mouse support to the browse prompt box that is shown when you
+        try to switch to browse mode from edit mode and changes have been
+        made. (ESC-A-B)
+
+42.     05/01/89        version 3.x12
+        Added a new menu to the SED editor, called HYPER. It contains all
+        of the hypertext link and unlink words. It also contains the two
+        new commands to create source and destination hyper links Alt-F3
+        for a source link, and Alt-F5 for a destination link. Press ESC-Y
+        to see the hYper menu.
+
+43.     If you print a file while in browse mode, hypertext destination
+        links will not be printed. They will be blanked as they are shown
+        on the screen.
+
+44. *** Evening
+        Added the ability in SED to toggle between the top two files on the
+        file stack. This is done with Alt-F1. Not as fast as editing two
+        files in memory since you have to reload a file when you switch,
+        but it is very convenient and reasonably fast.
+
+45.     05/02/89  morning before work
+        Enhanced the above mechanism, to rotate through whatever files
+        have been opened. Again you use Alt-F1, which works very well.  I
+        now also want to add a file pick mechanism to allow selection of
+        one of the files already opened from a list in a window.
+
+46.     Add the file pick mechanism mentioned above, called Flip as
+        Shift-F1. It pops up a window and allows you to select any one of
+        the files in the file stack, which is then brought to the top. The
+        FILE menu has been adjusted to take into account the flip
+        mechanism: you now can leave all edits with a single command
+        rather than unlinking to level one first.
+
+47. *** 05/04/89
+        Robert Smith has completed going through the source and help files
+        for KERNEL1.SEQ and KERNEL2.SEQ.  He has added to and corrected the
+        comments. Thank you BOB!
+
+        Adjusted the decompiler so it will scroll the upper portion of the
+        screen when it is used by the debugger to keep the area of the
+        definition visible on the screen.  This was VERY difficult to do
+        and in fact is not yet perfected.  It is however functional, and
+        useful.
+
+        The rotate through open files command Alt-F1 now has an oposite
+        function to rotate backwards through the list. The key combination
+        is Shift-Alt-F1.
+
+48. *** 05/10/89
+        Generalized the following list of VALUE operators:
+
+                !>      =:      @>      SAVE>   SAVE!>  RESTORE>
+
+        These operators now are smart about their use on USER variables
+        and deferred words.  They will work properly when used on either
+        normal variables values and deferred words, or their USER
+        equivalents.
+
+49. *** Went through and documented SAVEREST.SEQ, SAVEREST.HLP,
+        EQUCOLON.SEQ, EQUCOLON.HLP, KERNEL4.SEQ and KERNEL4.HLP.
+
+50.     LARGE SCREEN INFORMATION
+        I have experimented with the CornerStone full-page display, and it
+        has some interesting peculiarities.  To get it to work with F-PC
+        in FAST mode, you will have to include the following commands in
+        your F-PC.CFG file:
+
+                $B001 =: VIDEO-SEG
+                7     =: VMODE-VAR
+                >MONO
+                FAST
+
+        The video bios for the CornerStone monitor is not well behaved. As
+        you can see it does not use a standard start of screen address.
+
+51.     05/14/89
+        Made a very small but useful change to the editor user interface:
+        the Control PgUp and Control PgDn keys now scroll the screen up
+        and down respectively like Control W and Control Z.  They were
+        the same as Control Home and Control End which was a useless
+        duplication.
+
+52. *** 05/17/89        **  THIS CHANGE REVERSED IN Nr. 103 **
+        Modified DOENDCASE this date to perform a DROP so it does not have
+        to be done manually.  This requires you change ALL of your uses of
+        this CASE statment to delete the DROPs you now have before ENDCASE,
+        or YOUR CODE WON'T WORK.
+
+        Also installed a warning into ENDCASE for the next few releases to
+        help make this obvious to the user.
+
+        This change to ENDCASE resulted in changes to several files
+        including the PASM.SEQ file.
+
+53.     05/19/89
+        Fixed a bug in $>EXT : it was always assuming a three (3) character
+        extension string was being passed, and if a shorter string was
+        passed, a garbage character would be appended to the handle.
+                              3
+54. *** 05/23/89
+        Added TONE for sound generation. Made BEEP a deferred word, and
+        defined NEWBEEP to use TONE to do BEEP. The value BEEPFREQ
+        controls the frequency of BEEP, and value BEEPDURATION sets the
+        duration of BEEP in tenths of a second.
+
+        TONE takes frequency and duration and can be used to generate all
+        of the various beeps a PC is expected to generate.
+
+55.     Minor cleanup in XEXPECT: it now reacts more as expected when you
+        use up and down arrow to step through the line list.  Also
+        increased the line stac047epth to twelve (12) lines from six (6).
+
+56.     05/24/89
+        Fixed bug in PREPEND.PATH. It was removing the specified drive
+        designator, and was not restoring it under all conditions.
+
+        Fixed bug in LINEEDITOR.  Some variables were being used on each
+        invocation, and were preventing LINEDITOR from being re-enterant.
+        LINEEDITOR is still not re-entrant, but it can be nested if you
+        clear out its buffer on exit from the nested edit.  For my
+        purposes this is adequate.
+
+57. *** Added another feature!  ."   now recognizes imbeded escape
+        sequences.  The leadin is "\" as in "C". The functions available
+        are:
+
+                0       Normal display attributes
+                1 to 8  Attributes 1 through 8
+                :xx     Delay xx tenths of a second
+                <       Save the current cursor position     (nonest)
+                >       Restore the previous cursor position (nonest)
+                @xxyy   Move cursor to xx,yy
+                B       Beep the speaker
+                D       Dark (clear screen)
+                N       Newline (CRLF)
+                R       Select Reverse video
+                Sxx     Display xx spaces
+                T       Perform a Tab
+                \       Display a \ character
+                `       Display a " character
+                |       Display a linefeed character
+
+        See the file PERTYPE.SEQ for additional information.
+
+58. *** 05/26/89
+        modified the way MARK works in the editor. Selecting F3-MARK now
+        enters a mode where you may move the cursor up and down to select
+        lines and those lines selected will be shown in reverse video.
+        Pressing F3 again ends the mark operation, leaving the selected
+        lines in reverse video until a CUT or COPY operation is done, or F3
+        is pressed again to clear the mark.  This seems much more intuitive
+        than the way it worked before.  Top status line changes to tell you
+        you are in MARK mode after the first F3 press.
+
+59.     05/27/89
+        Corrected OK bug per George Hawkins, It should be doing a test for
+        ?FILEOPEN before actually trying to load. It does now. Thank you
+        George!
+
+60.     Implemented MANY of Mike Sperl's kernel enhancements. Many clock
+        cycles were saved in several places. Thank you!
+
+61.     Thank you! Tim Smith for the bug fix in TURNKEY. It may not be the
+        only bug, but you have to fix them as you find them.
+
+62. *** Fixed limitation in SPACES. It was limited to outputing 132 spaces
+        before quiting; that limitation has been increased to 32767
+        spaces. Thank you Zafar Essak!
+
+63.     05/30/89
+        Re-organized things a bit: moved EDITSET.SEQ to the end of the
+        editor load, so it can be used to set all of the editor keys.
+        Removed the FNSET and CTLSET operations from SEDWHELP, HELPLINK,
+        and HTYPE and moved them into EDITSET where they belong.
+
+        EDITSET is now up to date and can be examined to see ALL of the
+        editor commands.
+
+64.     05/31/89
+        Added listing capability to the assembler.  The HEX addresses and
+        generated code are displayed at the left of the listed output. The
+        words to control generation of the listing file are:
+
+                /LISTING        Enable  listing output
+                /NOLISTING      Disable listing output
+
+        The listing normally goes to the display, but can be redirected to
+        the printer with "PRINT", or to the browser with ">B".
+
+65.     Adjusted copyline (F5) in the editor to bump the end marked line if
+        the start markline is equal to the end line.  This keeps at least
+        one marked line visible as long as a mark is set.
+
+66. *** Robert Smith updated the KERNEL3.HLP documentation file. Thank you
+        Bob.
+
+67.     Adjusted all places that were changing the deferred word RUN. They
+        now save and restore its function rather than just setting it back
+        to <RUN>.
+
+68.     Version 3.X18    06/01/89
+                                           0u
+69.     06/01/89
+        Fixed a bug in the LINEDELETE function in the editor. It was
+        setting the current displayed file length to "2" when you deleted
+        the last line. This was not correct, but was cosmetic, not
+        affecting the actual file length.
+
+70.     Adjusted >BROWSE to preserve the current BASE and use DECIMAL when
+        displaying the status box number.
+
+71.     Minor optimization in %FIND.
+
+72.     Adjusted editor so the values LAST.TEXTLINE and LAST.TEXTCOL are
+        set only at program startup, and not at editor space allocation
+        time. This will allow any manual window size adjustments to remain
+        as they are set, and not switch to full screen after a DOS
+        command.
+
+73.     06/02/89
+        Added \TYPE to PERTYPE to allow typing interpreted strings from
+        CODE space.
+
+74.     06/05/89
+        Added two new functions to the editor. The normal Control-O open
+        file function has been extended to allow Shift-Control-O, which
+        will copy the word under the cursor into the open file buffer
+        allowing you to easily open the filename under the cursor.  The
+        search function has been enhanced with the addition of Control-F6,
+        which copies the word under the cursor to the search buffer before
+        prompting for a string to search for, allowing you to easily search
+        for another occurance of the word under the cursor.
+
+75.     06/06/89
+        For those of you that NEED LOTS OF MEMORY, I have added a new file
+        to ZIMMER.ZIP. It's called EMMHEADS.SEQ, and it will setup F-PC
+        to use expanded memory for its HEADS.  This frees up about 64k of
+        NORMAL RAM for other things.  It is even smart enough to only use
+        expanded memory for heads if there is expanded memory available.
+        So far I have not put this in the KERNEL, aren't you glad? It does
+        cost about 2k in .EXE file size.
+
+76.     06/09/89
+        Corrected a small bug in TAB expand: it now saves the contents of
+        the search buffer before setting the search string to a TAB
+        character. The search buffer is later restored after tab expansion
+        is complete.
+
+77.     06/16/89
+        Corrected a bug in %USAVE>. It was not saving the USER variable
+        properly.
+
+78.     06/19/89
+        Corrected a bug in COMP. It was restoring ES on the wrong side of
+        a conditional, such that if you ever passed null length compare
+        string to COMP, it would set ES to JUNK from the stack, most
+        likely resulting in a CRASH!! It is amazing I never ran into a
+        problem with this, but at least it is now fixed.
+
+79.     06/26/89
+        Corrected a bug in the assembler, The long forward branch L$ and
+        L$: were being resolved with a "!", rather than a store to the
+        target code space. This was preventing my new target compiler
+        from resolving the initialization branch properly. Added T! to the
+        list of assembler deferred target words, and modified the L$: to
+        resolve with T!. Modified the target compiler to set "T!" to
+        "!-T".
+
+80.     06/28/89
+        Kept running into the problem where information going to the
+        printer also shows up on the screen. The reason this happens is
+        that (TYPE) was coded that way. I say was, because it is no longer
+        coded that way. Cleaned up (TYPE), so it tests PRINTING, and
+        either calls PRNTYPE, or CONTYPE for printer, and console.  This
+        change will no doubt bother some people, but it is much cleaner to
+        have print control output to one or the other, and not both. This
+        is especially true when you start trying to use printing with an
+        application which has a screen oriented user interface, and still
+        needs to do printing.
+
+82.     06/29/89
+        Added ARRAY and AT? to F-PC. While building my new target compiler
+        I needed a defining word to make arrays, so the target compiler
+        could be setup to only include an array if it was used. So I added
+        ARRAY to the target compiler. Then I realized I would need ARRAY
+        in Forth so I could debug the programs written for the target
+        compiler; thus the addition. Ditto for AT?.
+
+83.     07/05/89
+        Added MANY changes from Robert Berkey, including but not limited to
+        the following words:
+
+                &>  GOTO  JOIN  ?DROP  COUNTL  +XSEG  MORE?
+
+                VIDEO-TYPEL  QTYPEL  $.L  $.R  DU<  SAVECURSOR
+
+                RESTCURSOR
+
+        Restructured the type words somewhat. The low level type word used
+        to use a variable called TYPESEG to control where typing occured
+        from. This caused TYPESEG to be saved and restored in several places
+        to prevent it being set wrong in one place versus another. Overall
+        this was a crude way to control typing. Bob adjusted things
+        somewhat so the low level word was a long type "TYPEL". The TYPE
+        word ALWAYS types from the CODE SEGMENT, and if you need to type
+        from some other segment, you use TYPEL or QTYPEL. Overall this is
+        much better than what I had before, and the code is cleaner to
+        boot.
+
+        Bob has also made a number of changes to the debugger, many of
+        which I liked very much. But when I tried to integrate his debugger
+        with my system, I ran into many problems due to other changes he
+        had made that I did not want to include. SOOO.. after looking at
+        the debugger code, I decided to update it with Bob's features and a
+        few more along with a much needed cleanup.  The debugger now deals
+        well with deferred words, does words etc. and you can even unnest
+        above where you entered the debugger. Added is the ability to
+        debug through EXECUTE, PERFORM, and the EXEC: structure. Overall
+        after the cleanup, I think the debugger actually got smaller.
+
+84.     07/06/89
+        Modified F-PC so all file opens are done READ-ONLY. This allows
+        examination of read only files in the editor. Since writes are
+        always done with HCREATE which makes the file ready for writing,
+        there is no problem with this unless you plan to append to a file in
+        which case you need to use READ-WRITE before the open to allow
+        writing to an existing file. The words added are READ-ONLY,
+        WRITE-ONLY, and READ-WRITE.
+
+85.     07/06/89
+        Modified the software floating point to be compatible with the
+        3.X22 version of F-PC. Since %NUMBER has been moved into assembly,
+        I needed to make the lower level number handlers for HEX, '(tick),
+        and ^(control) deferred so they could be changed by floating point
+        in a way that was compatible. Relatively minor mods to SFLOAT3.SEQ
+        to make it work.
+
+86.     07/08/89
+        Added Robert Berkey's visual vocabulary stack order to the status
+        bar. The vocabulary order is now displayed at the top right of the
+        screen, just below the normal status line in a vertical column.
+        CURRENT is shown on line one with attribute three, and the CONTEXT
+        list is shown below it in attribute one, down to ROOT. Very
+        useful! thank you Robert.
+
+87.     07/12/89
+        Modified the line editor to use a trailing attribute called
+        ">EDATTRIB" when displaying the portion of the edit line after the
+        text currently being edited. The purpose of this is to allow you
+        to see how much text is really in the buffer, and where it ends.
+        The >EDATTRIB is currently set to >ATTRIB3 while in the editor,
+        and >NORM while at the command line.
+
+88.     07/12/89
+        Added a control to the change 84. The word DEF-RWMODE now allows
+        you to specify what the default read/write mode will be for file
+        open operations. It is used as follows:
+
+              READ-WRITE DEF-RWMODE   or   READ-ONLY DEF-RWMODE
+
+        F-PC still defaults to using READ-ONLY. If you need READ-WRITE,
+        you will need to use the above command.
+
+89.     07/12/89        Version change to 3.X23
+
+90.     07/17/89
+        Modified the editor so that it opens READ ONLY files in BROWSE
+        mode.
+
+91.     07/17/89
+        Modified editor so F10 doesn't simply drop you out of the editor
+        when you are only nested one level. It pops up the OPEN box, to
+        give you the opportunity to open another file. If you then press
+        ESC, you will leave the editor.  This is a significant change in
+        that many people will HATE it because it is a change, but when you
+        get used to it, it will help prevent accidental exits. The change
+        was also carried over to the Z editor.
+
+92.     08/11/89
+        I'm back from vacation, had a wonderful time. We went to Magic
+        Mountain, and several other colorful places. Didn't make a single
+        change while I was away. Amazing!
+
+93.     08/11/89
+        Fixed left margin printing default so it is not reset each time
+        you open and edit a file.
+
+94.     08/15/89
+        Adjusted CTLSET and FNSET so that they don't abort if the word
+        they are trying to install in a function table is not defined.
+        They simply display a warning message stating the problem and
+        continue. This allows some functions to be removed from the
+        compile list (saving space) without having to change EDITSET.SEQ.
+
+95.     08/15/89 **** Major version change 3.30 ****
+        Removed the experimental warning message from the system: am
+        preparing for the next major release of F-PC!!
+
+96.     08/19/89
+        Fixed a bug reported by Mike Mayo. I had the value WITHPATH set
+        to TRUE, which caused filenames to be saved in the FILES
+        vocabulary with their full paths included. He was working in a
+        three level nested directory that caused the filename with path
+        to extend to 35 characters. This caused F-PC to truncate his
+        filename to 3 characters (sort of a MOD function). No warning was
+        given, and VIEW would not work. It is also likely head space was
+        damaged by the long name, since >NAME after that would not work
+        reliabily. This bug was fixed by doing two things:
+
+                1. Setting WITHPATH to OFF. Don't need path anyway since
+                   we have FPATH to help us find files.
+                2. Adding a warning to "HEADER to prevent creation of names
+                   longer than 31 characters.
+
+97.     08/25/89
+        Fixed a bug reported by Mike Mayo. The word (FNUMBER?) in the
+        software floating point package was not returning a double number
+        zero when a number conversion failed. This caused problems in the
+        editor when trying to browse words that had been indexed with the
+        NEWZ editor's index compiler. Fixed (FNUMBER?) so it returns a
+        FALSE flag, and a double number zero on number conversion failure,
+        and modified the editor to use NUMBER? rather than %NUMBER for its
+        browse line number conversion.
+
+98.     09/01/89
+        Added a new feature to the debugger at the request of Mike Mayo.
+        "Skip To" Allows you to visually select a place further forward in
+        a definition while in the debugger, and have the word you are
+        debugging continue at high speed until the place you selected is
+        reached. Debugging then continues with the single stepper. Skip To
+        is enabled with "S" in the debugger, then you use "+" and "-" to
+        step forward or backward through the definition. Press ESC to
+        cancel skip, or Enter to accept the skip.
+
+99.     09/05/89
+        Finally fixed the bug in the file selection box that was
+        preventing the selection of a file with no extension. It used to
+        try to create a new file: now it will let you pick such a file.
+
+100.    09/07/89
+        Generalized the color control a bit, and added a new word
+        COLORSET. It causes the current screen colors to become the
+        default screen colors as "NORMVAL". In other words it allow you to
+        set your screen color preferences so they will be maintained if
+        you do an FSAVE. Try the following:
+
+                LTGRAY >BG BLUE >FG COLORSET <Enter>
+
+          If you now save the system, you will have blue letters on a
+        light gray background until you change it again.
+
+101.    09/13/89        **** Version 3.33 ****
+        Added -SCAN to the file SCAN.SEQ. I needed this word in the target
+        compiler, and so I thought I would add it to the F-PC ystem as
+        well.
+
+102.    09/21/89        **** FPC Version 3.34 ****
+        Renamed all occurances of F-TZ and FTZ to F-PC and FPC.
+
+102.1   09/22/89
+        Bug fix in FPATH+.  Mike Mayo found you could not put FPATH+ on a
+        line with other commands: it would gobble up the entire line
+        following FPATH+. FIXED
+
+103.    09/26/89        **** FPC Version 3.35 ****
+        Modified ENDCASE back to be the same as FPC 2.25. This per the
+        request of the FPC working group. ENDCASE no longer does the
+        DROP automatically.
+
+        Adjusted the LIST size up about 8k, so about 34k of COLON
+        definition space is available in the un-installed F-PC.EXE file.
+
+104.    10/16/89        **** FPC Version 3.36 ****
+        Have been working on the glossary. It is not completely up to
+        date, but it is getting there.
+
+105.    10/22/89        **** FPC Version 3.50 ****
+        Official release version.
+
+106.    05/25/90        **** FPC Version 3.51 ****
+        Started a minor update, to incorporate most if not all of the
+        known bug fixes to FPC 3.50.
+
+        Added HCRITICA.SEQ from Mike Christopher, to make DOS return a
+        FAIL condition if a critical error occurs. This prevents the
+        user from issuing an Abort, when we have not unhooked the
+        interrupt vectors we hooked in during startup.
+
+        The bug fixes repaired include the VIEW fix by Robert Patten,
+        all of the bugs listed with repairs in FPC350.BUG, and all of
+        the locations in FPC that were using the LOOPNZ assembly word.
+        These include UPPER, ?UPPERCASE, SEXE and LARGEST.
+
+107.    07/02/90
+        Adjusted the max line number allowed while editing a file to be
+        increased by 50 percent, to allow files with very short lines
+        to be edited.
+
+        Modified PRINTING.SEQ to update the status line while printing,
+        every 8 lines, so the user will be able to tell how much of the
+        print process has been done so far.
+
+        Added +PLACE a nice compliment to PLACE, it appends a string to
+        an exsiting counted string in memory.
+
+        Made some adjustments to the file load mechanism. I have seen
+        some re-occuring problems with the file load words, that would
+        cause them to return from a nested load to the wrong place in a
+        file. I hope I have solved these problems.
+
+        Fixed a bug in the editor in <RED>. It was supposed to save and
+        restore TYPEL, but it was restoring TYPE instead. FIXED
+
+108.    07/03/90        **** FPC Version 3.52 ****
+        Fixed the Alt-W bug. The SED or Z editors could trash your
+        files if you did an Alt-W when nested down two or more levels.
+        This has been fixed. All I had to do was turn off the NEWFL
+        flag when backing out a level.
+
+109.    07/05/90        **** FPC Version 3.53 ****
+        Added FPCVER#, a constant that return the current version
+        scaled by 100 of F-PC, it currently returns 353. Can be used to
+        adjust programs for version compatibility. Also added a file
+        350COMPAT.SEQ to make F-PC 3.50 compatible with the current
+        release. This file contains the additional words added to F-PC,
+        not any of the bug fixes.
+
+110.    07/06/90
+        After reading Peter Midnights FORML paper again, I have added a
+        key to the editor "Alt-8" that toggles on and off a display of
+        the name of the function to be executed for each editor key
+        pressed while editing. The function name is shown in the upper
+        left corner for 4 tenths of a second. This doesn't add all the
+        functionality Peter implimented, but it does make it possible
+        to explore how the editor works if you are so inclined.
+
+111.    07/13/90
+        Added an option, LEAVEPROMPTON and LEAVEPROMPTOFF allow you to
+        specify if you want to be asked for a file to edit on leaving
+        the editor. The default is NO. This is a change from all
+        previous versions where the default was YES.
+
+        Also added Robert Berkey's favorite function to the menus. When
+        Bob fixed the view bug, he also add a special editor command to
+        show where a word you have the cursor on was loaded from. That
+        is show the place where the FLOAD occured that caused this word
+        to be loaded. the command isn Ctrl-F9. It has been added to the
+        "hYper" menu.
+
+112.    07/25/90        **** FPC Version 3.54 ****
+        Added the top F2 and bottom F4 of screen functions to the EDIT
+        menu. Also added top middle Alt-F2 and bottom middle Alt-F4
+        screen functions to SED as well as to the EDIT menu. Changed
+        Page up and down so they no longer automatically move the
+        cursor to line 6 when they are performed. After having it like
+        that for a year, I can't take it any more. SED now leaves the
+        cursor on whatever line it was on before doing a page up or
+        down (unless you hit the beginning or end of the file).
+
+113.    07/30/90
+        Fixed some spelling bugs in WORDS. USER-DEFERED, DEFERED and
+        USER-VARIABLE were spelled wrong. Also added COLON.* to work
+        along with :.* in listing colon definitions.
+
+        Also fixed the longtime bug that converted 'a' as 'A' when
+        entered in interpret state. I added the suggested SKIP'C' that
+        was shown in the FPC350.BUG file, but I coded it in assembly so
+        performance wouldn't be effected.
+
+114.    11/05/90        **** FPC Version 3.5401 ****
+        Fixed a bug in WFL.SEQ, seems it would return the <a1> anyway
+        under the conditions where the user pressed Enter on a list of no
+        files. FIXED
+
+        Modified FPCVER# to be a DOUBLE NUMBER of five digits. .FPCVER#
+        then discards the lowest two digits and displays the highest
+        three digits as X.XX. You can get the read version number by
+        typing "FPCVER# D."
+
+115.    11/10/90        **** FPC Version 3.5402 *****
+        Someone submitted a file called MLOAD.SEQ. It was such a neat
+        idea that I had to include it in the system. MLOAD allows you
+        to edit a file, mark some lines you want to load (using F3),
+        leave the editor, and then press F9 to load the marked lines.
+        This is VERY convenient for debugging. Space cost, is about
+        150 bytes.
+

@@ -1,0 +1,185 @@
+
+    1  0100  0F                  SEI  
+    2  0101  8E 00 FE            LDS  #$FE
+    3  0104  CE 00 80            LDX  #SP0 
+    4  0107  BD 01 3C            JSR  MAIN 
+    5  010A  20 F4               BRA  $0100
+    6  010C              +++++++ Compiling line 1 from C:\6811\TEST.SEQ
+    7  010C              \\ test.seq             A test file for 6805            by Tom Zimmer  
+    8  010C                
+    9  010C                
+   10  010C                
+   11  010C                              .options /opt /debug  
+   12  010C              {  
+   13  010C                
+   14  010C              variable bingo  
+   15  010C              variable bozo  
+   16  010C              variable bongo  
+   17  010C                
+   18  010C              CODE bolo       ( -- n1 )  
+   19  010C  09          BOLO    push,  
+   20  010D  A7 00                       push,  
+   21  010F  86 97                       ldaa # $97  
+   22  0111  18 30                       tsy  
+   23  0113  18 60 22                    neg 34 y  
+   24  0116  18 AB 16                    adda 22 y  
+   25  0119  18 CE EA 1A                 ldy # 234  
+   26  011C  1A 83 34 1A                 cpd # 1234h  
+   27  011F  1A B3 01 0C                 cpd bolo  
+   28  0123  CD EE 17                    ldx 23 y  
+   29  0126  39                          rts     end-code  
+   30  0127                
+   31  0127              MACRO bulgogy   ( -- )  
+   32  0127                              dec bozo  
+   33  0127                              END-MACRO  
+   34  0127                
+   35  0127                
+   36  0127              : looper        ( -- )  
+   37  0127                              for  
+   38  0127  16          LOOPER  TAB  
+   39  0128  A6 00               LDAA $00,X
+   40  012A  08                  INX  
+   41  012B  37                  PSHB 
+   42  012C                              next  
+   43  012C  33                  PULB 
+   44  012D  5A                  DECB 
+   45  012E  26 FB               BNE  $012B
+   46  0130                              ;  
+   47  0130  39                  RTS  
+   48  0131                
+   49  0131              : loopity       ( n1 n2 -- n3 )  
+   50  0131                              for 1+ next ;  
+   51  0131  16          LOOPITY TAB  
+   52  0132  A6 00               LDAA $00,X
+   53  0134  08                  INX  
+   54  0135  37                  PSHB 
+   55  0136  4C                  INCA 
+   56  0137  33                  PULB 
+   57  0138  5A                  DECB 
+   58  0139  26 FA               BNE  $0135
+   59  013B  39                  RTS  
+   60  013C                
+   61  013C              : MAIN          ( -- )  
+   62  013C                              33 >R R>  
+   63  013C  09          MAIN    DEX  
+   64  013D  A7 00               STAA $00,X
+   65  013F  86 21               LDAA #$21
+   66  0141  36                  PSHA 
+   67  0142  32                  PULA 
+   68  0143                              bingo decr  
+   69  0143  7A 00 10            DEC  BINGO 
+   70  0146                              bulgogy  
+   71  0146  7A 00 11            DEC  BOZO 
+   72  0149                              bolo  
+   73  0149  BD 01 0C            JSR  BOLO 
+   74  014C                              500MS  
+   75  014C  BD 01 AA            JSR  500MS 
+   76  014F                              7 looper  
+   77  014F  09                  DEX  
+   78  0150  A7 00               STAA $00,X
+   79  0152  86 07               LDAA #$07
+   80  0154  BD 01 27            JSR  LOOPER 
+   81  0157                              9 5 loopity drop  
+   82  0157  09                  DEX  
+   83  0158  A7 00               STAA $00,X
+   84  015A  86 09               LDAA #$09
+   85  015C  09                  DEX  
+   86  015D  A7 00               STAA $00,X
+   87  015F  86 05               LDAA #$05
+   88  0161  BD 01 31            JSR  LOOPITY 
+   89  0164                              34 dup  
+   90  0164  86 22               LDAA #$22
+   91  0166  09                  DEX  
+   92  0167  A7 00               STAA $00,X
+   93  0169                              swap  
+   94  0169                              drop  
+   95  0169                              bingo @  
+   96  0169  A7 00               STAA $00,X
+   97  016B  96 10               LDAA BINGO 
+   98  016D                              5 +  
+   99  016D  8B 05               ADDA #$05
+  100  016F                              bongo 5 + !  
+  101  016F  A6 00               LDAA $00,X
+  102  0171  08                  INX  
+  103  0172  97 17               STAA $17
+  104  0174                              dup  
+  105  0174                              swap drop  
+  106  0174                              bingo bongo 7 cmove ;  
+  107  0174  A7 00               STAA $00,X
+  108  0176  86 10               LDAA #BINGO 
+  109  0178  09                  DEX  
+  110  0179  A7 00               STAA $00,X
+  111  017B  86 12               LDAA #BONGO 
+  112  017D  09                  DEX  
+  113  017E  A7 00               STAA $00,X
+  114  0180  86 07               LDAA #$07
+  115  0182  4D          CMOVE   TSTA 
+  116  0183  26 06               BNE  $018B
+  117  0185  08                  INX  
+  118  0186  08                  INX  
+  119  0187  A6 00               LDAA $00,X
+  120  0189  08                  INX  
+  121  018A  39                  RTS  
+  122  018B  3C                  PSHX 
+  123  018C  36                  PSHA 
+  124  018D  5F                  CLRB 
+  125  018E  A6 00               LDAA $00,X
+  126  0190  08                  INX  
+  127  0191  18 8F               XGDY 
+  128  0193  5F                  CLRB 
+  129  0194  A6 00               LDAA $00,X
+  130  0196  08                  INX  
+  131  0197  8F                  XGDX 
+  132  0198  32                  PULA 
+  133  0199  E6 00               LDAB $00,X
+  134  019B  E7 00               STAB $00,X
+  135  019D  08                  INX  
+  136  019E  18 08               INY  
+  137  01A0  4A                  DECA 
+  138  01A1  26 F6               BNE  $0199
+  139  01A3  38                  PULX 
+  140  01A4  08                  INX  
+  141  01A5  08                  INX  
+  142  01A6  A6 00               LDAA $00,X
+  143  01A8  08                  INX  
+  144  01A9  39                  RTS  
+  145  01AA  09          500MS   DEX  
+  146  01AB  A7 00               STAA $00,X
+  147  01AD  86 FA               LDAA #$FA
+  148  01AF  BD 01 BA            JSR  MS 
+  149  01B2  09                  DEX  
+  150  01B3  A7 00               STAA $00,X
+  151  01B5  86 FA               LDAA #$FA
+  152  01B7  7E 01 BA            JMP  MS 
+  153  01BA  5F          MS      CLRB 
+  154  01BB  5A                  DECB 
+  155  01BC  26 FD               BNE  $01BB
+  156  01BE  4A                  DECA 
+  157  01BF  26 FA               BNE  $01BB
+  158  01C1  A6 00               LDAA $00,X
+  159  01C3  08                  INX  
+  160  01C4  39                  RTS  
+  161  01C5                
+  162  01C5              \ ***********************************************************************  
+  163  01C5              \ *************** Install the RESET vector ******************************  
+  164  01C5              \ ***********************************************************************  
+  165  01C5                
+  166  01C5              \                FFFEh cseg vector_area  
+  167  01C5              \                100H ,-T  
+  168  01C5                
+  169  01C5              \ ***********************************************************************  
+  170  01C5              \ ******************** The End ******************************************  
+  171  01C5              \ ***********************************************************************  
+  172  01C5                
+
+------------------------------------------------------------------------
+12 Symbols 
+
+ 1AA:500MS                   10 BINGO                  10C:BOLO                  
+  12 BONGO                   11 BOZO                   182:CMOVE                 
+ 127:LOOPER                 131:LOOPITY                13C:MAIN                  
+ 1BA:MS                      80 SP0                   
+
+Total CODE bytes compiled:   C7 (hex)   199 (decimal)
+Total DATA bytes compiled:    3 (hex)     3 (decimal)
+

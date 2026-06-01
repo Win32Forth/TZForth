@@ -1,0 +1,192 @@
+
+øEDMAIN             Help with the TCOM Compiler      Press ùF10 to leave
+
+  This hypertext help system provides online help for the TCOM compiler.
+
+  ùTCOM?      What is TCOM anyway?  ùWhy?       Why was TCOM written?
+
+  ùMake_TCOM  How do I build TCOM?  ùFiles?     What are the files for?
+
+  ùUsage      How do I use TCOM?    ùExamples   TCOM example programs
+
+  ùOptions    Command line options  ùRegisters  How does TCOM use regs?
+
+  ùFeatures   What can TCOM do?     ùNotes      Notes on development
+
+  ùLimits     What can TCOM NOT do? ùDescribe   How does TCOM work?
+
+
+  NOTE: Move the cursor to a hilighted topic, and press F9 to examine
+        that topic. To back out of a topic back to the previous topic,
+        press F10. Press Shift F10 to leave help.
+
+øMake_TCOM       Building the Target COMpiler (TCOM)
+
+
+  TCOM is supplied in both source and executable form. The TCOM.EXE
+provided, can compile any application.  If you want to re-compile TCOM,
+it relies on the presence of FPC, so FPC must be installed before TCOM
+can be re-compiled.
+
+  Install FPC if you have not already done so. Include the \FPC
+directory in your system PATH statment, and reboot your computer to
+make it take effect.
+
+  Having installed FPC, change to the "TCOM\SRC" directory, and type:
+
+        SMALTCOM <enter>
+
+  Provided you have included \FPC in your system PATH, a TCOM.EXE file
+will be built. TCOM.EXE will include all of the library files specified
+in the loadfile STARGET.SEQ.
+
+
+øUsage          Using TCOM to compile an application
+
+  Using TCOM is really very easy. It is normally invoked from the DOS
+command line as follows:
+
+                C:>TCOM sample <Enter>
+
+  TCOM will open "sample.SEQ", and compile it into an executable file
+"sample.COM", and return to DOS.
+
+  Additional command line options can be placed after the filename, to
+cause the compiler to perform additional tasks. For example:
+
+                C:>TCOM sample /LST <Enter>
+
+
+
+  This line will compile "sample" and generate a .LST listing file.
+Additional command line options are available, see the section ùOptions .
+
+  Press ùPgDn for information on modifying a program for TCOM.
+
+                Making a program compilable under TCOM
+
+  Some relatively small changes have to be made to a program to get it to
+compile successfully with TCOM.  One possible change, is that TCOM makes
+the last COLON definition in your program the entry point of the program.
+If the last definition in your program is not the entry point, then you
+will need to add a definition to the end of your program to execute the
+real entry point of your program.
+
+  The name of the added definition is not important, TCOM will always
+start executing your program at the LAST COLON DEFINITION it encounters.
+
+  Once you have compiled a program with TCOM, you will probably need to
+debug it.  For information on debugging, see ùDebugging
+
+
+
+
+
+                                                Press F10 to return
+
+øOptions           Command line Options available for TCOM
+
+  The TCOM compiler defaults to the following options when a
+commandline is specified without options.
+
+        /codeoff  = Disable the listing of generated assembly code.
+        /definit  = Include the default initialization. (see DEFINIT.SEQ)
+        /lstoff   = Don't generate a listing file.
+        /opt      = Enable compile optimization.
+        /showoff  = Don't show symbols as they are compiled.
+        /srcoff   = Disable the listing of source lines.
+        /sym      = Generate a symbol file for debugging.
+        /inx      = Generate an index file for debugging.
+        /tailoptoff = Don't enable tail optimization
+
+  These options provide a reasonable compiled output for experimentation.
+Additional options allow more flexible control.
+
+
+                                        Press ùPgDn for more Options
+
+                    More Command line Options for TCOM
+
+  These options provide additional control over the compiler.
+
+      /code      = Enable the listing of generated assembly code.
+      /lst       = Generate a listing file with source, asm & symbol map.
+      /noinit    = Don't do automatic target initialization, user does it.
+      /optoff    = Disable compiler CODE optimization.
+      /quiet     = Reduce visual output, use with I/O redirection.
+      /show      = Show symbols as they are compiled.
+      /src       = Enable  the listing of source lines.
+      /stay      = Stay in Forth after the compile finishes.
+      /tailopton = enable tail optimization.
+
+  The option /NOINIT above requires aditional commands, and is described
+on the following screen. For options on debugging, see ùDebugging . More
+options are available for setting various target parameters, see ùTPARAMS
+
+
+                                        Press ùPgDn for more info
+
+                Information on the /NOINIT option
+
+  Some operations in a target application require initialization before
+they can be used. For example: If you want to spawn a DOS shell, then
+your target program must release some memory back to DOS before spawning
+the shell, or DOS won't have any memory to use for the shell. The TCOM
+compiler automatically initializes this and several other operations to
+prevent the user from having to do or know about this initialization.
+Normally this is fine, but there is about a 2k memory overhead imposed by
+the initialization that some programs will find excessive. To deal with
+this eventuality, TCOM provides an option "/NOINIT" to disable the
+automatic initialization. When this option is used, YOU MUST DO ANY
+NEEDED INITIALIZATION YOURSELF. Examine the file DEFINIT.SEQ to see what
+initialization is normally done, and include whatever lines are needed
+for your application in your source file.
+
+  If you are not conscerned about the extra overhead, then just let the
+compiler do the initialization for you.
+
+  More information on /NOINIT -> ùDef_Init        Press ùPgDn for more
+
+øTPARAMS          Command line Target Parameters
+
+  Various parameters about the target program can be specified if desired
+to adjust the target image. The default parameters chosen will normally
+work well for DOS type programs, but programs compiled for ROM, will need
+to use these commands to adjust the compiler output.
+
+  /code-start <adr> = Start compiling code at <adr>. Normally $0100.
+  /data-start <adr> = Start compiling data at <adr>. Normally $0000.
+  /code-limit <n1>  = Size limit between CODE and DATA.
+  /ram-start  <seg> = Segment where RAM will exist in the TARGET.
+  /ram-size   <n1>  = Amount of ram that will be available in the TARGET.
+
+
+  /RAM-START defaults to $FFFF, which signals the compiler that it is
+compiling a DOS or RAM resident program. Using the /RAM-START command
+to set a valid segment, will signal the compile to automatically compile
+the target code needed to move user strings and data from ROM to RAM at
+program runtime.
+                                                Press F10 to return
+
+øDebugging              Debugging a TCOM Program
+
+  TCOM provides two ways to debug your programs.  The first is BUG, a
+source level debugger written in Forth and compiled with TCOM.  TCOM
+normally creates data files for it.  BUG allows all the usual breakpoint
+and trace capability.  Normally you will use BUG to debug any programs you
+write.
+
+  TCOM also provides a limited but useful assembly debugging environment
+that can be appended to your program at compile time with the options
+/FORTH, /DIS, and /DEBUG. These options represent three levels and sizes
+of additions you can include with your program to add a Forth
+interpreter, a disassembler, and a debugger. Each option needs and
+automatically includes the previous option. The amount of code added to
+your program will range from about 3k for the /FORTH option with optimized
+code (/OPT), up to 27k for the /DEBUG option without optimization. A
+corresponding increase in compile time will also result. While this is
+not the ultimate solution for program debug, it does provide a useful way
+to get your programs working.
+
+                                                Press F10 to return
+

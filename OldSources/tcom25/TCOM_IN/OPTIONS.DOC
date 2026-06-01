@@ -1,0 +1,85 @@
+                    TCOM commandline directives         by Tom Zimmer
+
+  TCOM accepts directives to specify a number of options to the compiler.
+These options can be placed in any of three places and still have an
+effect on the compile process.  The three places are:
+
+        In the environment as in:
+
+                TCOM=/OPT /NOINIT
+
+        In the source file within the first 32 lines:
+
+                .OPTIONS /OPT /NOINIT
+
+        On the commandline:
+
+                C:>TCOM <filename> /OPT /NOINIT
+
+  The compile options have a priority as listed above. That is the
+environment has the lowest priority, then the program .OPTIONS have the
+next highest priority, and finally any command line options select the
+highest priority.
+
+
+Option List
+
+/0INIT          Don't do ANY initialization, USE WITH EXTREME CAUTION!
+/CODE-START xxx Set the CODE starting address to address xxx.
+/DATA-START xxx Set the DATA starting address to address xxx.
+/DBG            Include the debugger in the target program (8086ONLY).
+/DEBUG          Include the debugger in the target program (8086ONLY). alias
+/DEFINIT        Include the default initialization code. (default)
+/DEFINITOFF     Don't include the default initialization code.
+/DIS            Include the disassembler in the target program.
+/FORTH          Include a Forth interpreter in the target program.
+/HEADER         Include symbol headers in the target program. (some targets)
+/HELP           Display the first Help screen.
+/HELP2          Display the second Help screen.
+/IND            Generate an index file for the target program.
+/INDEX          Generate an index file for the target program. alias
+/INX            Generate an index file for the target program. alias
+/INDEXOFF       Don't generate an index file for the target program. (default)
+/KEY            Wait for user to press a key if errors occured in compile.
+/+LIB           Resolve library function inclusions at end of compile.
+/LIB+           Resolve library function inclusions at end of compile. alias
+/LIBA           Resolve library function inclusions at end of compile. alias
+/LIBAFTER       Resolve library function inclusions at end of compile. alias
+/LIBI           Resolve library functions as they are referenced.
+/LIBIN          Resolve library functions as they are referenced. alias
+/LIBINSIDE      Resolve library functions as they are referenced. alias
+/LIST           Generate a listing file.
+/LISTING        Generate a listing file. alias
+/LST            Generate a listing file. alias
+/LSTLIB         Include library disassembly in listing.
+/LSTNOLIB       Don't include library disassembly in listing.
+/NODEBUG        Don't include the debugger code in the target program.
+/NODIS          Don't include the disassembler code in the target program.
+/NOHEAD         Don't generate symbol headers for functions. (some targets).
+/NOINDEX        Don't generate an index file for the target program. (default)
+/NOINX          Don't generate an index file for the target program. (default)
+/NOLISTING      Don't generate an index file for the target program. (default)
+/NOINIT         Don't include the default initialization code in the target.
+/NOOPT          Don't enable the code optimizer. (default)
+/NOREDEF        Don't allow functions to be redefined. (default)
+/NOSHOW         Don't show the names of functions as they are referenced. (def)
+/NOSRC          Don't show the source lines during the compile. (default)
+/NOSTACK        Don't check the stack for a depth change on each line. (def)
+/NOSYM          Don't generate a symbol file during the compile. (default)
+/OPT            Enable code optimization for this compile.
+/OPTOFF         Disable code optimization for this compile. (default)
+/Q              Quiet compile, compiler output can be redirected with ">".
+/QUIET          Quiet compile, compiler output can be redirected with ">".
+/REDEFOK        Allow the redeinition of functions during the compile.
+/SHOW           Display the names of functions are they are defined.
+/SHOWOFF        Don't display the names of functions as they are defined. (def)
+/SRC            Show source file lines are they are compiled.
+/SRCOFF         Don't show source file lines as they are compiled. (def)
+/STACK          Check each compiled line for a stack depth change.
+/STAY           Stay in the compiler after finishing a compile. leave with /BYE
+/SYM            Generate a symbol file during this compile.
+/SYMBOLS        Generate a symbol file during this compile. alias
+/SYMOFF         Don't generate a symbol file during this compile.
+/TAILOPTOFF     Turn tail optimization off. (default)
+/TAILOPTON      Turn on tail optimization.
+

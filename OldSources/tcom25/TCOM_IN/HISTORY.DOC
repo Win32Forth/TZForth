@@ -1,0 +1,3307 @@
+
+øNotes                  Development Notes
+
+ 06/26/89
+
+        Added ARRAY to the list of available data structures.
+
+        You don't need to put a BYE at the end of you program any more,
+        as it is built into the initialization code.
+
+        Corrected compiler so it only includes variables and arrays when
+        they are referenced by an application or application referenced
+        word.  This reduced the data segment overhead from about 150
+        bytes to two bytes if no data is referenced.
+
+        Added two target compiler optimizers, the first looks for an
+        "LODSW" (POP AX) preceeded by "SUB SI, # 2  MOV 0 [SI], AX"
+        (PUSH AX), and deletes both.  The second optimizer looks for
+        "MOV BX, AX" preceeded by "MOV AX, # immediate", and changes the
+        move immediate AX to a move immediate BX.  These two optimizers
+        shortened the CLOCK program from about 5000 bytes down to 3800
+        bytes.  The smallest .COM file I can now generate is 50 bytes,
+        and the "Hello World!" program is 173 bytes, down from 330 bytes.
+
+        Modified compiler so there are select words for specifying where
+        words are going, rather than using special word names for each
+        place. Specifically : (colon) and CODE are defered, and directed
+        to either Forth, Target, or Library controlled by the words:
+
+                >FORTH          >LIBRARY        >TARGET
+
+        This makes the source code much easier to read, and much less
+        error prone on entry.
+
+ 06/28/89
+
+        Add automatic boot compiling to TCOM. Now it will initialize
+        itself when it boots, and compile whatever file you put on the
+        DOS command line. Here is an example of how to use TCOM:
+
+                        TCOM CLOCK <enter>
+
+                                or
+
+                        TCOM SAMPLE <enter>
+
+        You can keep TCOM from automatically starting to compile, with
+        the following sequence:
+
+                        TCOM CLOCK QUIT <enter>
+
+        TCOM will open CLOCK.SEQ, but will QUIT before starting to
+        compile it. You can then compile CLOCK by typing:
+
+                        TARG <enter>
+
+ 06/28/89       ----
+
+        Corrected the bug that was keeping me from starting to allocate
+        data variables from address zero. The default flag for an
+        unresolved symbol was zero (0), it has been changed to "-1".
+        This should prevent further problems.
+
+ 07/07/89
+
+        Extended the MOV_BX,AX optimizer to test for the additional case
+        where this instruction is preceeded by MOV AX, 0 [SI]. If this
+        is found, then the instruction is changed to MOV BX, 0 [SI].
+
+        Added two additional optimizers. The first tests for the
+        following case:
+
+
+                DEC IP            ÄÄ¿
+                DEC IP              ³     push item1 on the stack
+                MOV 0 [SI], AX    ÄÄÙ
+                MOV AX, 0 [SI]            get a copy of item one in AX
+
+        This sequence can occur whenever we push "item1" on the stack
+        and follow it with an operator that modifies item one
+        subsequently returning it to the stack.  The optimization here
+        is simply to discard the final instruction, saving two bytes and
+        15 clock cycles.
+
+        The second optimizer tests for multiple occurances of DROP in a
+        program, and folds all multiple drops into a single inctruction
+        "ADD SI, # xxxx" for the correct operation.
+
+ 07/13/89
+
+        Factored the compiler to get as much of the target specific code
+        out of it as possible. The target specific code has been moved
+        into the library file.
+
+        This is part of the process of modifying the compiler to work
+        with additional target processors. I have coded a sample target
+        that looks somewhat like a Forth Chip. It outputs assembly
+        source at the moment that is re-directable to the printer. If
+        you want to write a new target, you need only re-write the
+        library file for the target processor. Of course this is only in
+        theory for now.
+
+ 07/17/89
+
+        Here is a list of command line parameters that can be passed to
+        the target compiler. Also included is a description of their
+        functions:
+
+                /CODE           Display the assembled code as compiling
+                /SRC            Display the source while compiling
+                /OPT            Turn on the code optimizer
+                /LST            Direct any output from the /CODE or /SRC
+                                  options to IMAGE.LST.
+
+        These options are used as follows:
+
+                C> TCOM <filename> /CODE /SRC /OPT /LST <enter>
+
+        They may be used in any order on the DOS command line.
+
+ 09/12/89
+
+        Added help to display when TCOM is executed without any command
+        line parameters. Here is the /HELP display:
+
+      ÚÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ¿
+      ³ Command line format:    "TCOM <filename> <option> <option> <...>"    ³
+      ³ Command line compiler options available are:                         ³
+      ³                                                                      ³
+      ³ /code     = Enable the display of compiled code.                     ³
+      ³ /codeoff  = Disable the display of compiled code ........ (default). ³
+      ³ /src      = Enable the display of source while compiling.            ³
+      ³ /srcoff   = Disable the display of source while compiling (default). ³
+      ³ /opt      = Enable compiler optimization.                            ³
+      ³ /optoff   = Disable compile optimization  ............... (default). ³
+      ³ /lst      = Generate a listing file.                                 ³
+      ³ /lstoff   = Don't generate a listing file ............... (default). ³
+      ³ /sym      = Generate a symbol file for BXDEBUG.                      ³
+      ³ /symoff   = Don't generate a symbol file ................ (default). ³
+      ³ /DOS      = Shell out to DOS .......... (NOT a command line option). ³
+      ³ /bye      = Return to DOS ............. (NOT a command line option). ³
+      ³ /help     = Re-display this help text.                               ³
+      ³                                                                      ³
+      ³ Type /BYE to leave the compiler.                                     ³
+      ÀÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ
+
+ 09/21/89
+
+          Fixed VARIABLEs, CONSTANTS and ARRAYs so they return their
+        proper value or address when they are used in interpret mode.
+        This allows variables to be pre-initialized, and allows
+        defined constants to be used in defining additional
+        constants. This change also allowed me to get rid of the
+        "L[']" word which was needed when variables were used in
+        library code words.
+
+          Modified compiler so it creates .COM, .SYM, and .LST files
+        with the same name but different extensions as the file being
+        compiled.
+
+ 09/30/89               **** Version .77 ****
+
+          Modified entire LIBRARY to keep the top of stack in BX.
+        This reduces the compiler output size, and improves code
+        performance. All of the optimizers had to be re-written.
+        Cleaned up some bugs in the way the optimizer flags were
+        working, they were getting turned off, and not back on.
+        FIXED. Added new flags /SHOW, and /SHOWOFF to control whether
+        the application symbols were to be displayed as the compile
+        was performed. The default is /SHOWOFF. /BYE can now be used
+        on the command line to force the compiler to return to dos
+        when the compile completes.
+
+ 09/03/89
+
+          Added several optimizers, to improve the produced code. The
+        most significant optimizer is IMM_OPT. It compresses in many
+        cases 7 or 8 instructions into one instruction saving many
+        clock cycles. The resulting code after optimization is now
+        greater than 10% smaller. There are still problems with the
+        listing file generated with the optimizer turned on, as many
+        of the listing instructions are written, and subsequently
+        discarded by the optimizer. I need to work on this, but I
+        haven't yet figured out a good solution.
+
+ 10/06/89
+
+          Improved string handling in libraries. You can now use " and
+        ." in libraries. The strings are handled correctly, and no
+        space in the target is allocated until the function containing
+        the string is used in the target. You still must not use ," or
+        CREATE in a library, as this will immediately allocate space
+        and a symbol. Use ARRAY to specify an area of memory that will
+        be needed by a library definition.
+
+ 10/10/89
+
+          Added list file buffering to reduce the DOS overhead while
+        creating a listing. Listings can be as much as 10 times the
+        size of the original source files being compiled, so a 50k
+        source file like the SZ editor, can create a listing file up to
+        almost 500k bytes. If all you want is a listing of the symbols
+        map, you can try the following command line options in the
+        shown sequence: "TCOM <filename> /LST /SRCOFF /CODEOFF"
+
+          The /LST turns on the source as well as the code output,
+        alone with the symbol map at the listing end. following /LST
+        with /SRCOFF and /CODEOFF leaves a listing file containing only
+        the symbol map.
+
+ 10/11/89       **** Version .80 ****
+
+          Changed the status of TCOM from Copyrighted to Public Domain
+        this date.      Tom Zimmer
+
+          Also added a new option to the compiler, /NOINIT. This
+        option allows you to tell the compiler not to include the
+        initialization code for console I/O. You can create smaller
+        utilities with this option, but you cannot use TYPE, or SPACES.
+
+ 10/19/89
+
+        Added a few new words to the system, cleaned up some problems
+        associated with redefining words in the kernel. Added VALUE's,
+        =:, !>, ABORT, ABORT", and MS. Added Peter Midnight's Towers of
+        Hanoi solution to TCOM as another sample of an application you
+        can target compile.
+
+ 10/23/89
+
+        Added some simple graphics support for PLOT, POINT, LINE and
+        LINETO. PLOT uses the BIOS, and as such is quite slow. You can
+        use VMODE! to set whatever graphics mode you want. It is very
+        simple, but it works with CGA, EGA, and VGA.
+
+ 10/24/89       **** Version .90 ****
+
+        Added DEFER to the defining word set, thus allowing defered words
+        to be used in a target compiled application. Use !>, =: or IS to
+        store a function into a defered word.
+
+ 10/25/89
+
+        Added support for:
+
+                Pull down menus
+                Framed boxes
+                Screen save and restore
+
+ 10/26/89
+
+        Got the previous entries functions reasonably debugged.
+
+ 10/29/89
+
+        Added SAVE>, SAVE!> and RESTORE> to the compiler for variables
+        and values. These are handy if you are trying to port applications
+        to the target compiler from FPC.
+
+ 10/30/89
+
+        Added LINEEDITOR to target library. This handy utility is used
+        in many of my programs, and has proven indispensable.
+
+        Fixed some bugs in ABORT", and added code to allow ABORT" to
+        be used in a library routine. ABORT" will always do a BYE if
+        an error occurs, so don't use it unless thats ok.
+
+ 11/01/89       **** Version 1.00 ****
+
+        Modified the default initializaton, so more things are
+        automatically initialized in the target. I spent a lot of time
+        the other day trying to get an application to target compile
+        only to find out my problems were caused by forgetting to
+        initialize a utility that is automatically initialized in FPC,
+        but wasn't in the target compiler. Sooo, I decided it was
+        better to make larger target programs that work, than smaller
+        target programs that don't work. You can always disable the
+        default initialization with /NOINIT, and do your own, but the
+        default should be to init.
+
+ 11/13/89
+
+        Added the window file selection tool to TCOM, simply place the
+        word GETFILE in your program when you want to pick a file from
+        a list of files. Returns a1, the address of the selected file,
+        and f1 true if a file was selected.
+
+        Added SPINNER2. The two spinners show: left=lines compiled,
+        and right=library colon definitions compiled.
+
+        If the right spinner spins, and the left spinner stops, the
+        compiler is compiling from the library rather than the disk.
+        Spinners are turned off when output is directed to the listing
+        file.
+
+ 11/15/89       ***** Version 1.01 *****
+
+        Added Hypertext Help to the TCOM compiler. Just type TCOM <enter>
+        then press the F1 key to invoke help.
+
+ 11/16/89       STDIO and IO redirection
+
+        Added GETCHAR and PUTCHAR, the DOS redirectable I/O operators.
+        GETCHAR returns a char unless the end of file has been reached.
+        If the end of file is encountered, it returns a -1.
+
+        The new function RAW_STDIN can be used at the start of a program
+        to tell DOS to make STDIN "raw" and "unbuffered". Characters will
+        be read one at a time rather than a line at a time as is normal
+        for STDIN.
+
+        Made KEY deferable, like TYPE. Added KEY-F a variable that gets
+        initialized to hold %KEY which is a BDOS key that filters function
+        keys and translates them, to greater than 127. KEY can be
+        redirected to GETCHAR with STDIN_INIT for proper input redirection.
+
+        Since the default I/O initialization DOSIO_INIT and the video
+        version VMODE.SET both set KEY-F to %KEY, you must perform
+        STDIN_INIT after one of these initialization words has been done
+        to make it take effect.
+
+ 11/17/89
+
+        Found a BUG in DEALLOC in the library. It was completely missing
+        the MOV AH, # $49 instruction just before the INT $21. Added the
+        afor mentioned instruction to fix.
+
+        Reworked TSAVESCR and TWFL to ALLOC and DEALLOC the memory they
+        need for operation. This makes thing cleaner, and removes the
+        nest limit on saveing and restoring screens.
+
+        Added TABLE and END-TABLE to the compiler, to be used for building
+        tables of literal values in the target or in library functions.
+
+ø11/20/89               ***** Version 1.02 *****
+
+        Added ICODE and IMACRO to the defining word list. These words
+        create CODE or MACRO type words that actually compile at target
+        compiler build time rather than when they are referenced in the
+        target. The object code is then moved into the target when
+        needed. This saves both time and space in the compiler. One
+        caution with ICODE and IMACRO words, they must not be used to
+        define words that access external data, that is thry can't refer
+        to BASE, or CAPS, or any other external to themselves variable or
+        address. Since they are actually assembled when building the
+        library, those variables won't exist yet so use CODE or MACRO if
+        you need reference external data. ALSO these words are for use in
+        the LIBRARY ONLY, there is no reason to use them in the actual
+        target compiled application source code since that source is
+        actually compiled at target time anyway. If you look at
+        LIBRARY.SEQ, you will see many examples of how these words are
+        used. They save about 4k in the target compiler, and make it
+        about 10 percent faster.
+
+ 11/20/89
+
+        Added simple hercules graphics support to TCOM. Mike Mayo obtained
+        routines from Oliver Shank, and extracted and simplified the point
+        plot routine for use with TCOM.
+
+        Use GRAPH-INIT to initialize PLOT and POINT for COLOR or HERCULES,
+        it returns TRUE if on a COLOR system, and FALSE for Hercules.
+        Use this flag to select either HERCULES, or one of the COLOR
+        graphics modes listed in TGRAPH.SEQ.
+
+        The "VALUES" VDOTS, HDOTS and #COLORS are set according to the
+        graphics mode selected.
+
+ 11/22/89
+
+        Added LABEL to the set of defining words, it is currently ONLY
+        available in the LIBRARY.
+
+                ******************************************
+                *** Not true any longer, see 03/27/90 ****
+                ** LABEL can be used in the target code **
+                ******************************************
+
+        Added sample application LINES.SEQ to show how to make a program
+        that will work in graphics mode on either CGA or HERCULES.
+
+ 11/23/89
+
+        Removed the requirement that a "main" definition be added to the
+        beginning of each target compilable file to set the entry point.
+        TCOM NOW AUTOMATICALLY MAKES THE LAST DEFINITION IN YOUR FILE THE
+        ENTRY POINT OF THE PROGRAM. Since this is normally the way Forth
+        programs are written, transporting programs to TCOM should be a
+        bit simpler. If you want to enter your program at a place other
+        than what would normally be the last definition, you will need to
+        add a definition to the end of your program to call your desired
+        entry point.
+
+        This change also makes it easier to make a program compilable on
+        F-PC for debugging purposes since forward references are NO
+        LONGER REQUIRED.
+
+ 11/23/89 10:39:54.67   ***** Version 1.03 *****
+
+        This version was released to all attendees at the 1989 FORML
+        conference at Asilimar, California. The conference occured
+        between November 24th and 26th.
+
+        *****************************************************************
+
+ 11/25/89
+
+        Added "EXECUTES>" to the compiler. EXECUTES> allows target library
+        words to have a specified FORTH vocabulary function they will
+        execute when they are used in INTERPRET mode (as opposed to
+        compiling) while target compiling.
+
+        EXECUTES> is used as follows:
+
+        MACRO TIB       ( -- a1 )       \ Terminal Input Buffer address
+                        SAVE_BX
+                        MOV BX, 'TIB    END-MACRO       EXECUTES> TIB
+
+        Here we specify that the target TIB definition executes the
+        FORTH TIB definition when in interpret mode. EXECUTES> looks up
+        the word following in the FORTH vocabulary.
+
+        The only limitation on EXECUTE>, is it may not be used after an
+        ICODE or IMACRO library definition.
+
+ 11/27/89               ***** Version 1.04 *****
+
+      ****************************************************************
+      ******* The following ROMability has not yet been tested *******
+      ****************************************************************
+
+        Added some new command line options and code to allow TCOM to
+        produce romable code as follows;
+
+          /code-start   ( | <addr> -- )
+                        Set target CODE starting address. Defaults to
+                        $100, a DOS type program.
+
+          /code-limit   ( | <addr> -- )
+                        Set max size of CODE compiled into the target.
+                        Defaults to $A000, which allows 40k of code and
+                        24k of data in a compiled program.
+
+          /data-start   ( | <addr> -- )
+                        Set target data starting address. Normally zero,
+                        but can be set to other values.
+
+          /ram-start    ( | <seg> -- )
+                        Set the segment in target memory where ram
+                        is located, data is them moved into that ram from
+                        the ROM.
+
+          /ram-size     ( | <n1> -- )
+                        set amount of ram available in the target.
+                        Defaults to $FFEE if not specified.
+
+        The /RAM-START segment defaults to $FFFF if not specified which
+        signifies to the compiler that this is a RAM based system, which
+        does not need to have its data moved from ROM to RAM.
+
+        When compiling DOS type programs or utilities, the above
+        parameters can usually be left with their default values.
+
+        The /NOINIT option would of course need to be specified when
+        compiling a ROMable application since much of the default
+        initialization code deals with a DOS environment.
+
+ 11/28/89
+
+        Finally fixed the branch distance limit. Conditional branches can
+        now be as long as you want, you need only specify the command
+        "LONG_BRANCH" either at the beginning of your source file, or
+        before a definition that needs a longer branch than 127 bytes.
+        The command "SHORT_BRANCH" switches back to 127 byte branch
+        limits. The advantage of short branches, is they are faster and
+        require less space.  The default is still SHORT.
+
+        An additional pair of operators LONG_LIBRARY and SHORT_LIBRARY
+        allow you to specify long or short branchs in the library files.
+        Again the default is SHORT. Unless you add additional library
+        functions that need long branches, short branches work for all
+        library functions.
+
+ 11/29/89               ***** Version 1.05 *****
+
+        Added TSHAPES.SEQ from Mike Mayo. This adds support for ARC and
+        CIRCLE drawing. Small mod to TGRAPH, added "LINESET", to
+        initialize line drawing so you can then use LINETO for successive
+        segments to be drawn.
+
+ 12/05/89
+
+        Modified line drawing some, renamed LINESET to be LINEFROM as in
+        draw a LINE FROM point x, y. Modified LINE to reduce the number
+        of stack operations needed. It is now defined interms of LINEFROM
+        and LINETO. rather than the other way around.
+
+        Added the read/write mode control from F-PC back into the target
+        compiler. The new words available are:
+
+                READ-ONLY   READ-WRITE   WRITE-ONLY   DEF-RWMODE
+
+        The default HOPEN mode is READ-ONLY. If you use the sequence:
+
+                READ-WRITE DEF-RWMODE
+
+        at the beginning of your program, then all HOPEN's will be
+        READ-WRITE.  HCREATE always makes files READ-WRITE which is the
+        way they will stay until you HCLOSE and re-HOPEN them.
+
+        Also needed to modify CARD.SEQ to make it select READ-WRITE for its
+        BLOCK operations.
+
+ 12/12/89               ***** Version 1.06 *****
+
+        Added 2VARIABLE, and 2CONSTANT to the defining words the compiler
+        will recognize.
+
+        Re-factored TARG_COMPILE to eliminate the large CASE statment,
+        and instead use an EXEC: for speed. Changed the data types from
+        literal 'LETTER' definitions, to an array of data types starting
+        with the value 0.
+
+ 12/15/89
+
+        Added full date/time and timer support from F-PC. New words
+        include:
+
+        HOURS           MINUTES         TENTHS          SECONDS
+        10TH-ELAPSED    SEC-ELAPSED     .ELAPSED        B>SEC
+        TIME-ELAPSED    TIME-RESET      B>T             T>B
+        TTIME           STIME           .DATE           D.M.Y
+        Y-M-D           M/D/Y           .TIME           DTBUF
+        SETTIME         GETTIME         SETDATE         GETDATE
+
+ 12/18/89               ***** Version 1.07 *****
+
+        Fixed a bug in EXHREAD and EXHWRITE. The word HDOS3 was broken,
+        and was preventing these two wordds from working. Repaired.
+
+        Added LINEREAD support, see the file TSREAD.SEQ for details.
+        Some of the added words are:
+
+            LINEREAD  LINEREAD_INIT  IBRESET  OUTBUF  LRHNDL
+
+            LOADLINE .LRHNDL  MEMCHK  CURPOINTER  LINE_LIMIT
+
+        Also added LOOK.SEQ an example of how to use the LINEREAD
+        support just added.
+
+ 12/19/89
+
+        Made some minor repairs to TPATH in the definition PATHSET, and
+        added PATHSET back into HOPEN. Had to split THANDLES into two
+        files to get TPATH to load without forward references.
+
+ 12/20/89
+
+        Added a couple of words to library:
+
+                $>TIB  ?LINE  ?CR  LMARGIN  RMARGIN  TABSIZE
+
+        Adjusted automatic initialization to set LMARGIN to zero,
+        RMARGIN to 64 and TABSIZE to 8.
+
+ 12/20/89               ****** Version 1.08 ******
+
+        Just added Bob Smiths "Public Domain" high level floating point
+        package to the target compiler. Preliminary testing indicates
+        it is functioning properly. You can now use floating point
+        functions in target compiled programs.
+
+        The performance will probably not be up to Bob's SFLOAT package
+        in F-PC, but shouldn't be too bad since the compiler generates
+        call threaded assembly language. The file is TFLOAT.SEQ. It is
+        not being included as a precompiled library, as it would add
+        another 12k to the compiler. It is however defined as a library
+        file, so if you FLOAD it at the start of your application, only
+        the needed functions will actually be included in your program.
+        Floating point space overhead will run from 4k to 10k depending
+        on the functions used.
+
+ 12/21/89
+
+        Found and fixed several bugs in the the TFLOAT.SEQ file, There
+        were some stack problems that have been fixed.
+
+ 12/22/89               ***** Version 1.09 *****
+
+        Split the first portion of LIBRARY.SEQ out to OPTIMIZ.SEQ to
+        reduce its size some. It was over 100k.
+
+        Changed MAXDIR in TWFL.SEQ from a constant to a value. You can
+        now set MAXDIR to some value other than 300 to get the $GETDIR
+        to get a different number of files than 300.
+
+ 01/02/90               ***** Version 1.10 *****
+
+        Fixed a bug in LONG_BRANCHes, it seems the defered word T@ was
+        not getting initialized to the target memory area, and when a
+        long branch was being resolved with ">RESL", improper branch
+        locations were being resolved.
+
+        Added UPC, UPPER and ?UPPERCASE to the library word list.
+
+        Renamed ADJ_MEMORY to SET_MEMORY, and changed the function from
+        a segment adjustment of memory, to a byte adjustment of memory.
+        It now is used to reduce DOS memory usage to a user specified
+        amount of ram above PAD. The physical memory address is passed
+        into SET_MEMORY. Typically you will do something like the
+        following:
+                        PAD 100 + SET_MEMORY
+
+        This will reduce the DOS memory usage from "all of memory" down
+        to the memory needed for the programs CODE plus DS: ram upto
+        PAD+100. The return stack and TIB are automatically moved down
+        to the new location, and the data stack is cleared. An additional
+        250 bytes are allocated for the data stack and the return stack.
+
+ 01/04/90               ***** Version 1.11 *****
+
+        Fixed EXECUTES> so it will always assemble the two instructions
+        it needs to assembler, into the Forth CODE space, not the target
+        space.
+
+        Mostly working on making the floating point useful. Needed to
+        be able to enter floating point numbers at interpret time so
+        new floating point constants and arrays could be created by a
+        target application. So now TFLOAT will load FLOAT4TH before
+        loading itself. FLOAT4TH gets loaded into the FORTH vocabulary
+        so it can be used to manipulate floating point numbers while
+        target compiling.
+
+        Added the floating point wordset description to the LIBRARY.DOC
+        file. They are in a different format from the rest of the
+        glossary, but still provide useful information.
+
+ 01/05/90
+
+        Enhanced PERFORM, and EXECUTE so they compile a single
+        instruction when the optimizer is enabled. This resulted in an
+        improvement in performance for DEFERed words, allowing me to
+        get rid of the I/O variables KEY-F, EMIT-F, TYPE-F and
+        SPACES-F that were used in the colon definitions of KEY, EMIT,
+        TYPE and SPACES. These words were then converted to DEFERed
+        words, which subsequently compile a single instruction. Overall
+        this results in an improvement in performance with a very small
+        target program size increase.
+
+        Making KEY, EMIT, and TYPE defered words also improves code
+        compatibility with F-PC.
+
+ 01/06/90
+
+        Added "@>" to the list of forward words at the end of
+        COMPILER.SEQ. Apperently I just forgot it when I made the list
+        of forward words. It can be used on VALUE's, VARIABLE's, and
+        DEFERed words.
+
+        NOTE:  You CANNOT use ['] on DEFERed words, as they are not
+        accessed with a CALL. DEFERed words are treated like MACRO's.
+        The ['] function in the target compiler is a RUNTIME operation,
+        that is, it obtains the "CFA" of the function following at
+        runtime, by looking following itself at the address in the CALL
+        following. For ['] to work properly, it can ONLY be followed by
+        a Forth word that is NOT A MACRO.
+
+        Added a test for end of file reached while compiling. If you
+        forget to terminate a definition with a ";", then TCOM will
+        abort with a message informing you that the end of file has
+        been reached while compiling.
+
+01/08/90                ***** Version 1.12 *****
+
+      ÉÍÍÍÍÍ» THE FOLLOWING NOTE IS INVALID, SEE NOTE ù03/26/90 ÉÍÍÍÍÍÍÍ»
+      º     ÈÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍ¼       º
+      º                                                                 º
+      º Added user created defining words to the target compiler. the   º
+      º format is somewhat different from the normal F-83/F-PC type     º
+      º defining words, but provides similar functionality. Here are a  º
+      º couple of examples of how to add defining words to the target   º
+      º program:                                                        º
+      º                                                                 º
+      º          \ at runtime, new definitions return addr              º
+      º :DOES> ; ( -- a1 )                                              º
+      º                                                                 º
+      º DEF: NEWARRAY   ( n1 -- ) CREATE ALLOT ;                        º
+      º                                                                 º
+      º 25 NEWARRAY ARRAY1                                              º
+      º                                                                 º
+      º As you can see the DOES> portion is defined first. This is      º
+      º somewhat similar to a technique Bill Ragsdale proposed a few    º
+      º years ago. It make the target compile process simpler. The      º
+      º ":DOES>" word defines the runtime function of the words the new º
+      º defining word will make. The "DEF:" word defines a new defining º
+      º word, and specifies what the compile time operations will be    º
+      º for the new defining word. In this case we are creating a new   º
+      º array word, which will do a CREATE, and ALLOT some space in the º
+      º target for data. The runtime function of the new "ARRAY1"       º
+      º simply returns the address of the array on the stack.           º
+      º                                                                 º
+      º            \ at runtime, new definitions return contents        º
+      º :DOES> @ ; ( -- n1 )                                            º
+      º                                                                 º
+      º DEF: NEWCONSTANT ( n1 -- ) CREATE , ;                           º
+      º                                                                 º
+      º 52 NEWCONSTANT MYCONSTANT                                       º
+      º                                                                 º
+      º Here we are creating a new defining word that is like CONSTANT, º
+      º at compile time it creates the new name "MYCONSTANT" and        º
+      º comma's 52 into the target data space. At runtime, MYCONSTANT   º
+      º will fetch the data and return it.                              º
+      º                                                                 º
+      ÈÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍ¼
+
+        P.S. DON'T try to ['] a target defining word and step into the
+        body of the definition, you will get unexpected results. It is
+        legal to ['] a definition for storage into a defered word.
+
+
+        Added TIMER.SEQ to the group of sample programs.
+
+ 01/16/90               ***** Version 1.13 *****
+
+        Split out the STDIO words into a new file called TSTDIO.SEQ.
+        Also added several new buffered STDIO words as follows:
+
+        GCH.MAX         Maximum read characters to buffer.
+        PCH.MAX         Maximum write characters to buffer.
+        BUFIO_INIT      Initialize buffered I/O for use.
+        GETCHAR_B       Read one character from buffered I/O console.
+        PUTCHAR_B       Write one character to the buffered I/O channel.
+        FLUSH_B         Flush the buffered I/O channel before leaving.
+
+        Buffered I/O must be initialized with BUFIO_INIT before using
+        either GETCHAR_B or PUTCHAR_B. The word FLUSH_B must be used
+        before returning to DOS, to flush any character not already
+        written.
+
+        Performance is significantly affected by the size of the read
+        and write buffers. The default size of 32 bytes works well, but
+        a considerable improvement in throughput can be obtained by
+        increasing GCH.MAX and or PCH.MAX to around 2000.  This will of
+        course use more DS: memory.
+
+        Also added the FILTER.SEQ example.
+
+ 01/18/90
+
+        Generalized the symbol table generation words. The /SYM option
+        can be used to tell TCOM to build a .SYM file for your
+        debugger. The only debugger currently supported is BXDEBUG.
+        Three words have been added to allow a symbol table file to be
+        built for other debuggers, but you will need to know the
+        format of their symbol table. The words are SYMWRITE,
+        SYMHEADER, and SYMFOOTER. Look at the COMPILER.SEQ for an
+        example.
+
+ 01/19/90
+
+        Added RS232IB.SEQ a buffered RS232 driver to the TCOM.ZIP
+        file. RS232IB.SEQ provides a serial driver that is compatible
+        with both F-PC and TCOM, you can load it on either one and use
+        it directly. RS232IB.SEQ is not a library file, but is a simple
+        terminal program with the serial driver included.
+
+ 01/22/90               ***** Version 1.14 *****
+
+        Added another command line option. Since TCOM normally contains
+        the full F-PC Forth system, including the SED editor, it seemed
+        only natural to add an edit command line parameter. Start TCOM
+        in edit mode as follows:
+
+                TCOM /EDIT <filename> <enter>
+
+        TCOM will open the file if it already exists, or open it as a
+        NEWFILE if it doesn't exist. Leaving the editor, will then
+        return to DOS after saving changes. "/E" is short for "/EDIT".
+
+        TCOM is still not a full compiler environment like TurboC, but
+        it is getting closer.
+
+ 01/24/90               ***** Version 1.15 *****
+
+        Integrated Bob Smiths new (1.2) version of FLOAT4TH into TCOM.
+
+ 01/29/90
+
+        The compiler now returns a DOS errorlevel code that corresponds
+        to the number of errors encountered while compiling.
+
+        A /QUIET of /Q option can be used to reduce the junk displayed
+        while compiling to errors only. When used with the DOS
+        ">filename" option on the commandline, an error file will be
+        built that can be scanned by an editor for compile error
+        locations to fix. In other words, I am in the process of
+        modifying the Z editor to use it as a compiler integrator, and
+        I needed a way to pass errors back to the editor from the
+        compiler. These options provide a way to do that. Here is an
+        example:
+
+                C:>TCOM TEST /Q >TEST.TMP
+
+        Here the compiler will compile the file TEST, and re-direct the
+        compilers message output to the file TEST.TMP.
+
+ 01/31/90               ***** Version 1.16 *****
+
+        Added ZZ (I don't know what it stands for) to TCOM. ZZ is the
+        first version of an integrator for TCOM. Is uses the SZ editor,
+        TCOM.EXE and BXDEBUG as sub programs to provide an environment
+        that can create, compile and debug programs. Some additional
+        keys and functions have been added to the SZ editor to make
+        this work. SZ has a new command line option "/CMD" that will
+        tell SZ to automatically examine a <filename>.MSG file when
+        atarting up to look for error messages in the Microsoft C error
+        format. If the file containing valid error messages is found,
+        then SZ will automatically place the cursor on the error line
+        and display the error message on the last line of the display.
+        When the SZ editor leaves, a file ZZ.CMD will be created that
+        contains information that the Mini Shell will look at to decide
+        what to do next. ZZ will look at a file ZZ.CFG that will
+        contain DOS command lines to perform. The first line will be
+        executed when ZZ starts, and other lines will be executed
+        according to the command (an ascii character 1 to 9, or Q)
+        passed back from the SZ editor. Multiple commands on a line in
+        ZZ.CFG can be entered separated by the ";" character.
+
+        All this may seem complicated, so here is an overview:
+
+                Type ZZ <filename>.SEQ <enter> to start editing a file.
+
+                Press F5 to compile the file.
+
+                If an error occurs, the editor will display errors.
+
+                Press ESC to get out of error mode or press Ctrl-F2 to
+                execute the compiled program.
+
+                Press F7 to enter BXDEBUG on your file, or press F10 to
+                leave SZ.
+
+        Here is a list of the keys in SZ that pass back commands to ZZ.
+
+                F10                     command Q
+                Alt-F10                 command Q
+                Ctrl-F1 or Alt-1        command 1
+                Ctrl-F2    Alt-2        command 2
+                Ctrl-F3    Alt-3        command 3
+                Ctrl-F4    Alt-4        command 4
+                F5         Alt-5        command 5
+                           Alt-6        command 6
+                F7         Alt-7        command 7
+                           Alt-8        command 8
+                           Alt-9        command 9
+                           Alt-0        command 10
+
+        These commands are used by ZZ to make it perform ZZ.CFG lines 2
+        through 11.
+
+        Commands can be separated by the ';' character, and if you
+        place a double '||' vertical bar then the rest of the line can
+        be used for comments. Here are a couple of examples:
+
+                CLS|BXDEBUG %F.com||        F7=Debug program "COMMENT"
+
+        The above sequence will, CLS the screen, and execute BXDEBUG,
+        passing it the parameter "%F.com" that is the same as "%1",
+        except ZZ removes the file extention so you can specify it
+        ".com". The "||" two vertical bars signify the end of the
+        command, and the remaining text on the line is treated as
+        comments.
+
+        When you leave and re-enter ZZ, and don't specify a file to
+        edit, as in "ZZ <enter>", then ZZ will remember where you were,
+        and return to that file and edit position.
+
+ 02/05/90
+
+        Switched to modified versions of TGRAPH.SEQ, and THERC.SEQ.
+        Added THERCTXT.SEQ to TCOM. Jerry Modrow cleaned them up a bit,
+        and provided code to do text output in Hercules graphics mode.
+        The code was written by Mike Mayo, and generalized by Jerry
+        Modrow. Also added GRAPH.SEQ, and HERC.SEQ to allow for
+        comparable simple graphics in F-PC for debugging purposes. The
+        graphics available from SMILEY, is faster, but GRAPH and HERC
+        are compatible with TGRAPH, and THERC.
+
+ 02/22/90               ***** Version 1.17 *****
+
+        Changed the default return-stack/TIB size "RPSIZE" from 240
+        bytes to 256 bytes.
+
+        Modified ZZ, to handle upto four parameters on the command
+        line. I am currently only using three. The order of the
+        parameters in the ZZ.CMD file has been changed to match the
+        order of the same parameters on the command line, that is:
+
+                <filename> <row> <col>
+
+        Rather than the previous:
+
+                <row> <col> <filename>
+
+        This makes more sense, and allows me to increase the total
+        number of parameters that can be handled to four so people with
+        other editors can generate command files with upto four
+        parameters in the same order as they accept parameters.
+
+        Im still working on a way to document ZZ so it will be easy to
+        understand what it does. Currently the inter-connection between
+        ZZ and the programs it integrates is quite obscure, and I don't
+        know if anyone can figure out how to use ZZ with only what I am
+        providing. Need to work on this a LOT MORE.
+
+ 03/07/90               ***** Version 1.18 *****
+
+        Added DIS.SEQ and DIS.COM to TCOM.ZIP. While this may seem like
+        a silly reason to change the version number, DIS adds important
+        functionality to TCOM. DIS will disassemble any .COM file that
+        was created by TCOM that has a .SYM file available, into a
+        symbolic assembly listing file. It only disassembles the CODE
+        portion of the .COM file, but it seems to do that perfectly.
+        Now you can easily see the difference between optimized and
+        non-optimized compiler output. The DOS ">" symbol can be used
+        to force redirection into a file as follows:
+
+                DIS CLOCK >CLOCK.LST
+
+        This will disassemble CLOCK.COM (with symbols if CLOCK.SYM is
+        available, and with imbeded source if CLOCK.LIN and CLOCK.SEQ
+        are available.) to the file CLOCK.LST. The .SYM and .LIN files
+        are created by TCOM when the /SYM command line option is used.
+        If no redirection is used, disassembly is directed to the
+        display.
+
+        DIS can be used to disassemble .COM files that don't have .SYM
+        files, or .COM file from other assemblers of compilers, but it
+        will not properly know how much to disassemble, and will not
+        display symbols.
+
+ 03/08/90
+
+        Added CASE, OF, ENDOF, ENDCASE in the F-PC style. Like Eakers
+        CASE.  I got tired of converting programs that use CASE
+        statments over to use IF-ENDIF, so I added the CASE statment to
+        the compiler. It has been tested, and when the optimizer is
+        turned on, it generates very good code.
+
+ 03/19/90               ***** Version 1.19 *****
+
+        Started modifications to generalize TCOM for a new target. Mike
+        Mayo has finished the first pass on an 80196 assembler. Some
+        changes were needed (more will be needed) to work with this new
+        target. I am looking forward to this new addition to TCOM, it
+        should add considerable flexibility to the compiler.
+
+ 03/23/90               ***** Version 1.20 *****
+
+        Many small changes. Adjusted TYPE, EMIT, CR, SPACES, AT, AT?
+        to be more like F-PC. Several were made into defered words.
+        This will cause the compiler output to increase in size
+        somewhat for small programs. This is unfortunate, but
+        necessary for better compatibility.
+
+        Fixed a couple of bugs, the small version of the compiler
+        couldn't create proper listing files because I was removing too
+        much from SF-PC for the disassembler to load. CORRECTED
+
+        Made corrections to TGRAPH for CPLOT. It needed to be clearing
+        BX before performing the plot interrupt.
+
+ø03/26/90
+
+        Re-worked defining words. You can now create ordinary CREATE
+        DOES> type defining words, you simply start the definition with
+        "::" rather than ":". The compiler will only include the DOES>
+        portion in your target, and will execute the part before DOES>
+        whenever the defining word is used to define a new target word.
+        Here is a simple example of a TCOM defining word:
+
+                :: 6VAR         ( | <name> -- )
+                                CREATE 0 , 0 , 0 , DOES> ;
+
+                6VAR MYVARIABLE
+                6VAR YOURVARIABLE
+
+        6VAR is a defining word that creates new 6 byte variables. 6VAR
+        is being used to create two such variables called MYVARIABLE,
+        and YOURVARIABLE. When these variables are later used, they
+        will return the address of a 6 byte data area that was
+        pre-initialized to zero.
+
+ 03/27/90
+
+        Added the definition for Target LABEL, you can now use labels
+        in the target code. They can be accessed from within a code
+        word with a CALL. When used labels return their address.
+
+ 03/28/90
+
+        Removed THERC.SEQ, TGRAPH.SEQ, & TSHAPES.SEQ from the
+        precompiled library. You will need to "NEEDS" or "FLOAD" them
+        into an application that requires graphics support. This makes
+        the compiler about 7k smaller. The reason this is being done
+        now, is that LABEL which is used in THERC was only available as
+        a LIBRARY word before yesterday.
+
+ 03/28/90               ***** Version 1.21 *****
+
+        Made ['] smart, so it tests for the type of word being looked
+        up. The word must be a subroutine, or ['] will complain. The
+        purpose here is to prevent looking up macros, which get
+        compiled in line, and have no actual target address.
+
+ 03/29/90
+
+        Modified typed output from a TCOM application so you can use
+        PRINTING ON to cause typed output to go to the printer. This
+        works with both DOS output, and the video typed output.
+
+ 03/30/90
+
+        Added INLINE to TCOM. INLINE forces a routine that is normally
+        accessed by a CALL to be compiled inline in the current colon
+        definition. This avoids the overhead of a CALL RET in areas
+        that need the highest performance. The generated code will of
+        course be larger.
+
+        Also added NO_INLINE to abort an inline operation if a LIBRARY
+        word with multiple exits is preceeded by the INLINE directive.
+        See the LIBRARY.SEQ definition of UM/MOD for an example.
+
+        Added code to prevent INLINE from trying to compile a target
+        (as opposed to LIBRARY) word inline.
+
+ 03/31/90
+
+        Added colon definition MACROS to TCOM. Use "M:" to define colon
+        definitions you want to always be compiled inline when they are
+        referenced.
+
+ 04/03/90               ***** Version 1.22 *****
+
+        Added CSEG, DSEG, END-CSEG, and END-DSEG to create multiple
+        code segment areas. This is useful for target processors that
+        need to compile code or data into specific areas of their
+        memory. CSEG is used as follows:
+
+                $1000 CSEG MY_PROGRAM
+                $FFF0 CSEG VECTOR_SEG
+
+                MY_PROGRAM              \ select the code segment
+                                        \ starting at $1000
+                <your code goes here>
+
+                VECTOR_SEG              \ select the vector segment
+                                        \ area
+
+                xx , xx , xx , xx , xx , xx , xx , xx ,
+
+                MY_PROGRAM              \ switch baack to MY_SEGMENT
+
+                <more code goes here>
+
+                END-CSEG                \ completes MY_PROGRAM segment
+                                        \ in preperation for saving the
+                                        \ image to disk.
+
+        As in the CODE example above, the words DSEG and END-DSEG are
+        used to create, select and end a DATA segment of the target.
+
+ 04/09/90
+
+        Made a minor modification to TFLOAT.SEQ and FLOAT4TH.SEQ. They
+        now return a 1 rather than -1 for conversion successful. It
+        seems SFLOAT returns a 1 for successful, and -1 for double
+        number conversion. This was causing Jerry's MANDEL program to
+        underflow the stack when the number entered was convertable to
+        a double number. For example SFLOAT will convert "1.0" as a
+        double number rather than a floating point number since there
+        is no "E" to signal a floating point conversion. Applications
+        that want to be compatible with both AFLOAT and FLOAT4TH, need
+        to use the following conversion code when using "(FNUMBER?)":
+
+                : #INPUT        ( | <number> -- floating# )
+                                BL WORD (FNUMBER?) DUP 0=
+                                ABORT" Bad floating point number"
+                                0<
+                                IF      FLOAT   \ convert double to
+                                                \ float
+                                THEN    ;
+
+ 04/10/90
+
+        Enhanced DUMP in the library, it now displays 16 bytes of hex
+        data, followed by 16 bytes of ascii characters per line. Also
+        added LDUMP to the library.
+
+ 04/11/90
+
+        Added the value ABORT_FUNC and modified ABORT, such that, if
+        ABORT_FUNC is non-zero, then it is executed. If it is zero,
+        then a BYE is performed.
+
+        Fixed COMPARE, and the sub functions COMP and CAPS-COMP so they
+        use SSEG to determine what segment is being used for the
+        compare.
+
+ 04/12/90               ***** Version 1.23 *****
+
+        Added the ability to create an interpretive Forth system on top
+        of your application program with the "/FORTH" command-line
+        option. When this option is specified, TCOM will load a file
+        called TFORTH.SEQ on top of your application, which adds a
+        Forth like interactive shell, and about 8k bytes to your
+        application. When your program is then executed, it will come
+        up in the Forth shell, rather than your program. You can then
+        execute words, dump memory and more interactively test your
+        program than with the fully optimized .COM file. You cannot
+        however define any new words, as there is no compiler included
+        in this interpretive environment.
+
+ 04/13/90
+
+        Fixed a bug in TFLOAT.SEQ and FLOAT4TH.SEQ. The number output
+        routine was not shifting the mantissa properly. Corrected.
+
+ 04/14/90
+
+        Added /DIS option, when used with the /FORTH option, also
+        appends the disassembler to your application. This allows you
+        to use SEE and DIS (in assembly language) to examine your
+        routines while in the interpretive environment.
+
+ 04/17/90               ***** Version 1.24 *****
+
+        Added a target compiled version of CODEBUG to TCOM, called
+        TDEBUG.SEQ. The compiler option /DEBUG will force inclusion of
+        ALL interpretive options, Forth, DIS, and DEBUGing. It is now
+        possible to make programs that include a built in debugger. The
+        overhead for the interpretive environment, with disassembly and
+        debugger, is around 21k optimized, and 27k non-optimized. While
+        this is not an insignificant amount, it does allow debugging.
+        The commands available are TRACE <name>, and BREAKAT <name>.
+
+ 04/18/90
+
+        Modified the .SYM file format, so it marks the most significant
+        bit of the first letter of each subroutine name. This is done
+        when the /FORTH command line option is used, and allows the
+        interpretive environment to know which words are to be executed
+        rather than returned as an address. Since this change is not
+        compatible with the BXDEBUG debugger, the /SYM option when used
+        without /FORTH will create a normal .SYM file usable with
+        BXDEBUG.
+
+ 04/19/90
+
+        Added environment string processing to TCOM. If you add a
+        statment to your environment similar to the following;
+
+                SET PATH= /OPT /NOINIT
+
+        TCOM will default to using optimization, and no initialization
+        when it compiles an application file. This environment string
+        can be upto 250 characters in length, and is interpreted BEFORE
+        the command line options are interpreted. This means your
+        environment selections can be overridden by command line
+        options if desired.
+
+        Also added a default PATH to TCOM from the environment. You can
+        add an additional statment to your environment as follows;
+
+                SET TPATH=C:\FPC\TCOM
+
+        TCOM will search for any source libraries or source files in the
+        specified directory or directories, allowing TCOM to be used
+        from other directories on your hard disk.
+
+ 04/23/90
+
+        Added PROMPTER.SEQ as an additional example program. It prompts
+        for user input, and passes that input off with a DOS shell to
+        another program. It is an example of how to get user input, and
+        how to shell out to DOS.
+
+ 04/24/90
+
+        Added a couple of new functions to the library. #INPUT will
+        wait for the user to enter an integer, and return it. TIB0
+        holds the reset address of 'TIB. QUIT is TFORTH.SEQ has been
+        modified to reset 'TIB at its start. SET_MEMORY has been
+        modified to readjust 'TIB which it didn't do before. It MUST do
+        this when resetting the stacks.
+
+        Added TPAS.SEQ an updated version of my Pascal compiler, and
+        PASX.PAS a sample pascal source file for TPAS to translate into
+        Forth. See TPAS.SEQ for more information.
+
+ 04/25/90               ***** Version 1.25 *****
+
+        Substantialy reorganized TCOM's files into a more workable
+        form. TCOM.Zip now contains several other .ZIP files containing
+        things like the source for TCOM, the utilities for TCOM, and
+        the example file for TCOM. I have created a documentation file
+        specific for each .Zip file. I think it is just about time to
+        make an installation program for TCOM.
+
+        Removed all references to HIDE and REVEAL from COMPILER.SEQ.
+        Since TCOM doesn't allow redefinition of functions, all headers
+        are created findable. This makes recursive operations easy,
+        and eliminates a bug caused by HIDE when it is used in any word
+        that built a header. Since the header to be built may already
+        exist, then the word like ":" trying to make the ehader checks
+        for this condition, and just resolves the name if a forward
+        reference condition exists. Unfortunately HIDE went ahead and
+        hid the most recent header created, NOT A GOOD IDEA!.
+
+ 04/26/90
+
+        Today I re-factored TCOM again, It now consists of five .ZIP
+        files as follows:
+
+                TCOM        The executable with documentation
+                TCOMSAMP    Sample TCOMable program examples
+                TCOMUTIL    Utilities, and more library functions
+                TCOMSRC     The source for TCOM, usable with F-PC 3.50
+                SMALTCOM    Files to build a small TCOM compiler
+
+        Also coded up and tested TCOMINST.COM an installation program
+        for TCOM compiled with TCOM. Similar to INSTALL.EXE for F-PC,
+        it allows the user to specify the target drive and directory.
+        TCOM is getting more friendly all the time.
+
+ 04/27/90
+
+        Received and integrated the bug fixes today from Bob Smith on
+        FLOAT4TH and TFLOAT to F< F> FMIN and FMAX. Preliminary tests
+        indicate they work properly.
+
+ 05/09/90
+
+        Completed first pass prototype of the 8080 target for TCOM. It
+        doesn't work yet, but the assembler seems to work. The
+        assembler for now at least has been left as POSTFIX ONLY, as
+        has the 8080 kernel.
+
+ 05/10/90
+
+        Added START-T: to the list of defered words that needs to be
+        implemented for a new target. In the 8086 target, this word is
+        defined as a NOOP. In the 8080 target where we are generating
+        indirect threaded code, this word compiles into the current
+        target here, a word that is passed on the stack. For CODE type
+        words, that would be a pointer to HERE+2, for colon type words,
+        a pointer to NEST.
+
+        Also added a defered word COMP_HEADER that compiles a header
+        into the target. COMP_HEADER is passed an address counted
+        string of the name to compile into the target. Two compile
+        flags added /HEADER and /NOHEAD (default) select wheather
+        headers are to be built for a particular target processor.
+
+        Still have lots of work to do on the 8080 target, before it
+        will generate real programs, but it has at least been able to
+        compile through a very simple program, and generate what
+        appears to be reasonable code. Its a start!
+
+        I notice we are coming up on a whole year of work on TCOM. It
+        is amazing what can be done in a year.
+
+ 05/11/90
+
+        Added "RESOLVE_1" as a defered word to be used in resolving
+        forward references. The default version resolves forward
+        references as relative, and the 8080 version needed absolute
+        addressing, so this was added.
+
+ 05/14/90               ***** Version 1.26 *****
+
+        More minor modifications to allow TCOM to work with the 8080
+        indirect threaded kernel. I keep finding things that are CALL
+        threaded specific. The 8080 target is comming along very well,
+        I have not been able to "run test" any code yet, but the manual
+        disassemblies look very good.
+
+        fixed some more bugs in the branch resolution words in
+        LABEL80.SEQ. I believe branches are now working properly
+        (again?). Added the compiler words to perform ." and " for the
+        8080 target, these are in LIB80.SEQ.
+
+ 05/16/90
+
+        Defered the DOES> portion of FOR>WORD so it can work properly
+        with the 8080 indirect threaded target.
+
+ 07/03/90
+
+        Added ALLSPECS.SEQ. A utility that is usable on either TCOM or
+        F-PC that will return a list of all directories on a drive.
+        Useful for searching an entire drive for things. Currently
+        being used in LOOK.COM to allow a string search of an entire
+        drive. Also used in the NEWZ editor, to allow hyper indexing an
+        entire disk drive.
+
+ 07/09/90           **** 8086 Target Version 2.01 *****
+
+        Changed a few of the "M:" words back to ":" words. Things like
+        SPACE and some others are used too oftain to have them compiled
+        inline as macros. This of course highly subjective, but it
+        seemed like a proper change to make.
+
+        Also fixed a bug in DIS.SEQ, it seems I added a word SPACE
+        after an "EXEC:" in ".DISP". Not a good idea. Also modified DIS
+        so it will only stop disassembling a file for which it has no
+        symbol table when the end of the file is reached, or when the
+        user stops it.
+
+ 07/24/90
+
+        Added two words to the compiler to verify the state of the
+        default code inclusion. CHECK_/NOINIT and CHECK_/DEFINIT These
+        words will check to make sure their respective option is
+        currently active, and will issue an error message but continue
+        compiling if the option is not active. Use these near the start
+        of a file that needs to always have one of the ..INIT options
+        set a specific way.
+
+ 10/28/90           ***** Version 1.27 *****
+
+        Added SKIP'C' to TDEFINED in the compiler, is was converting
+        lowercase 'a' type letters to uppercase when it shouldn't.
+        Also bumped version.
+
+        Also added a verify section to TDEFINED, that makes sure that
+        any words found are above the forth kernel, to make sure no
+        invalid words get used in the target. This will improve the
+        reliability of the generated code.
+
+ 10/29/90       **** 8086 Target Version 2.02 *****
+
+        Added CRLF>BL'S to LIBRARY.SEQ. A very useful word when dealing
+        with lines read from a file.
+
+        Added ?DEF.EXE & DEFEXT to THANDLES.SEQ. The default extension
+        is NONE, but you can now specify a default file extension if
+        you want to, just by putting it in DEFEXT.
+
+        I have separated out the Hyper-text compiler from the editor,
+        and turned it into a separate TCOM application. This will (when
+        I remove the old code from the editor) make the editor somewhat
+        smaller. You can still SHELL out to run the indexer, if you
+        want to. It is now called INDEX.COM, and will by default use
+        INDEX.CFG for the compile specification if no other filename is
+        specified on the command line after INDEX.
+
+        Enhanced the DIS (disassembler), to include a new command line
+        option. "/Wxx" where xx is a number of pages will disassemble
+        the specified file in "Wide" mode for xx pages. If xx is
+        omitted, then all pages will be disassembled. An escape
+        sequence is also sent at the beginning of the output to put a
+        laser printer in compressed mode. With this option, you can
+        disassemble directly to a laser printer as follows:
+
+                DIS [filename] /W2 [wordname] >PRN [enter]
+
+        This command line will disassemble [filename] starting at
+        [wordname] for 2 pages, with output directed to the PRN device,
+        typically your printer.
+
+ 12/14/90            ***** Version 1.28 *****
+                **** 8086 Target Version 2.03 ****
+
+        Added &> to the compiler, it puts the address of a VALUE on the
+        stack. Useful when you may have a series of values that you
+        want to work with as a group.
+
+        Added BLINK_OFF and BLINK_ON to TVIDEO.SEQ. This allows the
+        colors from 8 to 15 to be used in the background without
+        causing the screen to blink.
+
+        Added ZLIST.SEQ to TCOMSAMP.ZIP. ZLIST allows viewing files in a
+        similar fashion to Buerg's LIST, with fewer features, but it is
+        fully public domain, and can be used by anyone for anything.
+        Allows viewing BIIIGG files. You also get the source of course.
+
+ 01/28/91         ***** Version 1.30 *****
+                **** 8086 Target Version 2.04 ****
+
+        Fixed a couple of bugs in the CSEG/DSEG code, It was nessecary
+        that you create a CSEG statment and use the CSEG name created,
+        and then use END-CSEG at the end of your code. All this was
+        needed to get it to save your compiled code is HEXSAVE was used
+        to save the compilers output in INTEL HEX format. This has been
+        fixed, such that a default segment is specified by the compiler
+        initialization code in the optimizer file, and an end-cseg /
+        end-dseg is performed automatically when the compile is
+        finished.
+
+        Two new directives have been added, ORG, and DORG. They allow
+        specification of a new code or data origin, without having to
+        specify a name for the new segment. This is much more like
+        traditional assemblers, and allows you to freely move the code
+        compiling around as desired. NOTE HOWEVER THAT TCOM PERFORMS NO
+        OVERLAP CHECKING, and code compiled later can easily overlap
+        code compiled earlier if these words are used haphazardly.
+
+        Named segments are of course still allowed, making it possible to
+        switch back and forth between existing segments. When ORG is
+        used, it is not possible to switch back to a previous ORG, since
+        no name available.
+
+ 01/28/91 17:36
+
+        Added the ability in CODE words in the target to branch to and
+        define named labels, both forward and backward. They are used as
+        follows:
+
+                code x1
+                        jmp x2          \ forward branch to undefined
+                                        \ label or code is now legal
+                        jmp x3
+                        ret             end-code
+
+                code x2
+                        jne x1
+                label x3                \ code words can now contain
+                                        \ label definitions
+                        jmp x3
+                        ret             end-code
+
+        If you enter a forward branch to a label that is never defined,
+        then an undefined symbol error will occur. You can also see a
+        branch out of range error for labels that get defined too far
+        away. The "WORD" instruction modifier will fix this problem for
+        those instructions that allow word length branching.
+
+ 02/06/91               ***** Version 1.31 *****
+
+        Modified the memory management in TCOM to use the new memory
+        management technique just installed in F-PC. That is to use
+        POINTER to define a word that will return a physical segment at
+        runtime of the desired area of memory rather than using ALLOC.
+        The primary advantage of this, is now F-PC internally uses only
+        one segment pointer, and performs the heap management itself,
+        adjusting its segment as needed for each new pointer used. At a
+        later time, it will now be possible to move some or all
+        "pointers" into expanded memory.
+
+
+ 02/06/91               ***** Version 1.32 *****
+
+        Changed to compile order of TCOM to move ALIST.SEQ to after the
+        compiler, so some additional "listing format" specific words
+        could be moved into ALIST.SEQ.  ALIST is still an optional file,
+        and need not be loaded if no listing capability is needed.
+
+        TCOM is now much more flexable in allowing the target to define
+        the listing format than before. Added defered words ?.MACRO and
+        ?.CALL so ALIST.SEQ can define the format of the listing file
+        format.
+
+ 02/20/91               ***** Version 1.33 *****
+
+        Fixed bug in END-DSEG that was preventing proper functioning of
+        the hex save.
+
+        Modified ORG to set LINESTRT.
+
+        Modified the way the compiler detects the /CODE command line
+        option. It used to test the defered word .INST to see if it was
+        set to a function other than NOOP. This is clumsy, and now the
+        compiler variable ?CODE has been added, and returns a true if we
+        are displaying the disassembled code/instructions while
+        compiling.
+
+        Added the defered word TARGET-FINISH to allow a target to perform
+        any cleanup it desires after the compile is completed, but before
+        the image save is performed.
+
+ 03/07/91        **** 8086 Target Version 2.05 ****
+
+        Fixed a bug in the design on "EXEC:" which was patching the
+        application code at runtime to vector to the desired function
+        (self-modifying code).  Now it is probably a littel slower, but
+        it should work on higher level processors with pipe-lines and
+        caches.
+
+ 03/13/91        **** 8086 Target Version 2.06 ****
+
+        Fixed a bug in -SKIP, changed an INC CX to DEC CX.
+
+ 03/19/91
+
+        Fixed a bug in LABEL. The new version of label was not usable
+        outside of a CODE word. It didn't install TINTERP like CODE did,
+        so END-CODE would crash after reinstalling the null in the value
+        INTERPSAVE. Things have been fixed now, so LABEL can be used
+        outside of a CODE word, and infact really calls CODE in this
+        case.  The purpose of using LABEL outside of a CODE word, was to
+        make a code sequence that could return its address rather than
+        executing like a CODE word does when used. In TCOM, CODE and
+        LABEL both return their address when used in another code word.
+
+ 03/21/91       ***** TCOM Version 1.34 *****
+
+        Factored the way TCOM compiles data statments like " or ."
+        strings. In a target that generates romable code, data statments
+        need to be in the CODE area since ram is not initialized in a rom
+        program like it is in the 8086 PC .COM programs. To do this I
+        have created a new set of "ORG" words with the "V" prefix (like
+        VORG, VSEG, and END-VSEG), and changed the "D" org words to
+        defered words.  This allows the 8086 TCOM to continue to assume
+        data will be compiled into DATA space, and to allow ROM targets
+        to use "V" words for variables, and have the "D" words compile
+        into CODE/ROM space.  The way you switch between these two forms,
+        is with "/DATA_IN_ROM" and "/DATA_IN_RAM".  When data is in ram,
+        then you use only the ORG and DORG words. When data is in rom,
+        then you also use VORG to specify where the variables will start.
+
+ 03/22/91
+
+        Changed the automatic local label branch assign word BR# so it
+        returns the number of the most recent branch number assigned,
+        rather than the next available number.  BR# used to be a VALUE,
+        it is now a function, and the VALUE BR#VAL has been created to
+        take its place.
+
+        Also added /DATA_IN_CODE, to allow placement of string inline
+        with the code being generated.
+
+ 04/24/91
+
+        Modified @-T and C@-T to be defered words in COMPILER.SEQ.
+
+ 04/25/91       ***** Compiler Version 1.35 *****
+
+        Made ," (comma quote) defered, so a target can make it compile
+        into some place other than data space. Modified COMPILER.SEQ
+
+ 05/13/91
+
+        Adjusted the file write functions for /LST, /SYM and /LIN to use
+        POINTER type buffers, reducing the CODE memory overhead for the
+        compiler.  Also allows larget buffers to be used improving
+        compiler performance.
+
+ 05/16/91
+
+        Modified the compiler to work with the new local label mechanism
+        Jerry Boutelle and I just built into F-PC. The new file NEWLAB.SEQ
+        in F-PC allows a type byte to be applied to each unresolved
+        forward reference. The assembler function RESOLVE_REF is later
+        called when the forward reference is to be resolved. When a new
+        assembelr is added, for a new target, the assembler will need to
+        add a new resolve word if resolution types other than the standard
+        four: RELATIVE-8, RELATIVE-16, (absolute) OFFSET-8 OR OFFSET-16
+        are needed.
+
+        Overall this results in a much cleaner way of resolving forward
+        references.
+
+ 05/20/91               ***** TCOM Version 1.37 *****
+                        ***** 8086 Version 2.08 *****
+
+        Ran into another problem, which I hope is now solved. It seems
+        there are a number of operations needed from F-PC at compile time
+        in TCOM to perform their normal operation.  TCOM was thus
+        searching the FORTH vocabulary after searching the TARGET, the
+        COMPILER, and the ASSEMBLER.  It turns out there is a problem
+        with this. If you are forward referencing a word that is defined
+        in F-PC, then that word may under some conditions get executed
+        (while assembling or interpreting) when you dont' want it to. The
+        classic example of this is an application call to the target
+        symbol COLD in the target. Since FORTH's COLD was accessible, the
+        interpreter just executed COLD to get its address.  Naturally
+        F-PC did a COLD restart which wasn't exactly what was desired.
+        after discussions with Jerry, we think the only way to get around
+        this type of problem is to prevent the compiler from EVER
+        searching Forth for any words.  The way to do this in TCOM is to
+        create another vocabulary called HOST and make aliased headers in
+        this vocabulary for all of the Forth words needed by the target.
+        Then setup the vocabulary search order so HOST is searched, but
+        FORTH is not.  We have done this.
+
+ 05/24/91
+
+        I (think I) have finally worked through the problems I introduced
+        by switching to this new HOST vocabulary concept. You can now use
+        the /FORTH, /DIS, and /DEBUG options and they work properly.
+        Actually the problems I had with these words was primarily do to
+        the change I made a while back in the memory format of the symbol
+        tables when they were used.  In any case they now work.
+
+        While debugging these problems, I noticed a peculiarity about the
+        BIOS in the SAMSUNG computer I am using. If you accidently or
+        otherwise position the computer cursor off the screen, then
+        return to DOS, then it looks like the computer has locked up. In
+        reality the screen simply is not scrolling, and the cursor is
+        below the screen, so nothing you type shows up. As unobvious as
+        it seems, the solution is to position the cursor to line 23
+        before exiting a program to assure the cursor is really on the
+        screen.  The computer I have at home doesn't have this problem.
+
+ 06/12/91               ***** TCOM Version 2.00 *****
+
+        Add error file generation code. TCOM now makes a file called
+        <filename>.ERR that contains any error messages associated with
+        your compile. (later this was changed to <fileame> MSG)
+
+ 06/17/91
+
+        Added TFILEIO.SEQ (for TCOM) and FILEIO.SEQ (for F-PC) to
+        TCOMUTIL.ZIP. This file provides multiple file (line & block)
+        buffered read and write to TCOM applications. A new set of words
+        is provided with a "B" prefix to provide the needed operations.
+        See TFILEIO.SEQ for further details.
+
+ 06/18/91
+
+        Jerry found a bug in the buffered lineread at the end of the file.
+        Fixed.
+
+ 06/20/91           ***** 8086 Library Version 2.11 *****
+
+        Added long branch words to the 8086 library. They allow the
+        correction of branch out of range errors by explicit "_L" long
+        specification rather than having to use "long_branch" before and
+        "short_branch" after any word that gives a branch out of range
+        error.  The words are:
+
+            IF_L    ELSE_L    WHILE_L   ?DO_L   LOOP_L   +LOOP_L
+
+        The words UNTIL, REPEAT and AGAIN have been modified so they
+        ALWAYS use a WORD branch distance.
+
+        Removed all usages of LONG_LABEL from the samples that were using
+        it, and changed to the _L words.
+
+        Made a minor modification to the INDEX program, it is now
+        actually possible to abort its operation by pressing ESC. It
+        always said you could abort it, but it would ignore your key
+        press, now it works.
+
+        NOTE: THE ABOVE CHANGE WAS LATER BE NEGATED IN FAVOR OF THE
+        WORD "[LONG]" INSTEAD.
+
+ 06/28/91         ***** 8086 Library version 2.12 *****
+                       ***** TCOM version 2.01 *****
+
+        Corrected a bug in S>D found by Jerry Boutelle. I was pushing the
+        double number result in the wrong order.
+
+        Made S,-T defered. Now almost all of the "-T" words are defered.
+        These include:  ,-T  C,-T  !-T  C!-T  ALLOT-T  S,-T
+
+ 07/09/91
+
+        Added Expanded memory support to TCOM in the form of a loadable
+        file called TEMM.SEQ. An example of its use is included in the
+        samples as the file EMMTEST.SEQ.
+
+ 07/19/91
+
+        Reworked TCOM's line parsing routine. Added "/PRJ <filename>"
+        parameter to the command line options. This option will
+        EVENTUALLY allow TCOM to perform a build of a project, only
+        compiling those file that have been changed. For now it just
+        opens the filename following as the file to compile.
+
+        NOTE: LATER THIS WAS DISCARDED.
+
+ 07/23/91              ***** TCOM Version 2.02 *****
+
+        Split COMPILER.SEQ into two files appropriately named
+        COMPILE1.SEQ and COMPILE2.SEQ.  The COMPILER.SEQ file was simply
+        getting TOO BIG. It has been split more or less in the middle, to
+        make it more managable.
+
+        I continue to work on the project handling for TCOM, but its
+        completion remains some distance in the future.
+
+ 07/24/91
+
+        I have given up on the project concept, it turns out that
+        unwinding the compiler to continue a compile from a particular
+        point in an already performed compile is just too difficult
+        (requires too many changes to TCOM).  I have switched over to
+        another concept. The real goal in projects was to minimize
+        compile time turn around when making small changes during a
+        program debugging cycle. This can be accomplished by providing a
+        two stage compile, where a stable portion of a program is
+        compiled first, and then included (without recompiling) into a
+        second compile.  This is accomplished by reading in the symbols
+        and .COM file from the first compile, and then continuing to
+        compile the second file.  This turns out to be much simpler than
+        unwinding a previous compile since the only thing that carries
+        over to the second compile is its symbols which can easily be
+        re-read (quickly) into memory. This second scheme has been
+        implemented, and seems to work. The whole process is still
+        changing, so if you want to use this feature, you will need to
+        include the file TCOMNDX.SEQ (uncomment it out) in TARGET.SEQ
+        and re MAKETCOM.  You then include the first compiled file as
+        follows:
+
+                C:\> TCOM <second_file> /SYMFILE <first_file>
+
+        or by including the following line in the second file near the
+        beginning (before any code is compiled):
+
+                        .SYMBOL-INCLUDE <first_file>
+
+        Either of these will cause the symbols and .COM file from the
+        first file to be read into memory and included into the second
+        files compile.
+
+        NOTE: LATER THIS WAS DISCARDED, AS IT WAS ONLY A PARTIAL
+        SOLUTION.
+
+ 08/01/91               ***** TCOM version 2.05 *****
+                    ***** 8086 Target Version 2.15 *****
+
+        Many minor and major changes to TCOM. Adjusted VARIABLE,
+        2VARIABLE and ARRAY so that when they are used in a target
+        application, they define a name and allocate their needed data
+        space immediately, without waiting for name to be used.  It is
+        conceptually more space efficient to only allocate their space
+        it they are used, but it turns out to be just too common for a
+        user to do something like the following:
+
+                VARIABLE XYZ 8 ALLOT
+
+        In the old case, the variable XYZ wasn't allocated unless it was
+        used at a later time, but the ALLOT worked instantly, and as
+        such was not associated with the variable.  Changing variables so
+        they allocate when defined, assurs much better code
+        compatibility.
+
+        :: change.  You used to have to use :: when defining a defining
+        word, so the compiler could know what you were doing, and use the
+        right function to compile your defining word.  TCOM now detects
+        when you use the word CREATE in a ":" definition, unwinds any
+        code already compiled, and switches to building a defining word.
+
+ 08/08/91               ***** TCOM version 2.06 *****
+                    ***** 8086 Target Version 2.16 *****
+
+        Modified TCOM so it doesn't terminate a compile unless a serious
+        error occurs. And even if a serious error does occur, the
+        application image file will still be saved, so the listing
+        program can create a listing that will include any detected
+        errors.  The only conditions that will prevent TCOM from saving
+        the image file and generating a requested listing, is are disk
+        errors.  Serious errors that will cause TCOM to terminate without
+        a program save are:
+
+                1. Invalid command line options
+                2. Out of Host memory
+                3. Disk write errors
+
+        Added PLACEL and +PLACEL to the library. Fixed a bug in the error
+        message routines, they were not writing the correct filename when
+        an unresolved symbol from a nested file was displayed.
+
+        PLACEL and +PLACEL were also added to F-PC (and are now needed by
+        TCOM), so F-PC changed versions as well.
+
+        Added ORG segment overlap checking. If the code from two or more
+        segments overlaps, TCOM will issue an error warning.
+
+ 08/21/91           ***** 8086 Target Version 2.17 *****
+
+        Added Control Break handling to TCOM.  The default initialization
+        calls SAVE_VECTORS and SETUP_BREAK to install the control break
+        handler. An additional function RESTORE_VECTORS is installed into
+        a new VALUE BYE-FUNC. The contents BYE-FUNC is executed when a
+        BYE is performed is BYE-FUNC is NON-ZERO. This allows an exit
+        function to be performed on program termination if needed.  A
+        "0 0 BDOS" not a BYE is not performed if your MAIN entry word
+        just finishes execution, so you SHOULD end your programs with a
+        BYE to assure BYE-FUNC gets a chance to perform any needed
+        cleanup on program termination.
+
+        If you do your own initialization (using /NOINIT), then you will
+        have to naturally include the above words in your own
+        initialization if you want Control Break handling to work.  If
+        you don't, then pressing Control Break can lockup the computer.
+
+ 08/22/91         ***** 8086 Target Version 2.18 *****
+
+        Added additional optimizers for conditional branches preceeded by
+        "0=", "immediate =", "variable @", or "value". These optimizers
+        significantly reduce space and save time on branch operations for
+        "IF", "WHILE" and "UNTIL".
+
+        Also fixed a couple of bugs in the optimizer area assiciated with
+        index record deletion. Too many index records were being deleted
+        when an optimize was performed by STORE_OPT2 and STORE_OPT3.
+
+ 08/27/91        ***** 8086 Target Version 2.19 *****
+
+        Added TAIL OPTIMIZATION. When the following condition occurs;
+
+                .... 2DUP ;
+
+        which generates something like;
+
+                ...
+                CALL 2DUP
+                RET
+
+        Then TCOM changes it to;
+
+                ...
+                JMP 2DUP
+
+        This saves one byte per occurance, and some small amount of time
+        for the CALL that isn't done.
+
+        Also added additional optimization, where the CALL is a forward
+        reference, then TCOM recognizes the JMP to the next byte;
+
+                ...
+                JMP 2DUP
+        2DUP    ....
+
+        and deletes the JMP 2DUP altogether.  This last optimization can
+        only be done where the forward referenced word is used only once
+        in the definition, since TCOM won't know where other references
+        in the definition were placed.
+
+        Also improved the code generated by defining words. For example the
+        following code;
+
+                : xx create , does> @ ;
+
+                3 xx v1
+                4 xx v2
+
+        used to generate code for V1 like;
+
+        V1      DEC SI
+                DEC SI
+                MOV 0 [SI], BX
+                MOV BX, # 3
+                JMP XX
+
+        While this isn't bad, it turns out to be possible to save some
+        bytes in each defined word by moving the data address into AX
+        rather than BX, and then adding code to the DOES> portion of XX
+        automatically to save BX and move AX into BX. So the added code
+        to the DOES> portion of XX looks like;
+
+        XX      DEC SI
+                DEC SI
+                MOV 0 [SI], BX
+                MOV BX, AX
+                ...
+
+        The code for each defined word then becomes;
+
+        V1      MOV BX, # 3
+                JMP XX
+
+        a savings of four (4) bytes in each defined word, with a cost of
+        one additional "MOV BX, AX" in the body of the DOES> word.
+
+        Of course you really don't have to worry about this stuff. Since
+        TCOM has full control of the generated code for both the DEFINING
+        and DEFINED words, it is all transparent to the application.
+
+        Also added a series of comments about tail optimization to the
+        OPTIMIZ.SEQ file in the \TCOM\SRC directory.
+
+ 09/05/91        ***** 8086 Target Version 2.20 *****
+
+        Added a critical error handler to TCOM applications. Critical
+        errors just return a fail flag to the calling function rather
+        than displaying the DOS Abort/Retry etc. message.
+
+        Cleaned up some restore interrupt vector problems in the bye
+        function in TCOM.  It seems the control break vector wasn't
+        always getting restored properly. FIXED.
+
+        Added a further optimization to the 8086 target. Dot-quote
+        strings were being compiled as two LITs, follwed by a TYPE.  This
+        was using more space than needed, so I hanged the target to
+        compile a single LIT followed by a call to $TYPE. This saves
+        about seven bytes per dot-quote occurance.
+
+        The listing program LS86.COM is now quite refined. Jerry
+        Boutelle's work on it has resulted in a very good listing being
+        generated.  Listing generation is enabled by the /LST command
+        line parameter on the TCOm command line. When TCOM finishes a
+        compile, it invokes LS86 to generate the listing.  You can also
+        make a listing later using LS86 if the program was compiled with
+        the /INDEX directive which maked TCOM generate the appropriate
+        index and symbol files.
+
+ 09/13/91               ***** TCOM Version 2.07 *****
+
+        I have updated the currently available targets, to include a listing
+        generator program for each target.  Changes have also been made to
+        allow each target to generate the proper index and symbol files for
+        use by the listing program. The targets that have listing programs
+        are:
+
+        8086, 80196, 6805, SAM8(Samsung only), 56000(Samsung only)
+
+        The 8080 target has also been updated, but since it generates
+        indirect threaded code, is not suitable for the listing program.
+
+        The listing program now sorts the symbols alphabetically by name
+        before writing them to the listing file. Before, they were simply
+        written in definition order, which was mostly random.
+
+        TCOM has a few more switches than it used to. Added are:
+
+        /libafter       resolve forward references at end of compile
+        /liba           aliases for /LIBAFTER
+        /lib+
+        /+lib
+
+        /libin          resolve forward references at the end of each
+                        colon definition.
+        /libinside      aliases for /LIBIN
+        /libi
+
+        /lstlib         tell listing program to include library code in
+                        generated listing.
+
+        /lstnolib       tell listing program to not include library code
+                        in the generated listing.
+
+        The listing programs like LS86 allow user specification of whether
+        the library code should be disassembled as part of the generated
+        listing.  The listing programs accept the following switches:
+
+        /lib            include the library in the generated listing.
+        /nolib          don't include the library in the generated listing.
+
+        I have added a generic target to TCOM (TCOMGEN.ZIP). This target
+        which doesn't actually generate any programs, compiles messages to
+        the display as it compiles a program. This allows you can see the
+        relationship between the optimizer/linkage file and the library file
+        to the compiler.  My hope is that TCOMGEN will make it at least
+        somewhat easier to uderstand TCOM's internal workings.
+
+ 09/17/91
+
+        Updated TFORTH.SEQ, DIS.SEQ and TDEBUG.SEQ to be compatible with
+        the new symbol file format used by the listing generators. So the
+        /FORTH, /DIS and /DBG command line options now work properly
+        again with the 8086 target.
+
+        Also updated TFLOAT.SEQ to be compatible with the multitude of
+        changes I have made in the last six months.
+
+ 09/18/91
+
+        Did cleanup today in listing program. Checked and corrected
+        several bugs related to both compiling and making listings of
+        very large programs. Modified TCOM to compile code and data into
+        seperate buffers. This allows programs larger than 64k to be
+        compiled although the 8086 still can only handle a 64k .COM file.
+        TCOM will now save a .COM file larger than 64k, but it won't run
+        under DOS. A warning is issued for compiles bigger than 64k.
+
+        Made several changes to the listing program. Now displays
+        approximate minutes and seconds remaining for listing generation.
+        Also fixed some sign problems that cropped up when the index got
+        bigger than 32000 records. I have successfully created listing
+        files upto about 1.5 megabytes. The corresponds to about a 64k
+        program.
+
+        Due to the changes placing data in a seperate buffer, TCOM will
+        be much less sensitive to the ratio of code to STATIC data.
+        However the SUM of the two MUST still fit in 64k or the resulting
+        program WON'T RUN!
+
+ 09/20/91       ***** 8086 Target Version 2.21 *****
+
+        Added SETDIR and SETDRIVE to the the THANDLES.SEQ library. They
+        provide the ability to set the current drive and directory.
+
+ 09/24/91               ***** TCOM Version 2.08 *****
+
+        Added extensive segment overlap checking. The test is performed
+        on compile completion. Both CODE and DATA segments are verified
+        for an overlap condition.
+
+ 09/27/91
+
+        Cleaned up TSREAD. Changed the name LRHNDL to SEQHANDLE to be
+        more compatible with F-PC. Added the words $HOPEN, "HOPEN, $FILE,
+        MAXNEST, HNDLS, SEQUP, SEQDOWN, CLOSE & ?FILEOPEN mostely for
+        better compatibility with F-PC. These words now automatically do
+        a LINEREAD_INIT if needed so the user won't have to doit. In F-PC
+        HNDLS is an array of several handles, in TCOM it is a single
+        handle. As such SEQUP will issue an error message if you try to
+        switch up to the next handle. So SEQUP is there for
+        compatibility, but you really can't use it.
+
+        Changed all the sample applications to use SEQHANDLE instead of
+        the old name LRHNDL.
+
+        These changes make it easier to open a file in a TCOM program
+        and read lines out of it. The word $FILE takes a string, moves it
+        into SEQHANDLE, opens the file, and initializes LINEREAD to you
+        are immediately ready to read lines out of the file. This is much
+        easier than before.
+
+        Displaying the lines of a file are now as simple as the
+        following;
+
+        : main  ( | <name> -- )
+                DOSIO_INIT              \ init EMIT, TYPE & SPACES
+                DOS_TO_TIB              \ move command tail to TIB
+                bl word $file
+                begin   lineread c@
+                while   cr outbuf count 2- 0max type
+                repeat  close ;
+
+        The first two lines of the above definition are only required if
+        you use the "/NOINIT" command line option. They initialize I/O
+        and make the DOS command line available to WORD.
+
+        Added stack depth change checking to TCOM. A warning will be
+        issued if the stack depth changes across the compile of a line.
+        Various things can cause this to happen, TCOM used to only issue
+        an error message at the end of the compile if data was left on
+        the stack. It still does, but now also issues a warning at the
+        line where the error is likely to have occured. We issue only a
+        warning, because there are valid reasons to leave data on the
+        stack while interpreting, from line to line.
+
+        Three new compiler options are associated with the above change.
+
+                /STACK          Perform stack depth checking on every
+                                line.
+                /NOSTACK        Don't perform stack depth checking on
+                                each line. (default)
+                /NOSTACK1       Turn off stack depth checking for the
+                                current line. Used in a source file where
+                                you don't want to be warned about leaving
+                                an extra item on the data stack.
+
+        Added a file OPTIONS.DOC that lists the command line options for
+        TCOM, they are again listed here for redundancy;
+
+/CODE-START xxx Set the CODE starting address to address xxx.
+/DATA-START xxx Set the DATA starting address to address xxx.
+/DBG            Include the debugger in the target program (8086ONLY).
+/DEBUG          Include the debugger in the target program (8086ONLY). alias
+/DEFINIT        Include the default initialization code. (default)
+/DEFINITOFF     Don't include the default initialization code.
+/DIS            Include the disassembler in the target program.
+/FORTH          Include a Forth interpreter in the target program.
+/HEADER         Include symbol headers in the target program. (some targets)
+/HELP           Display the first Help screen.
+/HELP2          Display the second Help screen.
+/IND            Generate an index file for the target program.
+/INDEX          Generate an index file for the target program. alias
+/INX            Generate an index file for the target program. alias
+/INDEXOFF       Don't generate an index file for the target program. (default)
+/+LIB           Resolve library function inclusions at end of compile.
+/LIB+           Resolve library function inclusions at end of compile. alias
+/LIBA           Resolve library function inclusions at end of compile. alias
+/LIBAFTER       Resolve library function inclusions at end of compile. alias
+/LIBI           Resolve library functions as they are referenced.
+/LIBIN          Resolve library functions as they are referenced. alias
+/LIBINSIDE      Resolve library functions as they are referenced. alias
+/LIST           Generate a listing file.
+/LISTING        Generate a listing file. alias
+/LST            Generate a listing file. alias
+/LSTLIB         Include library disassembly in listing.
+/LSTNOLIB       Don't include library disassembly in listing.
+/NODEBUG        Don't include the debugger code in the target program.
+/NODIS          Don't include the disassembler code in the target program.
+/NOHEAD         Don't generate symbol headers for functions. (some targets).
+/NOINDEX        Don't generate an index file for the target program. (default)
+/NOINX          Don't generate an index file for the target program. (default)
+/NOLISTING      Don't generate an index file for the target program. (default)
+/NOINIT         Don't include the default initialization code in the target.
+/NOOPT          Don't enable the code optimizer. (default)
+/NOREDEF        Don't allow functions to be redefined. (default)
+/NOSHOW         Don't show the names of functions as they are referenced. (def)
+/NOSRC          Don't show the source lines during the compile. (default)
+/NOSTACK        Don't check the stack for a depth change on each line. (def)
+/NOSYM          Don't generate a symbol file during the compile. (default)
+/OPT            Enable code optimization for this compile.
+/OPTOFF         Disable code optimization for this compile. (default)
+/Q              Quiet compile, compiler output can be redirected with ">".
+/QUIET          Quiet compile, compiler output can be redirected with ">".
+/REDEFOK        Allow the redeinition of functions during the compile.
+/SHOW           Display the names of functions are they are defined.
+/SHOWOFF        Don't display the names of functions as they are defined. (def)
+/SRC            Show source file lines are they are compiled.
+/SRCOFF         Don't show source file lines as they are compiled. (def)
+/STACK          Check each compiled line for a stack depth change.
+/STAY           Stay in the compiler after finishing a compile. leave with /BYE
+/SYM            Generate a symbol file during this compile.
+/SYMBOLS        Generate a symbol file during this compile. alias
+/SYMOFF         Don't generate a symbol file during this compile.
+
+
+ 10/02/91       ***** 8086 Target Version 2.22 *****
+
+        Added -TRAILING, and SP>COL to LIBRARY.SEQ. Modified all of the
+        sample programs to remove the definitions of -TRILING and SP>COL
+        and use the library version.
+
+        Added a new command line option, /0INIT. It disables ALL
+        INITIALIZATION code for everything including stacks. The only
+        thing that gets initialized is CS & DS. This commandline option
+        should be used ONLY WITH EXTREME CAUTION. You will need to do all
+        of your own initialization where needed. The primary use of thie
+        option, is to generate very small code words.
+
+ 10/03/91
+
+        Added code to the compiler to read the first 32 lines of the
+        program being compiled, and look for .OPT, .OPTION or .OPTIONS
+        and interpret the line following as compile options fo the
+        current compile.  This allows each program to have its own
+        default set of compile options that the programmer can set, but
+        doesn't have to remember everytime he or she performs a compile.
+        .OPTION can be place either inside or outside of a comment. It
+        doesn't have to be in column 1, and only the first .OPTION in a
+        file is used.
+
+        TCOM actually looks three places for compile options now. First
+        it looks at the "TCOM=" environment variable, then it looks for a
+        .OPTION statment in the file being compiled, then it looks for
+        options on the command line. This technique alloes defaults to be
+        in the environment, defaults for a program to be in the program,
+        and allows you to override the defaults on the command line if
+        desired.
+
+        Added "SCANW" to LIBRARY.SEQ. SCANW scans forward a word,
+        searching a word at a time.
+
+ 10/10/91
+
+        I have added a real source level debugger to the TCOM system. It
+        is called "BUG", and naturally the source is included. It is now
+        much easier to debug TCOM 8086 applications than ever before. The
+        debugger even has a simple browser built into it.
+
+        The most significant limitation it currently has, is that the
+        INDEX array which links the .COM file to the source, is limited
+        to 64k, which means that you can only debug programs with source
+        upto about 32k (.com file).
+
+ 10/30/91               ***** TCOM Version 2.09 *****
+
+        With the addition of the new debugger, it became apparent that
+        VALUEs needed to be included in the target at the time they were
+        defined, so their sumbols in the symbol table would reflect the
+        actual source location of the value rather than the source
+        location where the value was first referenced. A change to the
+        compiler has been made to reflect this requirement.
+
+ 11/15/91
+
+        Added "!CSP" to "(LM:)", it was not marking the stack level at the
+        start of a MACRO definition.
+
+ 11/18/91
+
+        I thought I had set the compiler default options to generate a
+        symbol table. .FIL file and index file, but as it turns out, my
+        environment defaults were making that the default, so I have
+        changes the compiler to make these the default so you can use the
+        BUG debugger without having to use a special command line option
+        to be able to debug your programs.
+
+ 11/19/91               ***** TCOM Version 2.10 *****
+
+        Implemented ' (tick) as a target word that returns the function
+        address of the word following. Modified "IS" and "!>" so they can
+        be used during interpretation to store a number off the stack
+        into the data space of the word following. These MUST be followed
+        by a DATA SYMBOL, not a Function.  So it is now possible to
+        initialize defered words at application compile time, eliminating
+        the old restriction that they had to be initialized at runtime.
+        Do it as follows:
+
+                : %XYZ          ( -- )
+                                ." Hello 'xyz' ;
+
+                DEFER XYZ       ' %XYZ is XYZ       \ init defered word
+
+        You can also use ' (tick) and , (comma) during the compiling of a
+        structure as follows:
+
+                : FUNC1 ;       : FUNC2 ;       : FUNC3 ;
+
+                CREATE DUMBO
+                        0 , ' FUNC1 ,
+                        1 , ' FUNC2 ,
+                        2 , ' FUNC3 ,
+
+        These changes were requested by Jerry Boutelle, and do make a lot
+        of sense.
+
+        ADDED JOIN to the LIBRARY.SEQ. It existed in F-PC, but was not in
+        TCOM. It has been added.
+
+ 11/20/91
+
+        Added "[", "]" and "LITERAL" to the compiler. You can now use
+        them while in the middle of a :(colon) definition, to perform a
+        compile time calculation, and have a literal compiled into the
+        program. Example:
+
+                create myarray 22 allot
+
+                : aword         ( -- )
+                                myarray 20 +               \ the old way
+                                ... some code ...
+                                [ myarray 20 + ] literal   \ a new way!
+                                ... Some more code ... ;
+
+        Here, the address of the end of the array is compiled rather than
+        compiling the start of the array, and at runtime calculating the
+        end of the array.
+
+ 11/27/91
+
+        Corrected a bug in the optimizer, that was causing the last
+        function in an EXEC: list to be compiled inline, rather than
+        compiling a CALL to it. The TAIL optimizer does this for
+        functions that are only called once in a definition, and are also
+        called last in the definition. Modified EXEC: to turn tail
+        optimization off for the current definition to prevent this form
+        of optimization from occuring.
+
+ 12/05/91               ***** TCOM Version 2.11 *****
+                    ***** 8086 Target Version 2.23 *****
+
+        Added the CHIP directive to the compiler.  This is normally
+        followed by a filename, which contains EQUATES for the I/O
+        registers of the particular controller being used for this
+        application.  The filename is loaded as a Forth file, with a
+        default base of HEX being selected.  The base is restored upon
+        return from the load. The primary difference between the CHIP
+        directive and an INCLUDE is the default HEX base, and in addition
+        the CHIP file source lines are not included in any generated
+        listing file.
+
+        Also included in the file TGRAPH a large number of additional
+        graphics video mode selection words for various cards from
+        different manufacturers.
+
+        Cleaned up the /HELP command in TCOM. Reduced the /HELP to one
+        screen by deleting all the default options. You can still find
+        out what the options are by lookin at the file OPTION.DOC.
+
+ 12/11/91
+
+        Added U,.R and UD,.R to the library.  These words display numbers
+        right justified, with included commas at three digit intervals
+        from the right. Example: "1234567. 1 UD,.R" displays as 1,234,567
+
+ 12/30/91
+
+        Added a library file TSOUND.SEQ, to provide TONE support like
+        F-PC. Also added TETRA.SEQ, the tetris game written by Marc
+        Hawley.
+
+ 01/03/92               ***** TCOM Version 2.12 *****
+
+        Tried a simple thing today, created a macro to use inside another
+        code word, and expected it to simply expand into a series of
+        instructions in the code word. WELL it didn't work. Seems a macro
+        just returns its address when used in interpret state.  This has
+        now been changed, macros always expand into their instructions
+        when used in interpret state, unless they are followed by a
+        EXECUTES> statment, then they do the word following the
+        EXECUTES> instead of expanding their insturctions.  It is
+        important for CODE words to return their address during
+        interpretation, so you can CALL a code word from another code
+        word. But MACRO's can't be CALLed from a code word so they need
+        to just expand their instructions.
+
+        Example:
+
+        MACRO PUSHA     ( -- )          \ a macro to save most registers
+                        PUSH DI         PUSH SI
+                        PUSH BP         PUSH BX
+                        PUSH DX         PUSH CX
+                        PUSH AX         END-MACRO
+
+        MACRO POPA      ( -- )          \ a macro to restore most registers
+                        POP AX          POP CX
+                        POP DX          POP BX
+                        POP BP          POP SI
+                        POP DI          END-MACRO
+
+        CODE MYTEST     ( -- )
+                        PUSHA           \ save all registers
+                        ...             \ my other instructions
+                        POPA            \ recover all registers
+                        RET     END-CODE
+
+ 01/06/92
+
+        Fixed a problem in TFLOAT. It was reporting a bunch of warnings
+        for stack depth increases. These shouldn't have been shown, so I
+        modified TFLOAT to turn off stack depth checking during the load
+        of FLOAT4TH and TFLOAT.
+
+ 01/08/92
+
+        Modified TWFL.SEQ's "DIRALLOC". It no longer trys to display an
+        error message if the allocate fails. You need to use the
+        condition of DIRSEG being zero to detect the allocation failure.
+        See LOOK.SEQ, ZTREE.SEQ or IND.SEQ for examples.
+
+ 01/10/92           ***** 8086 Target Version 2.24 *****
+
+        Modified /0INIT to perform a bit more initialization. Zero
+        initialization is pretty severe. I have changes the init to
+        initialize SI to 512 bytes below SP, and to push a ZERO (0) to
+        the hardware stack so if a program performs a return at the end
+        it will return to address zero, which contains a terminate
+        process instruction (INT $20). The init overhead is only 23
+        bytes. It still falls into whatever CODE or :(colon) definition
+        is first in the source file.
+
+        Here is a list of the /0INIT initialization code:
+
+        $0100   MOV AX, CS              \ get a copy of the CODE segment
+                ADD AX, # $E4F6         \ patched later to adjust for
+                                        \ where the data really is.
+                MOV DS, AX              \ Set the data segment
+                mov bx, sp              \ get current stack pointer
+                sub bx, # $200          \ adjust up to location of data stack
+                mov si, bx              \ set stack pointer
+                mov sp0 bx              \ set data stack top pointer
+                mov bp, # $00           \ init BP to $0000
+                push bp                 \ push return to address $0000
+                ....                    \ further user application code
+
+ 01/13/92
+
+        Added an option /NOTAILOPT, with aliases /TAILOPTOFF and /TAIL-
+        to disable return optimization. Tail optimization works fine, but
+        can make debugging more difficult. So.., you might want to use it
+        when debugging.
+
+ 01/15/92
+
+        Added DB and DW to TCOM. They are followed by a number or symbol.
+        If the symbol is undefined, then it will be resolved as it is
+        defined later. Unfortunately no MATH can be used in  DB or DW if
+        the line contains an undefined symbol.
+
+ 01/23/92 SAMPLES addition
+
+        Added PROF.SEQ to TCOMSAMP.ZIP, and PROF.COM to TCOMUTIL.ZIP.
+        These are the source, and executable for a profiling utility for
+        TCOM. PROF allows performance results to be accumulated for large
+        TCOM programs. A file PROF.TXT is generated on completion of
+        execution that contains the addresses of buckets that contain
+        counts of locations in the profiled application where significant
+        time is spent. PROF attaches to the DOS system clock, and looks
+        at where the profiled application is each time a clock tick
+        occurs. While ticks only occur 18 times a second, large programs
+        still accumulate useful results for performance analysis.
+
+ 01/25/92       Free distribution of F-PC and TCOM at SV-FIG
+
+        Distributed 28 copies to all attending that asked. Had about 40
+        people attending.
+
+ 01/26/92
+
+        Added additional checking to BUG to keep the user from forgetting
+        to step into a TT[']. BUG now detects a TT['], and automatically
+        puts a breakpoint after the word being looked up if the user
+        presses Enter to just step over the tt['].  This works much
+        better than just letting the program run to termination.
+
+ 02/12/92 12:26
+
+        Added BRANCH_MARK to TCOMNDX.SEQ, it compiles a special type of
+        index record to tell a debugger when it is about to step into a
+        branch type word. This is needed for TCOMS8, and TCOM56.
+
+        Added additional testing to DO_SYMBOL, to verify a symbol is
+        really a target type word before trying to resolve and not create
+        a symbol. Seems we get a conflict at times when trying to define
+        a word that is defined in the target like ' (tick).
+
+ 02/21/92 12:00
+
+        Added a command line option /KEY. This option waits for the user
+        to press a key after finishing a compile when an error occurs
+        during the compile.
+
+ 02/26/92 12:44         ***** TCOM Version 2.13 *****
+
+        Modified TINTERP to check for wheather we are in the middle of
+        assembling an instruction before automatically defining a forward
+        referenced label. If we are, doit, and if we aren't, then issue
+        an error message for undefined symbol.
+
+        Also added stack depth checking to CONSTANT, VALUE, 2CONSTANT,
+        and FCONSTANT to get a cleaner error report in the case where not
+        enough parameters have been put on the stack for them.
+
+ 03/23/92 17:04
+
+        Added TEXTFORM.SEQ to TCOMSAMP.ZIP. This is a relatively simple
+        text formatter. It does a few interesting thing, like box
+        paragraphs, draw horizontal lines, it builds an (unsorted
+        currenlty) index of the document.  Probably not teribly original,
+        but it was fun to write, and someone may learn something from it.
+
+ 03/26/92 12:23
+
+        Modified the conditional branches in the TCOM 8086 library to
+        perform match checking.
+
+ 03/30/92 11:00         ***** TCOM Version 2.14 *****
+
+        Modified CODE and LABEL to detect redefinitions. They weren't
+        performing the proper check. This could lead to problems
+        particularly when interrupts were defined, installed into a
+        table, and then defined again later.
+
+ 03/31/92 17:10
+
+        Added library address range checking to COMPILE1.SEQ and
+        COMPILE2.SEQ. I hope this doesn't cause problems down the road,
+        but we will have to wait and see.
+
+ 04/03/92 15:10         **** Target Version 2.26 ****
+
+        Added a new word "DEL_B/I", that deletes bytes and instructions
+        from the already compiled code.  This saves a significant amount
+        of repetition in the optimizer.
+
+ 04/15/92 13:46
+
+        Added a new word [LONG] to be used before conditional branch words
+        that need to use long branch instructions, rather than shorter
+        relative branch instructions.
+
+ 04/21/92 12:17
+
+        Modified the auto increment branch words to start at local label
+        number 128, rather than starting at zero. Robert smith was using
+        local labels in macros, and there were conflicts. Also moved the
+        ?LEAVE local label from 20 to 127. Modified F-PC NEWLAB.SEQ to
+        issue an error message if a local label that is already in use,
+        is defined again.
+
+ 04/22/92 13:28
+
+        Modified PASM.SEQ, to use "ERR, rather than ABORT", so TCOM can
+        avoid the program abort in the case of an address out of range.  Now
+        an error is still reported in the message and listing file, but the
+        compile doesn't terminate.  This is useful so multiple error can be
+        detected in a single compile pass.
+
+ 04/26/92 08:34         ***** TCOM Version 2.15 *****
+                        **** Target Version 2.27 ****
+        Modified TCOM to include a function "[Llong]" library long, to
+        allow specifying a particular branch as long for a library
+        function.
+
+        A much more significant change is in the library, I have REMOVED
+        ALL OF THE "_L" VERSION OF THE BRANCH WORDS. No more IF_L etc.  I
+        am switching over to the "[long]" form of branch control in
+        applications. The sample programs have been modified accordingly.
+        This does lead to incompatibility with earlier programs, but also
+        reduces the size of the compiler since the _L words are no longer
+        present.
+
+        I hope this doesn't cause you too much trouble. From an editing
+        standpoint, you simply need to delete the trailing _L from
+        whatever words were using it, and put a [long] at the just before
+        the word that was using the _L.
+
+        I think this is a much cleaner way to handle the long branch
+        problem, and very clearly identifies those places where long
+        branches are required.
+
+ 05/06/92 12:23
+
+        Increased the .FIL limit to 32 files from the previous limit of
+        16 files.  If your application has more than 32 files, the
+        debugger will still work, but it won't be able to find the source
+        for word in files above 32.
+
+        Enhanced the debugger to use a GREEN background for the part of
+        the stack that is beyond the top of the stack, and a RED
+        background when the stack underflowed.  The stack items that are
+        not above the top of the stack continue to be shown with a BLACK
+        background.
+
+ 05/13/92 09:03
+
+        Changed the /OPT so it doesn't enable tail optimization. You have
+        to explicitly use /TAILOPTON to enable it.  Since it is less
+        convenient to debug programs that have tail optimization enabled,
+        I decided to opt for convenience over efficiency.  Once your
+        program is debugged, you can always include the tail optimization
+        directive in your .OPTIONS statment in the program.
+
+ 06/26/92 16:31
+
+        Added .PATH statment, to allow the source file to set the search
+        path to any files that are to be included in the source file.
+
+ 07/01/92 16:16
+
+        Added code to RES_SYMBOL, to get it to resolve forward references
+        in code words to colon definitions later in the application.
+        TCOM was not reporting an unresolved symbol error when you used a
+        forward reference from a code word to a colon definition, but it
+        was also not resolving the reference.  FIXED
+
+ 07/09/92 14:07
+
+        Added BIOSKEY from F-PC to the TCOM 8086 library.
+
+ 07/17/92 15:09
+
+        Noticed and fixed a bug in TEND-CODE, it was using the END-CODE
+        from F-PC, along with doing some things itself.  The problem was
+        that F-PC's END-CODE was doing a REVEAL which was incorrectly
+        unlinking words defined in the same hash chain, when a word was
+        defined as a forward reference, and was then later resolved.
+
+        TCOM creates code words as findable immediately, so END-CODE
+        doesn't need to REVEAL them. FIXED
+
+ 07/24/92 15:54         ***** Version 2.17 *****
+
+        Added two new symbol types, for {DS} = DATA SEGMENT, and {CS} =
+        CODE SEGMENT.  This was done to allow for changes being made to
+        SAMA (SAMSUNG ASSEMBLER) to add relocatability.  I hope to add
+        relocatability to TCOM as well.
+
+        Added two new fields to the symbol file record format, for
+        SYMSEG# and SYMSCOPE.  These relate to changes to SAMA for
+        relocatability.
+
+        Removed the .INCLUDE-SYMBOLS and related directives from TCOM,
+        again this is due to changes related to SAMA, and to future
+        changes to support relocatability.
+
+ 07/27/92 08:16
+
+        Renamed "INLINE" to "[MACRO:]".  There is a word in F-PC called
+        "INLINE" that is used to allow entry of assembly language into a
+        high level definition.  The function of "[MACRO:]" is to compile
+        the function following it as a MACRO into the current definition.
+        These two uses of the same word are NOT at ALL the same thing. I
+        realize now, it was a mistake on my part to reuse the same word
+        in two different ways.  This problem was reported by J”rg Staben
+        in an indirect way, by his attempt to use the word INLINE to
+        include some assembly language into a colon definition.  FIXED
+
+ 07/29/92 14:21
+
+        Modified (NUMBER?), to dis-allow recognition of comma, dash and
+        slash as double number conversion characters.  This will prevent
+        undefined words like 3- and 3/ from erroneously appearing to be
+        recognized by the compiler, when they are just converted to
+        double numbers.
+
+        Modified TINTERP to allow commas to be used to seperate the
+        operands following the instruction in CODE words.  A word
+        just scans the input line of CODE words, and changes commas to
+        spaces. This is experimental, but seems to work.
+
+ 09/02/92 13:13 tjz     ***** Version 2.18 *****
+        Modified MACRO-START to clear the local labels, so they can be
+        used inside MACROS without getting already defined label
+        problems.
+
+ 09/09/92 15:14 tjz
+        Modified CMOVE, CMOVEL, PLACE, +PLACE, WORD and LINEREAD to user
+        a MOVSW when possible, to improve the speed of transfer.
+
+        Added ODD_ALIGN and EVEN_ALIGN to control alignment of the data
+        space in the 80x86 target.  This is useful primarily because of
+        the previous MOVSW modification, which is even faster if moving
+        to an address that is word aligned.  Since most forth buffers are
+        counted (they have a count byte at the beginning) it is better to
+        ODD_ALIGN them, putting the count byte on an odd boundry, and
+        making the data word aligned.
+
+ 09/15/92 16:51 tjz
+        Added a new defered word LMACRO-START, which MUST be initialized
+        in a similar fasion to MACRO-START.  The difference is that
+        MACRO-START does a SETASSEM and an INIT_LABELS, and LMACRO-START
+        only does a SETASSEM.  This is needed so that MACRO when used in
+        a users target application can use local labels, yet will still
+        function properly when I use it in the library where macros do
+        need to use local labels, but DON'T need need to use them in a
+        re-entrant way.
+
+ 09/18/92 11:16 tjz
+        Changed the name of the install program from TCOMINST.COM to
+        INSTALL.COM.  Renamed DI.COM to TCOMI.COM and DS.COM to
+        TCOMS.COM.
+
+ 10/07/92 16:11 tjz     ***** Version 2.19 *****
+        Found a bug in T:, it was sometimes (when a word being defined
+        was already defined earlier) changing the previous definitions
+        function. BAD NEWS!  Reworked the way defining words work, they
+        used to rely on LAST to always contain the NFA of the work they
+        are changing the operation of in DOES>, but that is unreliable in
+        a system where forward references can cause words to be defined
+        earlier, so now a new word CDOES> accepts the CFA of the word
+        being changed on the stack.  It works great! FIXED
+
+ 10/14/92 17:42 tjz
+        TCOM has received a Cross Reference Program called XREF.  It is
+        written in Forth and compiled with TCOM, and it runs like blazes.
+        It processes the listing file, into a new file with a .XRF
+        extention.
+
+ 10/20/92 17:18 tjz
+        TCOM now handles files that include tabs properly. It doesn't
+        expand the tabs, it just converts them to spaces during
+        compiling.  The SAMSUNG debuggers have been modified to handle
+        this properly.
+
+        Also modified the listing generator program LS1.SEQ to expand
+        tabs when making the listing.
+
+ 10/28/92 11:52 tjz             "BUG" debugger enhancement
+        Added a flag that will appear to the right of any symbolic branch
+        or call, that displays a BLUE 'S' (for Source) when the branch or
+        call goes to a location where the source is available, and
+        displays a RED 'L' (for Library) when the branch or call is to a
+        location where no source is available.  This is primarily useful
+        to assist you in knowing when not to nest into a library routine
+        which doesn't have source available.
+
+        Also added a new command 'U' for go UP to the calling function.
+        This is useful for those timew when you step into a routine and
+        then decide you didn't want to nest.  'U' will execute to the
+        address on the top of the return stack.
+
+        WARNING!  If you use the 'U' command and there is no useful
+        address on top of the return stack, then the program will just
+        run to completion or crash, which ever comes first.
+
+ 10/28/92 14:55 tjz
+        Added a words   ,LINE"-T   ,"-T   and  ,-T to the TCOM host
+        vocabulary.  ,LINE"-T compiles a non-counted string into CODE
+        space, and follows it with the CR & LF characters.  ,"-T
+        compiles a counted string into CODE space, and  ,-T  compiles a
+        word into CODE space.
+
+ 10/29/92 18:48 tjz
+        Enchanced the BUG debugger, to include better data symbol display
+        for Watch and also added a function symbol display to View.
+
+ 11/06/92 12:48 tjz
+        Fixed a bug in LS1.SEQ that was effecting all listing generators.
+        It was possible for the listing to get out of sync with the index
+        file if a source line started in the first column.  FIXED
+
+ 11/16/92 12:36 tjz
+        Added additional error checking to the compiler, to issue an
+        error message if the user tries to redefine a word that is
+        already defined in the library.
+
+ 11/19/92 11:16 tjz
+        Added a simple MAKE program to TCOM.
+
+ 11/19/92 14:42 tjz
+        Added 2@L (double fetch long) and 2!L (double store long) to the
+        TCOM library.
+
+        Fixed a bug in COMPILE2.SEQ, I had previously added additional
+        error checking to detect an attemp to redefine a library word.
+        It seems there was a minor bug that did detect the redefinition
+        but didn't detect that it was in the library.  FIXED
+
+ 12/01/92 15:35 tjz
+        Fixed a couple of bugs in the floating point support as reported
+        by Mel Bramwood.  Seems I changed the way the compilers F# word
+        was working, leaving things in an incorrect state.  Also added a
+        file FLOATER.SEQ to TCOMSAMP.ZIP, to make it easier to figure out
+        how to get started using the floating point words.
+
+ 12/08/92 14:41 tjz
+        Modified BUG to allow longer command lines to be passed to a
+        program being debugged.  Lines upto about 120 characters will
+        pass through correctly.
+
+ 12/10/92 13:22 tjz
+        Added MOUSE support to TCOM.  A new file TMOUSE.SEQ provides
+        functions similar to F-PC.  An two additional example programs
+        called DOODLE.SEQ and DRAW.SEQ. They illustrate the use of a
+        mouse in graphics mode to draw on the screen in 320x200x16 and
+        640x480x16 graphics modes.
+
+        Also added a couple of additional example programs from Robert
+        Smith, to assist in keeping track of your consulting time.  Be
+        sure to see BEGTIME.SEQ and ENDTIME.SEQ in the \TCOM\SAMPLES
+        directory.
+
+ 12/11/92 13:24 tjz
+        Moved the files: THERC.SEQ, TGRAPH.SEQ and TMOUSE.SEQ into the
+        \TCOM\SRC directory, and installed them into the compiler as a
+        default part of the pre-compiled TCOM.EXE library.
+
+ 12/11/92 18:13 tjz
+        Modified NEWLAB.SEQ in F-PC to allow nesting local label sets
+        upto eight levels deep.  New words LLSET+ and LLSET- move up and
+        down the local label set words.  This is primarily useful in the
+        condition where you want to use a macro inside a code word, or
+        another macro, and you use local labels in the macro.  The
+        nesting prevents local label conflicts from occuring between
+        unrelated code or macro words.
+
+ 12/17/92 15:21 tjz
+        Bob found a bug in "#=IF_OPT" the "Immediate equal IF" optimizer.
+        It was compiling an unsigned byte when it should have been
+        compiling a signed byte for certain operations.  FIXED
+
+ 01/05/93 18:00 tjz
+        Found that the changes to NEWLAB above were causing problems in
+        macros.  It seems that the conditional macros IF, ELSE, etc. were
+        using LLSET+ and LLSET-, when they shouldn't have been.  Added
+        LMACRO and END-LMACRO back in to TCOM, only difference is they
+        don't use LLSET+ and LLSET-, so branches get resolved properly.
+
+ 01/06/93 07:47 tjz  ***** Compiler V2.20 ***** Target 8086 V2.27 *****
+        Just completed an update verify of all the sample programs.
+        Found a few that didn't compile for various reasons, and repaired
+        some additional minor bugs in the compiler as a result.  I think
+        (and hope) the local label problems have finally been solved.
+        Added ZIM, a limited text file compression program to the samples
+        as well.
+
+ 01/14/93 10:35 tjz
+        Removed the ASSEMBLER vocabulary from the search order except
+        when assembling code words.  It seems an attempt to define a
+        colon definition with the name TEST was crashing the computer.
+        The problem was that TEST is an instruction mnemonic, and was
+        being detected as an existing target word when the new TEST was
+        being defined.  This caused the compiler to try resolve a
+        reference to TEST to the mnemonic instead of creating a new
+        symbol for the new word TEST.
+
+ 01/19/93 10:04 tjz
+        Added error checking to TCOM (COMPILE1.SEQ) to detect and notify
+        the user of an error condition when they create a program that
+        contains no colon definitions.  At least one definition is
+        required if the program entry point is to be set properly.
+
+ 01/20/93 11:21 tjz
+        Added BINEDIT.SEQ to TCOMSAMP.ZIP.  BINEDIT is an example program
+        that allows binary editing of any file in either hex or ascii.
+
+ 01/20/93 12:45 tjz
+        Found and fixed a bug in SEARCH that was preventing it from
+        working on searches longer than 32k.
+
+        Also finally figured out that the VIDEO-TYPE word in TVIDEO.SEQ
+        was the culprit that was making the cursor disappear on exit from
+        some TCOM programs.  It was trying to move the cursor to a
+        location beyond the bottom of the screen, and this causes the
+        cursor to disappear on some computers.  Corrected by clipping the
+        position to which VIDEO-TYPE will position the cursor to ROWS-1.
+
+ 01/21/93 10:53 tjz
+        Found that the &> (address of) operator was returning the address
+        of the function in the case where it is being used on a CREATE
+        DOES function.  It should have been returning the data field
+        address.  CORRECTED
+
+ 01/21/93 13:18 tjz
+        Added the VED virtual editor to the TCOMSAMP.ZIP file.  Also
+        modified TESTALL.BAT to always use TESTALL.LST for its output
+        file, and put in comments to tell the user what each program is
+        as it is being compiled.
+
+        Also added some additional optimization to all immediate
+        operations, such as the folliwng:  +, -, and, or, xor, 1+, 2+,
+        1-, 2-.
+
+
+ 01/22/93 14:05 tjz  ***** Compiler V2.21 ***** Target 8086 V2.28 *****
+        Corrected a couple of problems with defining words.  The address
+        being returned to the DOES> portion of a word was off by one, and
+        when &> was used on a create does word it returned the address of
+        the function rather than the functions data address. FIXED
+
+ 01/26/93 09:59 tjz
+        Found a code imcompatibility between the current version of CMOVEL
+        and the older version of CMOVEL that wasn't optimized to move
+        words instead of bytes.  I have commented out the lines in CMOVEL
+        that perform the optimization.
+
+ 02/02/93 16:00 tjz
+        Found yet another bug in the SEARCH routine, if the string being
+        searched was exactly 1 character long, then a wrap around
+        condition would occur, making SEARCH look beyond its allowed
+        search area.  FIXED
+
+ 02/08/93 14:22 tjz
+        Jerry Modrow points out that the word CMODE! that is used in
+        GRAPH.SEQ to select the video modes for F-PC should select SLOW
+        to allow text to be drawn on the screen.  Added SLOW to CMODE!.
+
+        He also points out that CPOINT, the word that returns the color
+        of a point of the screen should mask off the high byte of the
+        color, since it will often be returned as nonzero, indicating an
+        invalid color.  Corrected in both GRAPH.SEQ and TGRAPH.SEQ
+
+ 02/12/93 12:48 tjz
+        Jorg Staben reports problems with redefining words in an
+        application even when the /REDEFOK directive is included in the
+        .OPTIONS statment.  In looking at the code, there were some
+        problems with redefining MACROs, since they didn't ever increment
+        the usage counters.  This has been corrected, and a warning will
+        now be given if a word is redefined that has already been used by
+        the application.
+
+ 02/12/93 14:30 tjz
+        Added functions MOUSE.SENSE@ and MOUSE.SENSE! to TMOUSE.SEQ.
+        These are useful when MOUSE.LIMIT! is set to large values for
+        higher resolution video modes.  You should save and restore the
+        mouse sensitivity values.
+
+        Also added MANGEN.SEQ and MANSHOW.SEQ, two programs that work in
+        graphics mode and generate or show mandelbrot plots.
+
+ 02/16/93 12:35 tjz
+        Added a new commandline parameter to ZTREE, it can now delete
+        entire drives and or directories of files.  See ZTREE.SEQ for
+        further information.
+
+ 02/17/93 14:06 tjz
+        Added three new commands to TCOM's BUG debugger as follows:
+
+        TAB     TAB key, prompt for a hex number and push it onto
+                the application programs Data Stack.
+
+        Del     Delete key, discard one item off the application
+                programs Data Stack.
+
+        ^Ins    Control-Insert key, moves the browse point and the
+                Program Counter to the word nearest the screen
+                cursor.  This is in effect a command to set the PC
+                to here.
+
+ 03/03/93 10:50 tjz
+        Added sorting to TWFL.SEQ. The word SORTDIR can be used after
+        using $GETDIR, or is done automatically when you use GETDIR, to
+        provide a sorted list of directory files.
+
+        Added additional error reporting to DO and ?DO.  Nesting of DO or
+        ?DO loops inside of a ?DO loop is not allowed, and will not
+        resolve properly, so an error is now reported if you try to nest
+        a DO or ?DO inside another ?DO conditional structure.
+
+ 03/08/93 15:59 tjz
+        Added a new option "/CLEAN" to the compiler.  It discards any
+        data files created by the compiler during the compile as
+        specified by other options.  Specifically the applications .LST,
+        .SYM, .INX, .FIL and .MSG files are not generated, or are deleted
+        if generated by a seperate program (like the listing generators).
+
+        This is primarily useful to override a set of default options
+        contained within a source file, when final debugging is complete,
+        and the additional data files will no longer be needed for
+        debugging.
+
+        If an error occurs during the compile, then at least a .MSG file
+        will be generated anyway.
+
+ 03/10/93 15:25 tjz
+        Modified MAKE.SEQ to allow adding a message to the string search
+        and abourt function.
+
+        Modified LS1.SEQ, to ignore the fact that a source file is not
+        available, and just do a disassembly under those conditions.
+
+ 03/16/93 09:10 tjz
+        Found a bug in the 8086 optimizer.  It was under some very
+        special conditions trying to optimize code before the beginning
+        of a function, into the code of the previously ended function.
+        Added an OPT_OFF1 to the code in END-CODE, to prevent this.
+
+ 03/17/93 15:10 tjz
+        Added RINGS.SEQ, a graphics sample to TCOMSAMP.SEQ.
+        Added below zero clipping to CPLOT in TGRAPH, to prevent the
+        incorrect screen wrap around I had observed when a program tried
+        to plot a point above or to the left of the screen.
+
+ 04/02/93 14:47 tjz
+        Found a bug in the DROP optimizer.  It was supposed to be
+        incrementing the return stack pointers if it encountered
+        "R> DROP", but was actually incrementing the data stack.  FIXED
+
+ 04/02/93 15:17 tjz
+        Added a couple of new features to TCOM.  The '|' (vertical bar)
+        symbol tells TCOM co place the header of the word about to be
+        defined in the HTARGET vocabulary.  It will show up if used, but
+        will not normally be find-able during a compile by the
+        application.  Also added 'I|' (I vertical bar), to make a library
+        symbol that is headerless. It works with any defining word.
+
+ 04/05/93 16:23 tjz     TCOM all targets
+        Found a bug in ?DUP.  ?DUP is a macro , and should have been
+        turning off the optimizer for a single operation, and was not.
+        This problem showed up in that incorrect code was being generated
+        under some conditions when ?dup was followed by an IF.  FIXED
+
+ 04/07/93 16:24 tjz     ***** TCOM 8086 target Version 2.29 *****
+        Found that the optimizers for IF were not fully testing the
+        preceeding code. Under the following conditions:
+        " DUP 0= DUP IF "  the optimizer would try to double optimize the
+        " DUP 0= DUP " completely out of existence.  Corrected by adding
+        additional testing to detect the first optimizer already
+        happening when the second optimizer tries to test for its valid
+        condition.
+
+        Added a new optimizer OVER_OPT, that tests for a preceeding over
+        operation, and deletes it if present.  This is useful for things
+        like " OVER - " or " OVER + ", which can better be done directly
+        from the stack to BX instead of performing all the stack
+        operations to perform the over first.
+
+        Also added an optimizer for repeated literals.  Detects a repeat
+        occurance of the same literal being pushed on the stack, and
+        eliminates the extra " MOV BX, # xxxx ", since the literal is
+        already in BX, and doesn't need to be reloaded.
+
+ 04/12/93 09:40 tjz
+        Added COLOREMIT to the library.  It is automatically used by
+        DOSIO_INIT instead of (EMIT) when no I/O redirection is detected.
+
+        Also added two words which are used by DOSIO_INIT, that return a
+        flag telling whether the DOS I/O redirection operators "<" and
+        ">" were used on the DOS commandline.
+
+          ?IN_REDIRECT    Returns f1=true if console input redirected
+          ?OUT_REDIRECT   Returns f1=true if console output redirected
+
+        DOSIO_INIT now detects I/O redirection, and select (EMIT)
+        instead of COLOREMIT when I/O redirection is in effect.  This
+        adds about 150 bytes to a program.
+
+ 04/13/93 16:28 tjz
+        Added a command 'A' to the BUG debugger, to allow setting the
+        arguments for the current program.  This is primarily useful when
+        you want to specify I/O redirection, with the '<', or '>'
+        symbols, which can't be used on the DOS commandline.
+
+        Also added TSR.SEQ to TCOMSAMP.ZIP.  TSR is an example program
+        that implements a relatively simple tarminate and stay resident
+        program to perform number conversion.  It is invoked with the
+        SCROLL LOCK key.  It also properly tests the "INDOS" flag, and
+        does not pop up if DIS is busy.
+
+ 04/16/93 15:04 tjz
+        Added two additional TSR examples called: TSRCLOCK and TSRIDLE.
+        TSRCLOCK displays the current time in the upper right hand corner
+        of the screen.  TSRIDLE waits for ten minutes to go by after the
+        last keystroke and then invokes IDLE.BAT which can contain your
+        favorite screen saver.
+
+        Full TSR install and remove capability is provided, and you can
+        even perform DOS file operations from within the TSR if you
+        desire.
+
+ 04/30/93 15:53 tjz & rls
+        Found some bugs that I put in when I coded D<SHIFT and D>SHIFT in
+        assembly language.  Fixed the bugs in these.  Also found bugs
+        related to FPARTS which was being used by E. and F., changed
+        FPARTS into two words F.PARTS for F. and E.PARTS for E. since
+        they really needed different functionality.
+
+ 05/14/93 17:17 tjz
+        Added the TCOM program path to the FPATH, so extra utility files
+        like those for floating point and graphics can be accessed from
+        any directory without having to specify the directory.
+
+        Robert and I also found some additional bugs in the FLOAT4TH and
+        TFLOAT files.  FIXED.
+
+ 05/17/93 09:19 tjz
+        Changed WORD to use EXECUTES> instead of NO-INTERPRET, so it can
+        be used in defining words.  Added NUMBER so it can be used in
+        defining words.  I guess defining words will always be somewhat
+        limited in TCOM, but now you can do the following:
+
+        : GMODE         ( -<mode hdots vdots segment size>- )
+                        CREATE
+                        bl word number drop ,   \ mode
+                        bl word number drop ,   \ horizontal dots
+                        bl word number drop ,   \ vertical dots
+                        bl word number drop ,   \ video segment
+                        bl word number drop ,   \ screen size in bytes
+                        DOES>
+                        length >r               \ save the mode number
+                        length !> HDOTS         \ set horiz resolution
+                        length !> VDOTS         \ set vertical res
+                        length !> VID.SEG       \ set video segment
+                        @      !> VID.SIZE      \ and screen size
+                        r> vmode! ;             \ select the video mode
+
+        Now we can define various graphic modes selection words.
+
+        \     Graph mode        Mode Hor Ver Clrs Seg   Size
+        GMODE 640x350x16        $10  640 350  16 $A000 $9600 \ EGA,VGA
+        GMODE 320x200x256       $13  320 200 256 $A000 $FA00 \ VGA
+        GMODE 800x600x16_OAK    $52  800 600  16 $A000 $FA00 \ OAK
+        GMODE 800x600x16_TSENG  $29  800 600  16 $A000 $FA00 \ TSENG
+        GMODE 640x350x256_TSENG $2D  640 350 256 $A000 $FA00 \ TSENG
+
+        While the above is very nice, it won't work in a library, since
+        defining words are not supported in a library currently.  So you
+        WON'T find this method used in the file TGRAPH.SEQ.  It is still
+        a nice capability for use in an application program.  By the way,
+        the above technique also saves significant space in a target
+        application by applying only a five byte of code overhead to each
+        word defined, in addition to the data specific to the word.
+
+ 05/17/93 10:48 tjz
+        At the suggestion of Mike Mayo, I have modified all of the
+        backward branch words like UNTIL, LOOP and +LOOP to automatically
+        test and compile a word backward branch if required, rather than
+        just giving an error message.  The words REPEAT, NEXT and AGAIN
+        already compiled word branches.  The word [LONG] must still be
+        used when a long forward branch occurs with the words with IF,
+        ELSE, WHILE or ?DO.  Making these automatically compile the right
+        size forward branch is not impossible, but is much harder.
+
+ 05/18/93 17:59 tjz
+        Mike Mayo has updated the TCOM graphics support, and I have
+        integrated it into TCOM, replacing TGRAPH.SEQ with GRAPH.SEQ.
+        GRAPH is generalized to work with either TCOM or F-PC.  Mike also
+        updated HERC.SEQ, to be loaded after GRAPH.SEQ, and to be
+        optional.  GRAPH-INIT has been eliminated, just use ?VMODE to
+        test the current video mode.  All examples have been updated to
+        reflect the new arraingment.  Words GTEXT-ON AND GTEXT-OFF are
+        used to enable or disable the drawing of text characters in
+        graphics modes.  Drawing characters allows them to be drawn on a
+        pixel boundry, rather than on a character boundry.  You can also
+        specify the background color as well as the forground color for
+        the characters.  They are drawn somewhat slower than the BIOS
+        draws them however, and they are drawn using the 8x8 character
+        cell rather than the default 9x16 cell that the BIOS uses.
+
+ 05/19/93 15:41 tjz     ***** TCOM 8086 target Version 2.30 *****
+        Added a direct graphics screen point plot routine for graphics
+        modes 640x350x16 and 640x480x16.
+
+        Added support for properly selecting the bit planes when drawing
+        after turning on or off the mouse cursor.
+
+ 05/20/93 12:56 tjz
+        Modified the file TSHAPES.SEQ to be compatible with F-PC as well
+        as TCOM, and have thus renamed it to SHAPES.SEQ.  Removed
+        THERCTXT.SEQ, its functionality is no integrated into the files
+        GRAPH.SEQ and HERC.SEQ.
+
+ 05/21/93 15:26 tjz
+        Added 8X14FONT and 8X8FONT to select between two of the available
+        EGA/VGA fonts.  8X14FONT is selected automatically when
+        640x350x16 or 640x480x16 graphics mode is selected.  Otherwise
+        the BIOS font is selected.  8X8FONT can be selected if you have
+        an EGA or VGA and want to use the characters above 127.
+
+        Don't try to use these words if you have a hercules, they won't
+        work.
+
+        NOTE: While hercules has been adapted to the new format of
+              GRAPH.SEQ, it has not tested, so it may well NOT WORK!
+
+ 05/27/93 13:41 tjz     ***** TCOM Compiler Version 2.22 *****
+        Added an alias /C to /CLEAN.
+
+ 06/01/93 13:57 tjz     ***** TCOM Compiler Version 2.23 *****
+        Removed commandline options /FORTH, /DIS and /DBG. They are not
+        needed now that TCOM includes the BUG source level debugger.
+
+        Added a compiler performance line, that indicates compile time in
+        seconds, lines compiled and byte compiled per second.
+
+ 06/02/93 11:12 tjz
+        Added optimizers to MIN, MAX, UMIN and UMAX to detect a previous
+        literal or absolute.  These optimizers make the above words
+        compile as macros instead of CALL's, saving execution time, and
+        still save one or two bytes of code space per occurance.  If no
+        optimization is possible, then they are referenced with a CALL,
+        and the code generated is identical to previous versions of TCOM.
+
+ 06/10/93 14:03 tjz
+        Enhanced ZTREE.SEQ to allow unpaused multi directory delete
+        operations.  ZTREE used to pause and prompt Y/N if you used a
+        delete of "*.*".  This is no longer the case, It now feeds DOS a
+        'Y' character to force DOS's DEL command to accept the delete.
+
+ 06/15/93 14:39 tjz
+        Added several new items to TCOM.  A TCOM compile option /COMPRESS
+        or /LZ will now produce a .COM file output that is compressed
+        using the new LZ file compression utility.  Programs compressed
+        in this way are still executable, but are about 45% smaller than
+        normal TCOM programs.
+
+        Added programs LZX.SEQ and LZ.SEQ to the TCOM sample files.
+        LZX.SEQ is a primitive utility that is used in binary form by
+        LZ.SEQ when building compressed .COM files.  LZ.SEQ is a file
+        compression and decompression tool that will compress or
+        decompress data or program (.COM) files.  LZ.COM is invoked by
+        TCOM when the /COMPRESS or /LZ switch is used.  Note that
+        compression is fairly slow, and should only be used after a
+        program is fully debugged.  ALSO NOTE THAT THE DEBUGGER CAN'T
+        DEAL WITH COMPRESSED FILES.
+
+        Added BINLOAD-DATA and BINLOAD-CODE to TCOM, so it would be
+        possible to create LZ.COM which needed to load LZX.COM as part of
+        its data.
+
+ 06/23/93 15:01 tjz
+        Recovered the profiler PROFILE.SEQ and added it to the samples
+        .ZIP file.  Currently PROFILE.SEQ must be included at the start
+        of any application you want to profile, and then you must insert
+        PROSTART and PROEND around the area of the origram you want to
+        profile.  Evantually I hope to make the profiller a seperate
+        program.
+
+ 07/13/93 13:00 tjz
+        Updated LZ.SEQ to allow "-" options in addition to "/" options,
+        and to allow using a filespec like *.SEQ with the /A option.
+        Also modified the /X option to extract all files is no filename
+        is specified after the file.LZ.  Updated the online help.
+
+ 08/17/93 10:58 tjz
+        Fixed a bug in XREF, it would crash if it ran out of memory.
+
+ 01/24/94 14:47
+        Added OPT_OFF1 to DO_SYMBOL in COMPILE1.SEQ.  Under some
+        conditions, the optimizer wouldn't function properly because it
+        would improperly detect an optimizable condition before the current
+        colon definition being defined.  DO_SYMBOL should have been
+        disabling optimization under some conditions.
+
+ 01/26/94 11:36
+        Modified COMPILE1.SEQ so it only paragraph aligns CODE space
+        saved when there is more than two bytes of DATA space included in
+        the target application.  Since DP is always included (2 byte) in
+        the target application, then data space will only be needed if DP
+        is greater than two.  This allows extreamly tiny applications to
+        be built, containing only code, and no data.  The example at the
+        end of FORM.SEQ is an example of a 9 byte program that sends a
+        formfeed to the printer.
+
+ 01/26/94 12:47
+        Added ;- (semicolon minus) to OPTIMIZ.SEQ. It can be used when no
+        RET is needed at the end of a COLON definition.
+
+ 01/27/94 14:03
+        Fixed a bug in the &> operator that was preventing it from
+        working inside a macro assembly language word.  This was done by
+        making "res_comp_&value" smart enough to know that a macro was
+        being created.
+
+ 01/27/94 14:21
+        Modified %T['] to detect the case where the function being looked
+        up is already defined, and it then just compiles a literal for it
+        rather than using TT['] which is a large routine.  Result is the
+        six bytes, the same as if TT['] was used, but TT['] is not
+        included in the application, which saves about 20 bytes.
+
+ 02/01/94 16:16
+        Added optimizers to ELSE and ENDOF, to detect when they are
+        preceeded by EXIT and optionally a CALL instruction.  If an EXIT
+        preceeds them, then the jump to ENDIF or ENDCASE is not compiled.
+        If a CALL also preceeds the RET, then the CALL is changed to a
+        JMP and the RET is removed.  The optimization is enabled by the
+        commandline options /TAILOPTON.
+
+        Also added EXITOF, a word that is used in place of ENDOF, that
+        compiles an EXIT and doesn't compile a branch to ENDCASE.  It
+        also performs the same optimization that EXIT ENDOF performs.
+
+        Also added $" (dollar sign quote) to the list of available target
+        words.  It is like " (quote), but it compiles a counted string
+        returning the address of the string rather than address and
+        length of the string.   Again, this word can sometimes be used to
+        save some bytes if you are so inclined.
+
+ 02/14/94 16:33
+        Modified COLOREMIT to use a word register when testing #LINE.  It
+        was wrapping around to the top of the display at 256 lines.  It
+        will still wrap around to the screen top at 65536, but few
+        programs will output that many lines to the screen.
+
+ 03/11/94 15:46
+        Re-factored TVIDEO.SEQ slightly for better compatibility with
+        F-PC. Split VMODE.SET in TVIDEO into two words, called
+        VIDEOIO_INIT and FAST.  VIDEOIO_INIT is like DOSIO_INIT, but is
+        for the direct to video functions.  The .._INIT words should only
+        be used once, then FAST or SLOW can be used to switch between the
+        two video methods if needed.
+
+ 03/11/94 15:51 tjz     ***** TCOM Compiler Version 2.40 *****
+ 03/11/94 15:51 tjz     ***** TCOM 8086 target Version 2.40 *****
+
+ 03/22/94 18:15
+        Modified TRUN in COMPILE2.SEQ.  Added detection for a word at the
+        beginning of a line, when undefined and ending with a colon ':'
+        automatically as a new label. This enhances compatibility with
+        assembly language. This automatic label creation is enabled by the
+        /ASM_LABELS option while in a Forth program, or by /ASM when the
+        program contains assembly language ONLY.  /ASM is an alias for
+        /CUSTOM_INIT which disables all target initialization and begins
+        execution at the first byte of program code encountered.
+
+ 03/23/94 10:46
+        ****************** WARNING SIGNIFICANT CHANGE *******************
+        Changed the DEFAULT compiler options to /CLEAN.  This means no
+        debugger data files are generated any longer by default.  To make
+        the compiler generate the data files needed for debugging a
+        program, use the new /DEBUG option, which will turn on .SYM, .FIL
+        and .INX file generation.  NOTE: The /LST option used to generate a
+        listing file will also turn on /DEBUG, since the listing generator
+        needs these files to generate the listing file.
+
+        This change has little effect on the operation of the compiler, but
+        will minimize the exteranious data files the user sees unless they
+        are specifically trying to debug a program.  The overall result of
+        this change, is simply that you will need to include the /DEBUG
+        option in your .OPTIONS list in your program source file until you
+        get your program debugged.
+
+ 03/23/94 10:53 tjz     ***** TCOM Compiler Version 2.50 *****
+
+ 03/24/94 10:17 tjz
+        It is useful I think to note again the locations and order of
+        places where compiler options can come from.  First there are
+        five(5) places where compiler options can come from, they are
+        (in LOAD order, which is the REVERSE of precedence):
+
+                1.      Local directories TCOM.CFG.
+                2.      If local TCOM.cfg is NOT present, then the
+                        TCOM's execution directory file TCOM.CFG.
+                3.      The TCOM directive in the environment if present.
+                4.      The .OPTIONS directive in the source file.
+                5.      The commandline.
+
+        The higher numbered items above will take precedence over lower
+        numbered items, so the "commandline" options will override any
+        options previously encountered.
+
+        Item three(3), the environment, though still available should
+        generally not be used, since there are often space problems with
+        environment variables.  They don't provide any advantage over using
+        TCOM.CFG for the compiler defaults anyway.
+
+        With the change of 3/23/94, to the /CLEAN options as the default,
+        you may well find is useful to create a TCOM.CFG with the /DEBUG
+        option in it to avoid having to put the /DEBUG options in your
+        source files while debugging.
+
+ 03/24/94 10:42 tjz
+        Added a warning.  When a compile has errors,if the /CLEAN options
+        was used, then warn the user that a recompile with the /DEBUG
+        option will be needed before debugging.
+
+ 03/30/94 17:34 tjz
+        Minor modifications to support the /DRIVER option.  Enhancements
+        to allow putting a label on a line ending in a colon (:),
+        interspersed with other words without worrying about
+        vocabularies.
+
+ 04/19/94 20:49 tjz
+        Removed the environment variable support for "SET TCOM=".  I found a
+        bug in the environment words, and since the environment variable for
+        TCOM is not needed any more, due to the convenience of keeping
+        compiler options in the source file, I remove the environment
+        variable.  If it is needed by someone, then it can be added back in
+        by editing COMPILE1.SEQ (look for "TCOM=").
+
+ 08/15/94 15:22 tjz
+        It was reported that the TCOM optimizer for the 8086 was
+        incorrectly TAIL optimizing the sequence when ['] was used before
+        a function at the end of a colon definition:
+
+                ..... ['] function ;
+
+        When this was done, the definition just fell into the following
+        definition and never returned.  This is not good, and has been
+        corrected.
+
+
+

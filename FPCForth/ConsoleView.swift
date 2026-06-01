@@ -1,4 +1,10 @@
 import SwiftUI
+import AppKit   // for NSApplication.terminate when BYE is executed
+
+extension Notification.Name {
+    static let clearConsole = Notification.Name("ClearConsole")
+    static let resetForth   = Notification.Name("ResetForth")
+}
 
 /// A reusable console view that mimics the classic Forth REPL feel.
 /// This version drives the real LBForth engine (Leif Bruder's public-domain model).
@@ -40,6 +46,18 @@ struct ConsoleView: View {
                 handleDelete()
                 return .ignored
             }
+            // Listen for menu commands from the Tools menu (defined at App level)
+            .onReceive(NotificationCenter.default.publisher(for: .clearConsole)) { _ in
+                consoleText = "=== FPCForth (lbForth model) ===\n\n"
+                protectedLength = consoleText.count
+                forth.clearScreenRequested = false
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .resetForth)) { _ in
+                forth.resetToSafeState()
+                consoleText = "=== FPCForth (lbForth model) ===\n\n"
+                protectedLength = consoleText.count
+                forth.clearScreenRequested = false
+            }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .padding(8)
             .onAppear {
@@ -51,6 +69,14 @@ struct ConsoleView: View {
                         protectedLength = consoleText.count
                     }
                 }
+
+                // Hook BYE so the host app can quit when the user types BYE in Forth
+                forth.onQuitRequested = {
+                    DispatchQueue.main.async {
+                        NSApplication.shared.terminate(nil)
+                    }
+                }
+
                 // Initially everything (the banner) is "protected" output
                 protectedLength = consoleText.count
             }
@@ -92,6 +118,12 @@ struct ConsoleView: View {
             DispatchQueue.main.async {
                 for lineToSend in candidateLines {
                     forth.feedLine(lineToSend)
+
+                    if forth.clearScreenRequested {
+                        consoleText = "=== FPCForth (lbForth model) ===\n\n"
+                        protectedLength = consoleText.count
+                        forth.clearScreenRequested = false
+                    }
                 }
 
                 // Ensure the cursor ends up on a fresh line after the whole paste/block.
@@ -106,7 +138,7 @@ struct ConsoleView: View {
     }
     
     private func handleDelete() {
-        var lines = consoleText.components(separatedBy: .newlines)
+        let lines = consoleText.components(separatedBy: .newlines)
         guard !lines.isEmpty else { return }
         
         let lastIndex = lines.count - 1

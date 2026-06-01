@@ -13,5 +13,16 @@ struct FPCForthApp: App {
         WindowGroup {
             ContentView()
         }
+        .commands {
+            CommandMenu("Tools") {
+                Button("CLS") {
+                    NotificationCenter.default.post(name: .clearConsole, object: nil)
+                }
+                // .keyboardShortcut("l", modifiers: [.command])
+                Button("RESET") {
+                    NotificationCenter.default.post(name: .resetForth, object: nil)
+                }
+            }
+        }
     }
 }

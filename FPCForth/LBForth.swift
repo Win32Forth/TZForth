@@ -70,12 +70,25 @@ public final class LBForth {
     // Debug output control (per-line state + stack dump after each feedLine)
     private var debugEnabled = false
 
+    /// Set by CLS. The ConsoleView should observe this after feedLine and clear the display.
+    public var clearScreenRequested = false
+
+    /// The value of LATEST right after all kernel primitives have been registered.
+    /// FORGET is not allowed to truncate past this point.
+    private var kernelLatest: Cell = 0
+
     // Input
     private var inputQueue: [UInt8] = []
     private var wordBuffer = [UInt8](repeating: 0, count: 64)
 
     // Output
     public var onOutput: ((String) -> Void)?
+
+    /// Set by the BYE word. The host app (ConsoleView) should observe this and terminate.
+    public var quitRequested = false
+
+    /// Optional callback fired when BYE is executed. Useful for the host to quit cleanly.
+    public var onQuitRequested: (() -> Void)?
 
     // Primitive dispatch table: ID -> implementation
     private var primitives: [(() -> Void)?] = []
@@ -88,6 +101,9 @@ public final class LBForth {
     // Low-level branch primitives (captured so high-level control words can compile them)
     private var branchID: Cell = 0
     private var zeroBranchID: Cell = 0
+
+    // Reverse map: primitive ID -> name (for SEE and debugging)
+    private var primitiveNames: [Cell: String] = [:]
 
     // The address of the QUIT word's threaded code (for restarting the outer loop)
     private var quitCodeAddress: Int = 0
@@ -121,6 +137,9 @@ public final class LBForth {
 
         // Bootstrap a tiny set of immediate and defining words by hand
         bootstrapMinimalDictionary()
+
+        // Record the end of the kernel dictionary so FORGET cannot delete primitives.
+        kernelLatest = readCell(LATEST)
 
         // Seed the interpreter IP at the QUIT code we just created
         ip = quitCodeAddress
@@ -382,7 +401,12 @@ public final class LBForth {
         let upper = name.uppercased()
         var link = readCell(LATEST)
 
-        while link != 0 {
+        var safety = 0
+        while link != 0 && safety < 10000 {
+            safety += 1
+            if !isValidDictionaryLink(link) {
+                break
+            }
             let flagsLen = readByte(link + 8)
             let namelen = Int(flagsLen & MASK_NAMELENGTH)
 
@@ -407,6 +431,39 @@ public final class LBForth {
         (c >= 97 && c <= 122) ? c - 32 : c
     }
 
+    /// Returns true for any character that should be treated as an apostrophe / tick
+    /// for the purposes of tick (') and name lookup. This covers the straight ASCII
+    /// apostrophe plus the various curly/smart quotes, backtick, and prime characters
+    /// that macOS keyboards and smart-quotes features commonly produce.
+    private func isApostropheLike(_ c: Character) -> Bool {
+        switch c {
+        case "'", "`", "\u{00B4}",          // ASCII ' , backtick, acute
+             "\u{2018}", "\u{2019}",        // ‘ ’  left/right single quotation mark (most common smart quotes)
+             "\u{201A}", "\u{201B}",        // ‚ ‛  low-9 and high-reversed-9
+             "\u{2032}", "\u{FF07}":        // ′  prime,  ＇ fullwidth apostrophe
+            return true
+        default:
+            return false
+        }
+    }
+
+    private func isValidDictionaryLink(_ addr: Cell) -> Bool {
+        if addr == 0 { return true }
+        if (addr & 7) != 0 { return false } // must be 8-byte aligned
+
+        // Only do a very loose bounds check against the entire memory buffer.
+        // We deliberately do *not* use the current HERE value here.
+        //
+        // Reason: FORGET intentionally sets HERE backwards to reclaim memory.
+        // Using the live HERE as an upper bound would incorrectly make
+        // perfectly valid older headers (including core primitives like HERE
+        // itself) appear "invalid" after a FORGET.
+        //
+        // We rely on proper LATEST maintenance + the alignment check + the
+        // safety iteration limit instead.
+        return addr >= 0 && addr < MEM_SIZE
+    }
+
     private func getCFA(_ headerAddr: Cell) -> Cell {
         let flagsLen = readByte(Int(headerAddr) + 8)
         var len = Int(flagsLen & MASK_NAMELENGTH) + 1  // +1 for the flags/len byte itself
@@ -420,6 +477,7 @@ public final class LBForth {
         // Sequential ID = current count. We start empty in init(), so this gives 0,1,2...
         let id = Cell(primitives.count)
         primitives.append(body)
+        primitiveNames[id] = name.uppercased()
 
         // Create the dictionary entry for this primitive:
         //   link, flags+len, name, padding,  <ID cell> , EXIT
@@ -483,6 +541,31 @@ public final class LBForth {
         _ = register("SPACE") { self.putkey(32) }
         _ = register("EMIT")  { self.putkey(UInt8(self.pop() & 0xff)) }
 
+        // KEY ( -- char )
+        // Classic blocking behavior: waits until at least one input character is available,
+        // then returns the next byte from the input queue.
+        //
+        // Because the host console feeds whole lines via feedLine(), KEY will wait until
+        // the user types a line (and presses return) and that line's characters (plus the
+        // newline) have been appended to the queue.
+        //
+        // We sleep briefly in the spin loop so we don't burn 100% CPU while waiting.
+        _ = register("KEY") {
+            while self.inputQueue.isEmpty {
+                // Small sleep to avoid spinning at 100% CPU.
+                // 10ms is responsive enough for interactive use while being gentle on the host.
+                usleep(10000)
+            }
+            self.push( Int(self.inputQueue.removeFirst()) )
+        }
+
+        // KEY? ( -- flag )
+        // Non-blocking test. Returns -1 if a character is immediately available, 0 otherwise.
+        // Useful for polling loops when you don't want to block.
+        _ = register("KEY?") {
+            self.push( self.inputQueue.isEmpty ? 0 : -1 )
+        }
+
         _ = register("!")     { let addr = Int(self.pop()); let val = self.pop(); self.writeCell(addr, val) }
         _ = register("@")     { let addr = Int(self.pop()); self.push(self.readCell(addr)) }
         _ = register("C!")    { let addr = Int(self.pop()); let val = self.pop(); self.writeByte(addr, UInt8(val & 0xff)) }
@@ -492,6 +575,28 @@ public final class LBForth {
         _ = register("LATEST"){ self.push(self.readCell(self.LATEST)) }
         _ = register("STATE") { self.push(self.readCell(self.STATE)) }
         _ = register("BASE")  { self.push(self.readCell(self.BASE)) }
+
+        // >HEADER ( xt -- header )  Given a code field address (xt), return the
+        // start of its dictionary header (the link field address).  This is the
+        // key primitive needed to implement proper linked-list dictionary walking.
+        // The active user-facing FORGET is the parsing primitive below (FORGET NAME).
+        // FORGET now also restores HERE to reclaim memory for the forgotten word(s).
+        _ = register(">HEADER") {
+            let targetCFA = self.pop()
+            var link = self.readCell(self.LATEST)
+            var safety = 0
+            while link != 0 && safety < 10000 {
+                safety += 1
+                if !self.isValidDictionaryLink(link) { break }
+                let thisCFA = self.getCFA(link)
+                if thisCFA == targetCFA {
+                    self.push(link)
+                    return
+                }
+                link = self.readCell(link)
+            }
+            self.push(0)   // not found
+        }
 
         _ = register("]", immediate: false) { self.writeCell(self.STATE, 1) }
         _ = register("[", immediate: true)  { self.writeCell(self.STATE, 0) }
@@ -685,15 +790,25 @@ public final class LBForth {
 
         // ' (tick) — simplified non-immediate version for now
         _ = register("'") {
+            // parseWord() has already normalized any curly/smart quote that the
+            // user typed in place of the tick character, so the name we get here
+            // for the *target* of tick is clean (or normalized if it contained quotes).
             let name = self.parseWord()
+            if name.isEmpty {
+                self.tell("? ' needs a name\n"); self.errorFlag = true; return
+            }
+
             let hdr = self.findWord(name)
             if hdr == 0 {
                 self.tell("? \(name) ?\n"); self.errorFlag = true; return
             }
             let cfa = self.getCFA(hdr)
-            // For primitives we push the small ID (like the original >CFA does)
+            // Match the exact distinction used by the interpreter and SEE:
+            // - Real primitives (first cell is a small ID that is *not* DOCOL) → push the ID
+            // - Colon definitions (start with DOCOL) and anything else → push the CFA
+            // This is why ' TEST was returning 0 (DOCOL id) instead of the real execution token.
             let firstCell = self.readCell(Int(cfa))
-            if firstCell < Cell(self.MAX_BUILTIN_ID) {
+            if firstCell < Cell(self.MAX_BUILTIN_ID) && firstCell != self.docolID {
                 self.push(firstCell)
             } else {
                 self.push(cfa)
@@ -735,6 +850,281 @@ public final class LBForth {
         // Debug output control (default is off)
         _ = register("DEBUG-ON")  { self.debugEnabled = true }
         _ = register("DEBUG-OFF") { self.debugEnabled = false }
+
+        // === Utility words ported/adapted from GrokForth style ===
+
+        _ = register("CLS") {
+            self.clearScreenRequested = true
+        }
+
+        _ = register("WORDS") {
+            self.validateAndRepairSystemState()
+
+            // Collect kernel (internal) words vs user-defined words.
+            // Kernel = everything that existed at the end of bootstrap (kernelLatest).
+            var kernelWords: [(name: String, header: Cell)] = []
+            var userWords:   [(name: String, header: Cell)] = []
+
+            var link = self.readCell(self.LATEST)
+            var safety = 0
+            while link != 0 && safety < 10000 {
+                safety += 1
+                if !self.isValidDictionaryLink(link) { break }
+
+                let flagsLen = self.readByte(Int(link) + 8)
+                let len = Int(flagsLen & self.MASK_NAMELENGTH)
+                var nameBytes: [UInt8] = []
+                for i in 0..<len {
+                    nameBytes.append(self.readByte(Int(link) + 9 + i))
+                }
+                let name = String(bytes: nameBytes, encoding: .utf8) ?? "???"
+
+                if link <= self.kernelLatest {
+                    kernelWords.append((name, link))
+                } else {
+                    userWords.append((name, link))
+                }
+                link = self.readCell(link)
+            }
+
+            // Internal words first, in alphabetic order (case-insensitive)
+            kernelWords.sort { $0.name.uppercased() < $1.name.uppercased() }
+
+            // User words in "compile order" = chronological definition order.
+            // We walked the chain backwards (newest first), so reverse to get oldest-user-first.
+            userWords.reverse()
+
+            // Print kernel section
+            var count = 0
+            for (name, _) in kernelWords {
+                self.tell(name + " ")
+                count += 1
+                if count % 8 == 0 { self.putkey(10) }
+            }
+            if count % 8 != 0 { self.putkey(10) }
+
+            // Then user words (in the order the user actually defined them)
+            for (name, _) in userWords {
+                self.tell(name + " ")
+                count += 1
+                if count % 8 == 0 { self.putkey(10) }
+            }
+            if count % 8 != 0 { self.putkey(10) }
+        }
+
+        _ = register("FORGET") {
+            // The user-facing, classic "FORGET NAME" parsing word.
+            // (The high-level >LFA-based version is available as FORGET-WORD for teaching.)
+            self.validateAndRepairSystemState()
+
+            let name = self.parseWord().uppercased()
+            if name.isEmpty {
+                self.tell("? FORGET needs a name\n")
+                self.errorFlag = true
+                return
+            }
+
+            var link = self.readCell(self.LATEST)
+            var prev: Cell = 0
+            var safety = 0
+            while link != 0 && safety < 10000 {
+                safety += 1
+                if !self.isValidDictionaryLink(link) { break }
+
+                let flagsLen = self.readByte(Int(link) + 8)
+                let len = Int(flagsLen & self.MASK_NAMELENGTH)
+                var nameBytes: [UInt8] = []
+                for i in 0..<len {
+                    nameBytes.append(self.readByte(Int(link) + 9 + i))
+                }
+                let wname = String(bytes: nameBytes, encoding: .utf8) ?? ""
+                if wname.uppercased() == name {
+                    // Safety: do not allow FORGET to remove kernel primitives.
+                    if link <= self.kernelLatest {
+                        self.tell("? Cannot FORGET kernel word '\(name)'\n")
+                        self.errorFlag = true
+                        return
+                    }
+
+                    // Truncate the dictionary: everything from this header onward is forgotten.
+                    // Because all dictionary walkers now use only alignment + buffer-bounds checks
+                    // (plus kernelLatest guard and iteration limits), it is now safe to also
+                    // restore HERE. This reclaims the memory used by the forgotten word(s).
+                    //
+                    // Headers are allocated at increasing addresses. The header at 'link'
+                    // is the first thing we want to reclaim, so new HERE = link.
+                    let newLatest: Cell
+                    if prev == 0 {
+                        // The word being forgotten is the current head of the dictionary.
+                        // Its link field already points at the previous (older) word.
+                        newLatest = self.readCell(link)
+                    } else {
+                        newLatest = prev
+                    }
+                    self.writeCell(self.LATEST, newLatest)
+                    self.writeCell(self.HERE, link)   // reclaim memory from this header forward
+
+                    // Extra defensive repair after modifying critical system variables.
+                    self.validateAndRepairSystemState()
+                    return
+                }
+                prev = link
+                link = self.readCell(link)
+            }
+            self.tell("? \(name) ?\n")
+            self.errorFlag = true
+        }
+
+        _ = register("SEE") {
+            self.validateAndRepairSystemState()
+            let name = self.parseWord().uppercased()
+            if name.isEmpty {
+                self.tell("SEE <name>\n")
+                return
+            }
+            let hdr = self.findWord(name)
+            if hdr == 0 {
+                self.tell("? \(name) ?\n")
+                return
+            }
+
+            self.tell(": " + name + " ")
+
+            let cfa = self.getCFA(hdr)
+            var ip = Int(cfa)
+
+            let first = self.readCell(ip)
+
+            if first == self.docolID {
+                // Proper colon definition — decompile the body and always end with ;
+                ip += 8
+            } else if first < Cell(self.MAX_BUILTIN_ID) {
+                // This is a primitive (CFA starts with small ID followed by EXIT)
+                if let pname = self.primitiveNames[first] {
+                    self.tell(pname + " (primitive) ;\n")
+                } else {
+                    self.tell("primitive ID " + String(first) + " ;\n")
+                }
+                return
+            } else {
+                // Fallback — treat as unknown threaded code
+                self.tell("??? ;\n")
+                return
+            }
+
+            // Much more robust decompiler for the token-threaded model:
+            // - Stop cleanly on EXIT
+            // - High safety limit
+            // - Do not hard-stop on the live HERE (FORGET moves it)
+            // - Try to resolve unknown cells as calls to other words
+            var safety = 0
+            let MAX_CELLS = 4096
+            while safety < MAX_CELLS {
+                safety += 1
+
+                if ip + 8 > self.memory.count { break }
+
+                let cell = self.readCell(ip)
+                ip += 8
+
+                if cell == self.exitID {
+                    // Classic behavior: don't show the final EXIT that ; compiles
+                    break
+                }
+
+                if let pname = self.primitiveNames[cell] {
+                    self.tell(pname + " ")
+                    continue
+                }
+
+                if cell == self.litID {
+                    if ip + 8 <= self.memory.count {
+                        let val = self.readCell(ip)
+                        ip += 8
+                        // Force the cell after LIT to be printed as a decimal number.
+                        // Never let it fall through to name/CFA resolution.
+                        self.tell("\(val) ")
+                    } else {
+                        break
+                    }
+                    continue
+                }
+
+                // Try to resolve as a call to another word by searching for a header
+                // whose CFA matches this cell.
+                var targetHeader = self.readCell(self.LATEST)
+                var foundName: String? = nil
+                var walkSafety = 0
+                while targetHeader != 0 && walkSafety < 10000 {
+                    walkSafety += 1
+                    if !self.isValidDictionaryLink(targetHeader) { break }
+                    if self.getCFA(targetHeader) == cell {
+                        let flagsLen = self.readByte(Int(targetHeader) + 8)
+                        let len = Int(flagsLen & self.MASK_NAMELENGTH)
+                        var nameBytes: [UInt8] = []
+                        for i in 0..<len {
+                            nameBytes.append(self.readByte(Int(targetHeader) + 9 + i))
+                        }
+                        foundName = String(bytes: nameBytes, encoding: .utf8)
+                        break
+                    }
+                    targetHeader = self.readCell(targetHeader)
+                }
+
+                if let n = foundName {
+                    self.tell(n + " ")
+                } else {
+                    self.tell("\(cell) ")
+                }
+            }
+
+            self.tell(";\n")
+        }
+
+        // === Additional utility words from old GrokForth style ===
+
+        _ = register("DEPTH") {
+            let depth = Int(self.spGet() - 1)
+            self.push(Cell(depth))
+        }
+
+        _ = register("HEX")     { self.writeCell(self.BASE, 16) }
+        _ = register("DECIMAL") { self.writeCell(self.BASE, 10) }
+        _ = register("OCTAL")   { self.writeCell(self.BASE, 8) }
+        _ = register("BINARY")  { self.writeCell(self.BASE, 2) }
+
+        _ = register("RESET") {
+            self.resetToSafeState()
+            self.clearScreenRequested = true
+        }
+
+        // BYE — quit the host application
+        _ = register("BYE") {
+            self.quitRequested = true
+            self.onQuitRequested?()
+        }
+
+        // Simple DUMP ( addr u -- )  prints u cells starting at addr
+        _ = register("DUMP") {
+            let u = Int(self.pop())
+            var addr = Int(self.pop())
+            for i in 0..<u {
+                if i > 0 && i % 8 == 0 { self.putkey(10) }
+                let val = self.readCell(addr)
+                self.tell(String(format: "%016llx ", UInt64(bitPattern: Int64(val))))
+                addr += 8
+            }
+            self.putkey(10)
+        }
+
+        // .(  immediate — print characters until )
+        _ = register(".(", immediate: true) {
+            while !self.inputQueue.isEmpty {
+                let c = self.inputQueue.removeFirst()
+                if c == 41 { break } // ')'
+                self.putkey(c)
+            }
+        }
 
         // Simple CONSTANT (enough for education)
         _ = register("CONSTANT") {
@@ -781,6 +1171,27 @@ public final class LBForth {
 
         // BL
         defineConstant("BL", 32)
+
+        // === High-level dictionary traversal words (for proper FORGET etc.) ===
+
+        // >HEADER ( xt -- header ) is a primitive (see registration above).
+        // It searches the dictionary and returns the start of the header
+        // (the link field address) for the word with that code field address.
+        // This is the key traversal word from CFA back toward NFA/LFA.
+
+        // >LFA is an alias (in this header layout the link field is at the
+        // very start of the header, so >HEADER is effectively >LFA).
+        self.feedLine(": >LFA >HEADER ;")
+
+        // Teaching version: a minimal high-level FORGET that assumes an xt is already
+        // on the stack (from a preceding tick). We deliberately give it a different
+        // name so it does *not* shadow the user-friendly parsing primitive FORGET
+        // (the one registered above that accepts "FORGET NAME" directly and also
+        // restores HERE to reclaim memory).
+        // Users normally just type:   FORGET TEST
+        // The primitive version has the kernelLatest safety guard and good errors.
+        // Advanced / teaching usage:  ' TEST FORGET-WORD
+        self.feedLine(": FORGET-WORD >LFA @ LATEST ! ;")
 
         // We can add more high-level words later by feeding source once we have WORD, FIND, etc.
     }
@@ -866,7 +1277,22 @@ public final class LBForth {
         while let b = inputQueue.first, b > 32 {
             word.append(inputQueue.removeFirst())
         }
-        return String(bytes: word, encoding: .utf8) ?? ""
+
+        var result = String(bytes: word, encoding: .utf8) ?? ""
+
+        // Normalize *any* apostrophe-like characters (macOS smart quotes from the
+        // `~ key or '" key, backtick, etc.) to plain ASCII '. This makes tick,
+        // SEE, FORGET, :, and every other name-consuming word tolerant of real
+        // keyboard input without requiring the user to hunt for the straight quote.
+        // Examples of what users actually type on macOS:
+        //   ‘ test     (curly instead of ' tick)
+        //   see ‘
+        //   ‘foo       (no space — becomes 'foo)
+        if !result.isEmpty {
+            result = String(result.map { isApostropheLike($0) ? "'" : $0 })
+        }
+
+        return result
     }
 
     private func execute(cfa: Cell, firstCell: Cell) {
@@ -965,6 +1391,7 @@ public final class LBForth {
         writeCell(STATE, 0)
         inputQueue.removeAll(keepingCapacity: true)
         debugEnabled = false   // return to clean default
+        clearScreenRequested = false
         // Leave IP wherever it is; the next feedLine will start fresh parsing from
         // whatever input arrives next. Future improvement: point ip at a real QUIT
         // threaded-code sequence once we have one.
@@ -996,8 +1423,8 @@ public final class LBForth {
         if readCell(STATE) != 0 {
             // Do NOT unhide or force STATE=0 here.
             // The definition remains open for further lines.
-            tell("? Error while compiling — definition still open (still hidden).\n")
-            tell("?   Continue entering lines, or type ; on its own to finish.\n")
+            tell("? Compile error — definition is still open.\n")
+            tell("? Type more lines to continue it, or `;` alone to finish it.\n")
         } else {
             // Normal interpretation error — nothing special to do beyond
             // the stack reset below.
@@ -1041,6 +1468,11 @@ public final class LBForth {
         if h < initialDict || h >= MEM_SIZE - 1024 {
             writeCell(HERE, initialDict)
         }
+        // If the dictionary chain looks completely broken, reset LATEST too
+        let l = readCell(LATEST)
+        if l != 0 && !isValidDictionaryLink(l) {
+            writeCell(LATEST, 0)
+        }
 
         let st = readCell(STATE)
         if st != 0 && st != 1 {
@@ -1050,11 +1482,6 @@ public final class LBForth {
         let b = readCell(BASE)
         if b < 2 || b > 36 {
             writeCell(BASE, 10)
-        }
-
-        let l = readCell(LATEST)
-        if l != 0 && (l < 0 || l >= MEM_SIZE) {
-            writeCell(LATEST, 0)
         }
     }
 
@@ -1071,7 +1498,10 @@ public final class LBForth {
     public var dictionarySnapshot: [(name: String, xt: Cell)] {
         var result: [(String, Cell)] = []
         var link = readCell(LATEST)
-        while link != 0 {
+        var safety = 0
+        while link != 0 && safety < 10000 {
+            safety += 1
+            if !isValidDictionaryLink(link) { break }
             let flagsLen = readByte(Int(link) + 8)
             let len = Int(flagsLen & MASK_NAMELENGTH)
             var nameBytes: [UInt8] = []

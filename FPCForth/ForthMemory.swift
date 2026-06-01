@@ -83,10 +83,20 @@ public final class ForthMemory {
         }
     }
 
-    /// Returns a pointer to the raw bytes for advanced use (e.g. later when we implement >BODY etc.).
-    public var rawBuffer: UnsafeMutableRawBufferPointer {
-        UnsafeMutableRawBufferPointer(start: &storage, count: storage.count)
-    }
+    // NOTE: rawBuffer was removed.
+    //
+    // Exposing the internal [UInt8] storage via UnsafeMutableRawBufferPointer
+    // creates a dangling pointer hazard (the compiler correctly warns about this).
+    //
+    // This class (ForthMemory) is legacy / not the active engine.
+    // The current implementation (LBForth) manages its own flat buffer directly.
+    //
+    // If raw pointer access is ever needed in the future, the storage model
+    // should be changed (e.g. to ManagedBuffer or a stable allocation) rather
+    // than trying to vend a pointer to a Swift Array.
+    //
+    // public var rawBuffer: UnsafeMutableRawBufferPointer { ... }
+
 
     // MARK: - Allocation within Regions
 

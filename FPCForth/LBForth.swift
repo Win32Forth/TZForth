@@ -110,6 +110,174 @@ public final class LBForth {
     // Reverse map: primitive ID -> name (for SEE and debugging)
     private var primitiveNames: [Cell: String] = [:]
 
+    // Documentation for built-in words (brought over from historical GrokForthApp
+    // to support HELP <word>).  Name is uppercased.  Stack effect + short description.
+    private static let primitiveHelpData: [(name: String, stack: String, desc: String)] = [
+        // Arithmetic
+        ("+",       "( n1 n2 -- n )",     "addition"),
+        ("-",       "( n1 n2 -- n )",     "subtraction"),
+        ("*",       "( n1 n2 -- n )",     "multiplication"),
+        ("/MOD",    "( n1 n2 -- rem quot )", "remainder and quotient"),
+        ("1+",      "( n -- n+1 )",       "increment"),
+        ("1-",      "( n -- n-1 )",       "decrement"),
+        ("ABS",     "( n -- u )",         "absolute value"),
+        ("NEGATE",  "( n -- -n )",        "negate"),
+        ("MIN",     "( n1 n2 -- min )",   "minimum"),
+        ("MAX",     "( n1 n2 -- max )",   "maximum"),
+        ("AND",     "( n1 n2 -- n )",     "bitwise and"),
+        ("OR",      "( n1 n2 -- n )",     "bitwise or"),
+        ("XOR",     "( n1 n2 -- n )",     "bitwise xor"),
+        ("INVERT",  "( n -- ~n )",        "bitwise invert"),
+        ("LSHIFT",  "( n bits -- n )",    "left shift"),
+        ("RSHIFT",  "( n bits -- n )",    "right shift"),
+        
+        // Stack
+        ("DUP",     "( n -- n n )",       "duplicate top"),
+        ("DROP",    "( n -- )",           "discard top"),
+        ("SWAP",    "( a b -- b a )",     "swap top two"),
+        ("OVER",    "( a b -- a b a )",   "copy second"),
+        ("ROT",     "( a b c -- b c a )", "rotate top three"),
+        ("?DUP",    "( n -- n n | 0 )",   "dup if non-zero"),
+        (">R",      "( n -- ) ( R: -- n )", "to return stack"),
+        ("R>",      "( -- n ) ( R: n -- )", "from return stack"),
+        ("R@",      "( -- n ) ( R: n -- n )", "copy top of return stack"),
+        ("DEPTH",   "( -- n )",           "data stack depth"),
+        
+        // Memory
+        ("@",       "( addr -- n )",      "fetch cell"),
+        ("!",       "( n addr -- )",      "store cell"),
+        ("C@",      "( addr -- byte )",   "fetch byte"),
+        ("C!",      "( byte addr -- )",   "store byte"),
+        ("HERE",    "( -- addr )",        "current dictionary pointer"),
+        ("LATEST",  "( -- addr )",        "latest dictionary header"),
+        ("STATE",   "( -- addr )",        "compilation state variable"),
+        ("BASE",    "( -- addr )",        "current numeric base variable"),
+        ("ALLOT",   "( n -- )",           "allocate n bytes in dictionary"),
+        (",",       "( n -- )",           "compile a cell"),
+        ("C,",      "( b -- )",           "compile a byte"),
+        
+        // Output / Input
+        (".",       "( n -- )",           "print number (with space)"),
+        (".S",      "( -- )",             "print data stack contents"),
+        ("CR",      "( -- )",             "carriage return / newline"),
+        ("SPACE",   "( -- )",             "print one space"),
+        ("EMIT",    "( c -- )",           "print character by code"),
+        ("KEY",     "( -- c )",           "wait for and return next key code"),
+        ("KEY?",    "( -- flag )",        "true if a key is available now"),
+        ("TYPE",    "( addr len -- )",    "print len characters from addr"),
+        ("U.",      "( u -- )",           "print unsigned number"),
+        
+        // Comparisons
+        ("=",       "( n1 n2 -- flag )",  "equal?"),
+        ("<",       "( n1 n2 -- flag )",  "less than?"),
+        (">",       "( n1 n2 -- flag )",  "greater than?"),
+        ("0=",      "( n -- flag )",      "zero?"),
+        ("0<",      "( n -- flag )",      "negative?"),
+        
+        // Dictionary & System
+        ("WORDS",   "( -- )",             "list all words (kernel alpha, then user in order)"),
+        ("SEE",     "( -- name )",        "decompile a word"),
+        ("HELP",    "( -- ) name",        "show help for a word"),
+        ("' ",      "( -- xt ) name",     "tick: get execution token of name"),
+        ("FORGET",  "( -- ) name",        "forget name and all words defined after it"),
+        ("FORGET-WORD", "( xt -- )",      "forget using xt ( ' NAME FORGET-WORD )"),
+        (">HEADER", "( xt -- header )",   "convert xt to header address"),
+        (">LFA",    "( xt -- lfa )",      "convert xt to link field (alias for >HEADER)"),
+        ("VARIABLE","( -- ) name",        "create a variable"),
+        ("CONSTANT","( n -- ) name",      "create a constant"),
+        ("TRUE",    "( -- -1 )",          "true flag"),
+        ("FALSE",   "( -- 0 )",           "false flag"),
+        ("BL",      "( -- 32 )",          "blank character (space)"),
+        ("DUMP",    "( addr u -- )",      "dump u cells starting at addr"),
+        (".(",      "( -- )",             "print text until ) immediately (immediate)"),
+        ("(",       "( -- )",             "comment until ) (immediate)"),
+        ("DEBUG-ON","( -- )",             "enable per-line [DEBUG] state+stack output"),
+        ("DEBUG-OFF","( -- )",            "disable per-line debug output"),
+        ("RESET",   "( -- )",             "reset stacks, state, clear screen"),
+        ("CLS",     "( -- )",             "clear the console screen"),
+        
+        // Base
+        ("HEX",     "( -- )",             "set BASE to 16"),
+        ("DECIMAL", "( -- )",             "set BASE to 10"),
+        ("OCTAL",   "( -- )",             "set BASE to 8"),
+        ("BINARY",  "( -- )",             "set BASE to 2"),
+        
+        // Control flow (many are immediate)
+        (":",       "( -- ) name",        "start colon definition"),
+        (";",       "( -- )",             "end colon definition (immediate)"),
+        ("[",       "( -- )",             "enter interpret mode (immediate)"),
+        ("]",       "( -- )",             "enter compile mode"),
+        ("BEGIN",   "( -- )",             "start indefinite loop (immediate)"),
+        ("AGAIN",   "( -- )",             "unconditional branch back (immediate)"),
+        ("UNTIL",   "( flag -- )",        "loop until true (immediate)"),
+        ("WHILE",   "( flag -- )",        "conditional exit from BEGIN (immediate)"),
+        ("REPEAT",  "( -- )",             "branch back from WHILE (immediate)"),
+        ("IF",      "( flag -- )",        "conditional (immediate)"),
+        ("ELSE",    "( -- )",             "else part of IF (immediate)"),
+        ("THEN",    "( -- )",             "end of IF/ELSE (immediate)"),
+        ("0BRANCH", "( -- )",             "internal: branch if zero"),
+        ("BRANCH",  "( -- )",             "internal: unconditional branch"),
+        ("LIT",     "( -- n )",           "internal: literal value"),
+        ("EXIT",    "( -- )",             "return from colon definition"),
+        ("DO",      "( limit start -- )", "start counted loop (not fully implemented)"),
+        ("LOOP",    "( -- )",             "end DO loop (not fully implemented)"),
+        ("I",       "( -- n )",           "current DO loop index (stub)"),
+        
+        // Comparisons & logic
+        ("=",       "( n1 n2 -- flag )",  "equal"),
+        ("<",       "( n1 n2 -- flag )",  "less than"),
+        (">",       "( n1 n2 -- flag )",  "greater than"),
+        ("0=",      "( n -- flag )",      "zero?"),
+        ("0<",      "( n -- flag )",      "negative?"),
+        ("0>",      "( n -- flag )",      "positive?"),
+        
+        // Misc
+        ("CELL+",   "( addr -- addr' )",  "add size of one cell"),
+        ("CELLS",   "( n -- n )",         "cells to address units"),
+        ("CHAR+",   "( addr -- addr' )",  "add size of one char"),
+        ("CHARS",   "( n -- n )",         "chars to address units"),
+        ("WITHIN",  "( n lo hi -- flag )","true if n is within lo..hi"),
+        ("PICK",    "( n -- n )",         "copy nth stack item (0-based from top)"),
+        ("ROLL",    "( n -- )",           "roll nth item to top"),
+        ("TUCK",    "( a b -- b a b )",   "tuck"),
+        ("NIP",     "( a b -- b )",       "nip"),
+        ("2@",      "( addr -- n1 n2 )",  "fetch two cells"),
+        ("2!",      "( n1 n2 addr -- )",  "store two cells"),
+        ("2>R",     "( n1 n2 -- ) (R: -- )", "two to return stack"),
+        ("2R>",     "( -- n1 n2 ) (R: -- )", "two from return stack"),
+        ("2R@",     "( -- n1 n2 ) (R: -- )", "copy two from return stack"),
+        ("U.",      "( u -- )",           "print unsigned"),
+        ("EMIT",    "( c -- )",           "emit character"),
+        ("TYPE",    "( addr len -- )",    "type string"),
+        ("ARSHIFT", "( n bits -- n )",    "arithmetic right shift"),
+        ("LSHIFT",  "( n bits -- n )",    "logical left shift"),
+        ("RSHIFT",  "( n bits -- n )",    "logical right shift"),
+        ("INVERT",  "( n -- ~n )",        "bitwise invert"),
+        ("ABS",     "( n -- u )",         "absolute value"),
+        ("NEGATE",  "( n -- -n )",        "negate"),
+        ("MIN",     "( n1 n2 -- min )",   "minimum"),
+        ("MAX",     "( n1 n2 -- max )",   "maximum"),
+        ("1+",      "( n -- n+1 )",       "increment"),
+        ("1-",      "( n -- n-1 )",       "decrement"),
+        ("MOD",     "( n1 n2 -- rem )",   "modulo"),
+        ("WITHIN",  "( n lo hi -- f )",   "within range"),
+        ("PICK",    "( n -- n )",         "pick"),
+        ("ROLL",    "( n -- )",           "roll"),
+        ("TUCK",    "( a b -- b a b )",   "tuck"),
+        ("NIP",     "( a b -- b )",       "nip"),
+        ("BL",      "( -- 32 )",          "blank (space)"),
+        ("CHAR",    "( -- c )",           "parse next char (stub)"),
+    ]
+    
+    private static let primitiveHelp: [String: (stack: String, desc: String)] = {
+        var d: [String: (stack: String, desc: String)] = [:]
+        for item in primitiveHelpData {
+            let key = item.name.trimmingCharacters(in: .whitespaces)
+            d[key] = (stack: item.stack, desc: item.desc)
+        }
+        return d
+    }()
+    
     // The address of the QUIT word's threaded code (for restarting the outer loop)
     private var quitCodeAddress: Int = 0
 
@@ -865,6 +1033,9 @@ public final class LBForth {
         _ = register("=")  { let b = self.pop(); let a = self.pop(); self.push(a == b ? -1 : 0) }
         _ = register("<")  { let b = self.pop(); let a = self.pop(); self.push(a <  b ? -1 : 0) }
         _ = register(">")  { let b = self.pop(); let a = self.pop(); self.push(a >  b ? -1 : 0) }
+        _ = register("0=") { let a = self.pop(); self.push(a == 0 ? -1 : 0) }
+        _ = register("0<") { let a = self.pop(); self.push(a <  0 ? -1 : 0) }
+        _ = register("0>") { let a = self.pop(); self.push(a >  0 ? -1 : 0) }
 
         // A couple of stack words that are used constantly in examples
         _ = register("?DUP") { let v = self.pop(); self.push(v); if v != 0 { self.push(v) } }
@@ -887,6 +1058,129 @@ public final class LBForth {
         // Debug output control (default is off)
         _ = register("DEBUG-ON")  { self.debugEnabled = true }
         _ = register("DEBUG-OFF") { self.debugEnabled = false }
+
+        // === Additional words from help data (ported from GrokForthApp) to satisfy HELP ===
+        _ = register("1+") { let a = self.pop(); self.push(a + 1) }
+        _ = register("1-") { let a = self.pop(); self.push(a - 1) }
+        _ = register("ABS") { let a = self.pop(); self.push( a < 0 ? -a : a ) }
+        _ = register("NEGATE") { let a = self.pop(); self.push( -a ) }
+        _ = register("MIN") { let b = self.pop(); let a = self.pop(); self.push( a < b ? a : b ) }
+        _ = register("MAX") { let b = self.pop(); let a = self.pop(); self.push( a > b ? a : b ) }
+        _ = register("AND") { let b = self.pop(); let a = self.pop(); self.push( a & b ) }
+        _ = register("OR") { let b = self.pop(); let a = self.pop(); self.push( a | b ) }
+        _ = register("XOR") { let b = self.pop(); let a = self.pop(); self.push( a ^ b ) }
+        _ = register("INVERT") { let a = self.pop(); self.push( ~a ) }
+        _ = register("LSHIFT") { let sh = self.pop(); let a = self.pop(); self.push( a << sh ) }
+        _ = register("RSHIFT") { let sh = self.pop(); let a = self.pop(); self.push( a >> sh ) }
+        _ = register("ARSHIFT") { let sh = self.pop(); let a = self.pop(); self.push( a >> sh ) }
+
+        _ = register(">R") { self.rpush( self.pop() ) }
+        _ = register("R>") { self.push( self.rpop() ) }
+        _ = register("R@") {
+            let rs = self.rspGet()
+            if rs < 2 { self.tell("? Return stack underflow\n"); self.errorFlag = true; self.push(0); return }
+            self.push( self.readCell( self.rstackBase + (rs - 2) * 8 ) )
+        }
+        _ = register("2>R") { let n2 = self.pop(); let n1 = self.pop(); self.rpush(n1); self.rpush(n2) }
+        _ = register("2R>") { let n2 = self.rpop(); let n1 = self.rpop(); self.push(n1); self.push(n2) }
+        _ = register("2R@") {
+            let rs = self.rspGet()
+            if rs < 3 { self.tell("? Return stack underflow\n"); self.errorFlag = true; self.push(0); self.push(0); return }
+            let n2 = self.readCell(self.rstackBase + (rs-2)*8 )
+            let n1 = self.readCell(self.rstackBase + (rs-3)*8 )
+            self.push(n1); self.push(n2)
+        }
+
+        _ = register("PICK") {
+            let n = Int(self.pop())
+            if n < 0 { self.push(0); return }
+            var saved: [Cell] = []
+            for _ in 0...n { saved.append( self.pop() ) }
+            let picked = saved[n]
+            for i in (0..<saved.count).reversed() { self.push( saved[i] ) }
+            self.push( picked )
+        }
+        _ = register("ROLL") {
+            let n = Int(self.pop())
+            if n <= 0 { return }
+            var saved: [Cell] = []
+            for _ in 0...n { saved.append( self.pop() ) }
+            let rolled = saved[n]
+            for i in (0..<n).reversed() { self.push( saved[i] ) }
+            self.push( rolled )
+        }
+        _ = register("TUCK") { let b = self.pop(); let a = self.pop(); self.push(b); self.push(a); self.push(b) }
+        _ = register("NIP") { let b = self.pop(); _ = self.pop(); self.push(b) }
+
+        _ = register("2@") {
+            let a = Int(self.pop())
+            let x2 = self.readCell(a)
+            let x1 = self.readCell(a + 8)
+            self.push(x1); self.push(x2)
+        }
+        _ = register("2!") {
+            let a = Int(self.pop())
+            let x2 = self.pop()
+            let x1 = self.pop()
+            self.writeCell(a, x1)
+            self.writeCell(a + 8, x2)
+        }
+
+        _ = register("CELL+") { let a = self.pop(); self.push(a + 8) }
+        _ = register("CELLS") { let n = self.pop(); self.push(n * 8) }
+        _ = register("CHAR+") { let a = self.pop(); self.push(a + 1) }
+        _ = register("CHARS") { let n = self.pop(); self.push(n ) } // bytes here are 1:1 with cells? for char addr units
+        _ = register("-!") { let a = Int(self.pop()); let n = self.pop(); let old = self.readCell(a); self.writeCell(a, old - n) }
+
+        _ = register("WITHIN") {
+            let hi = self.pop(); let lo = self.pop(); let n = self.pop()
+            self.push( (lo <= n && n < hi) ? -1 : 0 )
+        }
+
+        _ = register("SPACES") { let n = Int(self.pop()); for _ in 0..<n { self.putkey(32) } }
+        _ = register("U.") {
+            let v = self.pop()
+            let u = UInt64( bitPattern: Int64(v) )
+            self.tell( String(u) ); self.putkey(32)
+        }
+        _ = register("U.R") {
+            let wid = Int(self.pop())
+            let v = self.pop()
+            let u = UInt64( bitPattern: Int64(v) )
+            var s = String(u)
+            if s.count < wid { s = String(repeating: " ", count: wid - s.count) + s }
+            self.tell(s)
+        }
+        _ = register("TYPE") {
+            let len = Int(self.pop())
+            let addr = Int(self.pop())
+            for i in 0..<len {
+                self.putkey( self.readByte(addr + i) )
+            }
+        }
+
+        _ = register("MOD") {
+            let b = self.pop(); let a = self.pop()
+            if b == 0 { self.tell("? Division by zero\n"); self.errorFlag = true; self.push(0); return }
+            self.push( a % b )
+        }
+
+        _ = register("ALLOT") { let n = self.pop(); let h = self.readCell(self.HERE); self.writeCell(self.HERE, h + n) }
+
+        _ = register("CHAR") {
+            let w = self.parseWord()
+            if w.isEmpty { self.push(0); return }
+            self.push( Int( w.utf8.first ?? 0 ) )
+        }
+
+        // Stubs for loop words present in help data
+        _ = register("DO") { self.tell("? DO/LOOP not implemented yet\n"); self.errorFlag = true }
+        _ = register("LOOP") { self.tell("? DO/LOOP not implemented yet\n"); self.errorFlag = true }
+        _ = register("UNLOOP") { self.tell("? UNLOOP not implemented yet\n"); self.errorFlag = true }
+        _ = register("LEAVE") { self.tell("? LEAVE not implemented yet\n"); self.errorFlag = true }
+        _ = register("?DO") { self.tell("? ?DO not implemented yet\n"); self.errorFlag = true }
+        _ = register("I") { self.tell("? I not implemented yet\n"); self.errorFlag = true; self.push(0) }
+        _ = register("+LOOP") { self.tell("? +LOOP not implemented yet\n"); self.errorFlag = true }
 
         // === Utility words ported/adapted from GrokForth style ===
 
@@ -1012,6 +1306,27 @@ public final class LBForth {
             self.errorFlag = true
         }
 
+        _ = register("HELP") {
+            self.validateAndRepairSystemState()
+            let name = self.parseWord().uppercased()
+            if name.isEmpty {
+                self.tell("HELP <word>\n")
+                return
+            }
+            let lookupName = name.trimmingCharacters(in: .whitespaces)
+            let hdr = self.findWord(lookupName)
+            if hdr == 0 {
+                self.tell("? \(lookupName) ?\n")
+                return
+            }
+            // First the SEE/decompile (using shared helper)
+            self.printDecompiled(name: lookupName, hdr: hdr)
+            // Then the HELP information on the next line
+            if let info = Self.primitiveHelp[lookupName] {
+                self.tell("\(lookupName)  \(info.stack)  \(info.desc)\n")
+            }
+        }
+
         _ = register("SEE") {
             self.validateAndRepairSystemState()
             let name = self.parseWord().uppercased()
@@ -1025,97 +1340,11 @@ public final class LBForth {
                 return
             }
 
-            self.tell(": " + name + " ")
-
-            let cfa = self.getCFA(hdr)
-            var ip = Int(cfa)
-
-            let first = self.readCell(ip)
-
-            if first == self.docolID {
-                // Proper colon definition — decompile the body and always end with ;
-                ip += 8
-            } else if first < Cell(self.MAX_BUILTIN_ID) {
-                // This is a primitive (CFA starts with small ID followed by EXIT)
-                if let pname = self.primitiveNames[first] {
-                    self.tell(pname + " (primitive) ;\n")
-                } else {
-                    self.tell("primitive ID " + String(first) + " ;\n")
-                }
-                return
-            } else {
-                // Fallback — treat as unknown threaded code
-                self.tell("??? ;\n")
-                return
+            self.printDecompiled(name: name, hdr: hdr)
+            // Make SEE also a synonym of the combined HELP: append help info if available
+            if let info = Self.primitiveHelp[name] {
+                self.tell("\(name)  \(info.stack)  \(info.desc)\n")
             }
-
-            // Much more robust decompiler for the token-threaded model:
-            // - Stop cleanly on EXIT
-            // - High safety limit
-            // - Do not hard-stop on the live HERE (FORGET moves it)
-            // - Try to resolve unknown cells as calls to other words
-            var safety = 0
-            let MAX_CELLS = 4096
-            while safety < MAX_CELLS {
-                safety += 1
-
-                if ip + 8 > self.memory.count { break }
-
-                let cell = self.readCell(ip)
-                ip += 8
-
-                if cell == self.exitID {
-                    // Classic behavior: don't show the final EXIT that ; compiles
-                    break
-                }
-
-                if let pname = self.primitiveNames[cell] {
-                    self.tell(pname + " ")
-                    continue
-                }
-
-                if cell == self.litID {
-                    if ip + 8 <= self.memory.count {
-                        let val = self.readCell(ip)
-                        ip += 8
-                        // Force the cell after LIT to be printed as a decimal number.
-                        // Never let it fall through to name/CFA resolution.
-                        self.tell("\(val) ")
-                    } else {
-                        break
-                    }
-                    continue
-                }
-
-                // Try to resolve as a call to another word by searching for a header
-                // whose CFA matches this cell.
-                var targetHeader = self.readCell(self.LATEST)
-                var foundName: String? = nil
-                var walkSafety = 0
-                while targetHeader != 0 && walkSafety < 10000 {
-                    walkSafety += 1
-                    if !self.isValidDictionaryLink(targetHeader) { break }
-                    if self.getCFA(targetHeader) == cell {
-                        let flagsLen = self.readByte(Int(targetHeader) + 8)
-                        let len = Int(flagsLen & self.MASK_NAMELENGTH)
-                        var nameBytes: [UInt8] = []
-                        for i in 0..<len {
-                            nameBytes.append(self.readByte(Int(targetHeader) + 9 + i))
-                        }
-                        foundName = String(bytes: nameBytes, encoding: .utf8)
-                        break
-                    }
-                    targetHeader = self.readCell(targetHeader)
-                }
-
-                if let n = foundName {
-                    self.tell(n + " ")
-                } else {
-                    self.tell("\(cell) ")
-                }
-            }
-
-            self.tell(";\n")
         }
 
         // === Additional utility words from old GrokForth style ===
@@ -1429,6 +1658,89 @@ public final class LBForth {
             tell("? Execution limit exceeded (possible infinite loop or very deep recursion)\n")
             errorFlag = true
         }
+    }
+
+    /// Shared decompiler used by both SEE and HELP.
+    /// Prints the classic ": NAME body ;" or primitive form.
+    private func printDecompiled(name: String, hdr: Cell) {
+        self.tell(": " + name + " ")
+
+        let cfa = self.getCFA(hdr)
+        var ip = Int(cfa)
+
+        let first = self.readCell(ip)
+
+        if first == self.docolID {
+            ip += 8
+        } else if first < Cell(self.MAX_BUILTIN_ID) {
+            if let pname = self.primitiveNames[first] {
+                self.tell(pname + " (primitive) ;\n")
+            } else {
+                self.tell("primitive ID " + String(first) + " ;\n")
+            }
+            return
+        } else {
+            self.tell("??? ;\n")
+            return
+        }
+
+        var safety = 0
+        let MAX_CELLS = 4096
+        while safety < MAX_CELLS {
+            safety += 1
+
+            if ip + 8 > self.memory.count { break }
+
+            let cell = self.readCell(ip)
+            ip += 8
+
+            if cell == self.exitID {
+                break
+            }
+
+            if let pname = self.primitiveNames[cell] {
+                self.tell(pname + " ")
+                continue
+            }
+
+            if cell == self.litID {
+                if ip + 8 <= self.memory.count {
+                    let val = self.readCell(ip)
+                    ip += 8
+                    self.tell("\(val) ")
+                } else {
+                    break
+                }
+                continue
+            }
+
+            var targetHeader = self.readCell(self.LATEST)
+            var foundName: String? = nil
+            var walkSafety = 0
+            while targetHeader != 0 && walkSafety < 10000 {
+                walkSafety += 1
+                if !self.isValidDictionaryLink(targetHeader) { break }
+                if self.getCFA(targetHeader) == cell {
+                    let flagsLen = self.readByte(Int(targetHeader) + 8)
+                    let len = Int(flagsLen & self.MASK_NAMELENGTH)
+                    var nameBytes: [UInt8] = []
+                    for i in 0..<len {
+                        nameBytes.append(self.readByte(Int(targetHeader) + 9 + i))
+                    }
+                    foundName = String(bytes: nameBytes, encoding: .utf8)
+                    break
+                }
+                targetHeader = self.readCell(targetHeader)
+            }
+
+            if let n = foundName {
+                self.tell(n + " ")
+            } else {
+                self.tell("\(cell) ")
+            }
+        }
+
+        self.tell(";\n")
     }
 
     // MARK: - Public helpers for the console / education

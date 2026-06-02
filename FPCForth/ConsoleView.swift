@@ -72,6 +72,22 @@ struct ConsoleView: View {
                     }
                     return .handled
                 }
+
+                // Normal (non-KEY) case: if we're at an "empty prompt" (no new user-typed content
+                // since the last protected output), treat this Return as an empty-line commit.
+                // Suppress the newline insertion (.handled) to avoid adding arbitrary blank lines
+                // to the console text. Manually feed an empty line so the engine prints "OK".
+                // The onOutput from the engine will append "OK\n", giving the acknowledgment
+                // without an extra user-inserted blank line.
+                let userPortion = String(consoleText.dropFirst(protectedLength))
+                let lastLine = userPortion.components(separatedBy: .newlines).last ?? ""
+                let trimmed = lastLine.trimmingCharacters(in: .whitespacesAndNewlines)
+                if trimmed.isEmpty {
+                    forth.feedLine("")
+                    lastKeyConsumedUserLength = 0
+                    return .handled
+                }
+
                 return .ignored
             }
             // Listen for menu commands from the Tools menu (defined at App level)
@@ -172,55 +188,74 @@ struct ConsoleView: View {
                     return true
                 }
 
-            guard !candidateLines.isEmpty else { return }
-
-            for lineToSend in candidateLines {
-                // Do not pollute command history with single-char responses supplied to a waiting KEY.
-                if !forth.waitingForKey {
-                    commandHistory.append(lineToSend)
-                    if commandHistory.count > 30 {
-                        commandHistory.removeFirst()
-                    }
-                }
-            }
-
-            historyIndex = -1
-
-            // Advance protected synchronously right now to cover all these candidate lines
-            // (commands or key supplies). This must be done before the async dispatch below,
-            // otherwise fast subsequent typing (new onChange) can re-collect previous lines
-            // into userPortion (because protected updates from dispatch/onOutput/ensure are async).
-            // Critical for KEY suspension: prevents old "key ..." lines from being re-processed
-            // as key supplies (which caused providing wrong chars like 'k'=107 and re-feeding
-            // the curly supply line as a tick command).
+            // Always advance protected synchronously for this return commit.
+            // This ensures the (possibly empty) line is marked as processed before async
+            // dispatch/output, preventing re-collection races.
             protectedLength = fullText.count
 
-            DispatchQueue.main.async {
+            if !candidateLines.isEmpty {
                 for lineToSend in candidateLines {
-                    if forth.waitingForKey {
-                        // Only treat the *last* line in this batch as the key supplier.
-                        // Earlier lines in the list may be stale previous command lines that were
-                        // included due to async protected lag; we must not re-provide from them.
-                        if lineToSend == candidateLines.last {
-                            // KEY is blocked waiting for a character. Use the first character
-                            // of what the user just typed as the key value. This makes KEY
-                            // behave in a classic blocking way from the user's perspective.
-                            if let first = lineToSend.first {
-                                // Use unicode scalar for proper support of non-ASCII keys (e.g. curly quotes for testing)
-                                let scalar = first.unicodeScalars.first?.value ?? 0
-                                forth.provideKey(Int(scalar))
-                            }
+                    // Do not pollute command history with single-char responses supplied to a waiting KEY.
+                    if !forth.waitingForKey {
+                        commandHistory.append(lineToSend)
+                        if commandHistory.count > 30 {
+                            commandHistory.removeFirst()
                         }
-                        // Mark this supply line as consumed immediately so it doesn't get re-collected
-                        // and re-fed as a command in later onChanges (due to async protected updates).
-                        protectedLength = consoleText.count
-                    } else {
-                        forth.feedLine(lineToSend)
-                        // Advance protected to cover the command line sync. This helps with suspended
-                        // commands (like KEY) so that subsequent onChanges for key supply don't re-include
-                        // previous command lines in candidates.
-                        protectedLength = consoleText.count
                     }
+                }
+
+                historyIndex = -1
+
+                DispatchQueue.main.async {
+                    for lineToSend in candidateLines {
+                        if forth.waitingForKey {
+                            // Only treat the *last* line in this batch as the key supplier.
+                            // Earlier lines in the list may be stale previous command lines that were
+                            // included due to async protected lag; we must not re-provide from them.
+                            if lineToSend == candidateLines.last {
+                                // KEY is blocked waiting for a character. Use the first character
+                                // of what the user just typed as the key value. This makes KEY
+                                // behave in a classic blocking way from the user's perspective.
+                                if let first = lineToSend.first {
+                                    // Use unicode scalar for proper support of non-ASCII keys (e.g. curly quotes for testing)
+                                    let scalar = first.unicodeScalars.first?.value ?? 0
+                                    forth.provideKey(Int(scalar))
+                                }
+                            }
+                            // Mark this supply line as consumed immediately so it doesn't get re-collected
+                            // and re-fed as a command in later onChanges (due to async protected updates).
+                            protectedLength = consoleText.count
+                        } else {
+                            forth.feedLine(lineToSend)
+                            // Advance protected to cover the command line sync. This helps with suspended
+                            // commands (like KEY) so that subsequent onChanges for key supply don't re-include
+                            // previous command lines in candidates.
+                            protectedLength = consoleText.count
+                        }
+
+                        if forth.clearScreenRequested {
+                            consoleText = "=== FPCForth (lbForth model) ===\n\n"
+                            protectedLength = consoleText.count
+                            lastKeyConsumedUserLength = 0
+                            forth.clearScreenRequested = false
+                        }
+                    }
+
+                    // Ensure the cursor ends up on a fresh line after the whole paste/block.
+                    DispatchQueue.main.async {
+                        if !consoleText.hasSuffix("\n") {
+                            consoleText += "\n"
+                            protectedLength = consoleText.count
+                        }
+                    }
+                }
+            } else {
+                // Empty return on the prompt (nothing new to execute since last output).
+                // Feed an empty line so the engine prints "OK" (interpreting empty input
+                // as "nothing to do" in interpret mode). This gives the user the expected
+                // acknowledgment instead of a silent extra newline.
+                DispatchQueue.main.async {
+                    forth.feedLine("")
 
                     if forth.clearScreenRequested {
                         consoleText = "=== FPCForth (lbForth model) ===\n\n"
@@ -228,13 +263,13 @@ struct ConsoleView: View {
                         lastKeyConsumedUserLength = 0
                         forth.clearScreenRequested = false
                     }
-                }
 
-                // Ensure the cursor ends up on a fresh line after the whole paste/block.
-                DispatchQueue.main.async {
-                    if !consoleText.hasSuffix("\n") {
-                        consoleText += "\n"
-                        protectedLength = consoleText.count
+                    // Ensure the cursor ends up on a fresh line.
+                    DispatchQueue.main.async {
+                        if !consoleText.hasSuffix("\n") {
+                            consoleText += "\n"
+                            protectedLength = consoleText.count
+                        }
                     }
                 }
             }

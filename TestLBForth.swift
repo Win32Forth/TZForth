@@ -43,11 +43,8 @@ while let line = readLine() {
         break
     }
     
-    if trimmed.isEmpty {
-        continue
-    }
-    
-    // Send the line to the engine
+    // Send the line to the engine (empty lines are fed too so the engine prints "OK"
+    // for "nothing to do", matching the console behavior).
     forth.feedLine(line)
 
     // Support blocking KEY in the standalone tester: if the previous feed

@@ -11,7 +11,7 @@ extension Notification.Name {
 /// A reusable console view that mimics the classic Forth REPL feel.
 /// This version drives the real LBForth engine (Leif Bruder's public-domain model).
 struct ConsoleView: View {
-    @State private var consoleText = "=== FPCForth (lbForth model) ===\n\n"
+    @State private var consoleText = "=== TZForth (lbForth model) ===\n\n"
     @State private var commandHistory: [String] = []
     @State private var historyIndex = -1
     @State private var isRecallingHistory = false
@@ -94,13 +94,13 @@ struct ConsoleView: View {
             }
             // Listen for menu commands from the Tools menu (defined at App level)
             .onReceive(NotificationCenter.default.publisher(for: .clearConsole)) { _ in
-                consoleText = "=== FPCForth (lbForth model) ===\n\n"
+                consoleText = "=== TZForth (lbForth model) ===\n\n"
                 protectedLength = consoleText.count
                 forth.clearScreenRequested = false
             }
             .onReceive(NotificationCenter.default.publisher(for: .resetForth)) { _ in
                 forth.resetToSafeState()
-                consoleText = "=== FPCForth (lbForth model) ===\n\n"
+                consoleText = "=== TZForth (lbForth model) ===\n\n"
                 protectedLength = consoleText.count
                 forth.clearScreenRequested = false
             }
@@ -244,7 +244,7 @@ struct ConsoleView: View {
                         }
 
                         if forth.clearScreenRequested {
-                            consoleText = "=== FPCForth (lbForth model) ===\n\n"
+                            consoleText = "=== TZForth (lbForth model) ===\n\n"
                             protectedLength = consoleText.count
                             lastKeyConsumedUserLength = 0
                             forth.clearScreenRequested = false
@@ -270,7 +270,7 @@ struct ConsoleView: View {
                     handlePostFeedActions()
 
                     if forth.clearScreenRequested {
-                        consoleText = "=== FPCForth (lbForth model) ===\n\n"
+                        consoleText = "=== TZForth (lbForth model) ===\n\n"
                         protectedLength = consoleText.count
                         lastKeyConsumedUserLength = 0
                         forth.clearScreenRequested = false
@@ -295,15 +295,15 @@ struct ConsoleView: View {
 
     private func setupInitialWorkingDirectory() {
         // The app is sandboxed (see the container path in FileManager), so its process
-        // currentDirectoryPath starts in ~/Library/Containers/PhotoBubba.FPCForth/Data .
-        // We seed it to ~/Documents (or the last directory from which the user did a
-        // bare "fload" or "edit" via dialog in a previous run). This makes:
-        //   - CHDIR (no arg) and DIR report / start from a visible, useful place
-        //   - "fload foo.fth" / "edit foo" (with name) resolve relative to that place
-        //   - the NSOpenPanel for bare "fload" / "edit" <return> start in a convenient folder
-        //     so you can easily reach Documents/XCodeProjects/FPCForth/OldSources/tcom25
+        // currentDirectoryPath starts in ~/Library/Containers/TZForth.TZForth/Data .
+        // We seed it to the last user-chosen directory (via bookmark for persistent
+        // sandbox access) or fall back to ~/Documents (or a project layout guess via
+        // env). This makes the FLOAD/EDIT dialogs, CHDIR reports, relative FLOAD/EDIT
+        // names, and DIR start in a place the user can actually use.
         //
-        // We also chdir on successful dialog loads/edits and on explicit CHDIR.
+        // Bookmarks are created on successful dialog picks (and best-effort on chdir
+        // when a covering scope exists) so that future launches (and thus named loads
+        // relative to that dir) can re-gain scoped access without re-prompting.
         let fm = FileManager.default
         var target: URL
         if let savedPath = UserDefaults.standard.string(forKey: "LastFLOADDirectory"),

@@ -1,6 +1,6 @@
 //
-//  FPCForthApp.swift
-//  FPCForth
+//  TZForthApp.swift
+//  TZForth
 //
 //  Created by Thomas Zimmer mini on 5/30/26.
 //
@@ -8,7 +8,7 @@
 import SwiftUI
 
 @main
-struct FPCForthApp: App {
+struct TZForthApp: App {
     var body: some Scene {
         WindowGroup {
             ContentView()

@@ -1,4 +1,4 @@
-# FPCForth
+# TZForth
 
 A SwiftUI-based host and development environment for classic FPC / Win32Forth Forth systems.
 
@@ -8,14 +8,15 @@ This project aims to bring the powerful, traditional Forth kernel sources (the `
 
 ## Current State
 
-- Basic SwiftUI macOS/iOS app structure (`FPCForthApp.swift` + `ContentView.swift`)
-- Initial integration of `KERNEL1.SEQ.swift` (the original KERNEL1.SEQ with every line individually commented out for embedding as Swift source)
-- Many additional kernel modules referenced (commented FLOAD list in `ContentView.swift`): VIDEO, KERNEL2–4, POINTER, SAVEREST, HANDLES, etc.
+- Basic SwiftUI macOS/iOS app structure (`TZForthApp.swift` + `ContentView.swift`)
+- The core is a modern Swift re-implementation of Leif Bruder's lbForth token-threaded model (LBForth.swift)
+- Full support for structured programming (IF/ELSE/THEN, BEGIN loops, DO/LOOP, CREATE DOES>), FLOAD, EDIT (opens in system TextEditor + updates cwd), CHDIR/DIR, file echo, block comments \\ ... {, \S stop, etc.
+- OldSources/ contains historical FPC/Win32Forth .FTH sources for reference and loading experiments.
 
 ## Structure
 
-- `FPCForth.xcodeproj/` — Xcode project
-- `FPCForth/` — SwiftUI sources + Forth kernel files (`.SEQ`)
+- `TZForth.xcodeproj/` — Xcode project
+- `TZForth/` — SwiftUI sources + LBForth engine (the main implementation)
 
 ## Next Steps (planned)
 

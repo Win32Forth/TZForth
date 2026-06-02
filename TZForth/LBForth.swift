@@ -1,6 +1,6 @@
 //
 //  LBForth.swift
-//  FPCForth
+//  TZForth
 //
 //  A Swift port of the core ideas from Leif Bruder's lbForth (public domain).
 //  https://gist.github.com/lbruder/10007431

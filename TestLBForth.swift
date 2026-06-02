@@ -5,8 +5,8 @@
 //
 //  How to run:
 //
-//      cd /path/to/FPCForth
-//      swift FPCForth/LBForth.swift TestLBForth.swift
+//      cd /path/to/TZForth
+//      swift TZForth/LBForth.swift TestLBForth.swift
 //
 //  This completely bypasses Xcode so you can test the actual Forth engine
 //  while we sort out the Xcode 26.5 build service crashes.

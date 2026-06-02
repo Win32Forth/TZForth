@@ -1,6 +1,6 @@
 //
 //  ContentView.swift
-//  FPCForth
+//  TZForth
 //
 //  Created by Thomas Zimmer mini on 5/30/26.
 //

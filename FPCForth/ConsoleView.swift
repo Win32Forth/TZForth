@@ -1,5 +1,7 @@
 import SwiftUI
 import AppKit   // for NSApplication.terminate when BYE is executed
+import Foundation  // for FileManager (current dir for NSOpenPanel)
+import UniformTypeIdentifiers  // for allowedContentTypes (replaces deprecated allowedFileTypes)
 
 extension Notification.Name {
     static let clearConsole = Notification.Name("ClearConsole")
@@ -106,11 +108,18 @@ struct ConsoleView: View {
             .padding(8)
             .onAppear {
                 isFocused = true
+
+                // Establish a useful starting directory (~/Documents or last-used) instead of
+                // the sandbox container path. This makes the FLOAD/EDIT dialogs, CHDIR reports,
+                // relative FLOAD/EDIT names, and DIR start in a place the user can actually use.
+                setupInitialWorkingDirectory()
+
                 // Hook the Forth output callback
                 forth.onOutput = { text in
                     DispatchQueue.main.async {
                         consoleText += text
                         protectedLength = consoleText.count
+                        handlePostFeedActions()
                     }
                 }
 
@@ -231,6 +240,7 @@ struct ConsoleView: View {
                             // commands (like KEY) so that subsequent onChanges for key supply don't re-include
                             // previous command lines in candidates.
                             protectedLength = consoleText.count
+                            handlePostFeedActions()
                         }
 
                         if forth.clearScreenRequested {
@@ -257,6 +267,8 @@ struct ConsoleView: View {
                 DispatchQueue.main.async {
                     forth.feedLine("")
 
+                    handlePostFeedActions()
+
                     if forth.clearScreenRequested {
                         consoleText = "=== FPCForth (lbForth model) ===\n\n"
                         protectedLength = consoleText.count
@@ -273,6 +285,176 @@ struct ConsoleView: View {
                     }
                 }
             }
+        }
+
+        // Catch FLOAD/EDIT *Requested (dialog forms) or pendingEditURL (named EDIT) that were
+        // triggered by code execution inside a feedLine (e.g. "EDIT" or "FLOAD" with no name,
+        // or named EDIT inside a colon def or loaded source) even if no fresh typing occurred.
+        handlePostFeedActions()
+    }
+
+    private func setupInitialWorkingDirectory() {
+        // The app is sandboxed (see the container path in FileManager), so its process
+        // currentDirectoryPath starts in ~/Library/Containers/PhotoBubba.FPCForth/Data .
+        // We seed it to ~/Documents (or the last directory from which the user did a
+        // bare "fload" or "edit" via dialog in a previous run). This makes:
+        //   - CHDIR (no arg) and DIR report / start from a visible, useful place
+        //   - "fload foo.fth" / "edit foo" (with name) resolve relative to that place
+        //   - the NSOpenPanel for bare "fload" / "edit" <return> start in a convenient folder
+        //     so you can easily reach Documents/XCodeProjects/FPCForth/OldSources/tcom25
+        //
+        // We also chdir on successful dialog loads/edits and on explicit CHDIR.
+        let fm = FileManager.default
+        var target: URL
+        if let savedPath = UserDefaults.standard.string(forKey: "LastFLOADDirectory"),
+           fm.fileExists(atPath: savedPath) {
+            target = URL(fileURLWithPath: savedPath)
+        } else {
+            let home = fm.homeDirectoryForCurrentUser
+            let docs = home.appendingPathComponent("Documents")
+            target = fm.fileExists(atPath: docs.path) ? docs : home
+        }
+        _ = fm.changeCurrentDirectoryPath(target.path)
+        // (If the chdir is blocked by sandbox for the saved path we still proceed;
+        // the panel below will still get a reasonable directoryURL from whatever cwd we have.)
+    }
+
+    private func showFileLoadDialog() {
+        let requested = forth.fileLoadRequested
+        forth.fileLoadRequested = false
+        forth.fileEditRequested = false
+        forth.pendingEditURL = nil
+        guard requested else { return }
+
+        let panel = NSOpenPanel()
+        panel.title = "FLOAD Forth Source"
+        panel.message = "Select a .fth file (or text file) to load and interpret/compile."
+        panel.prompt = "Load"
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = false
+
+        // Use whatever the (seeded + CHDIR-updated) process cwd is. After a successful
+        // dialog load we chdir to the chosen dir so the next panel + CHDIR + relatives follow it.
+        panel.directoryURL = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+        panel.allowedContentTypes = [
+            UTType(filenameExtension: "fth") ?? .plainText,
+            UTType(filenameExtension: "fs") ?? .plainText,
+            .plainText,
+            UTType(filenameExtension: "forth") ?? .plainText
+        ]
+        // Note: allowedContentTypes provides the type filter. To allow picking files outside these
+        // extensions (previous allowsOtherFileTypes behavior), the panel still permits navigation;
+        // users can typically choose "All Files" in the type dropdown or the types act as suggestions.
+
+        panel.begin { result in
+            if result == .OK, let url = panel.url {
+                let parent = url.deletingLastPathComponent()
+                let accessing = url.startAccessingSecurityScopedResource()
+
+                DispatchQueue.main.async {
+                    // Persist the chosen dir so the *next launch* will start the panel / cwd there.
+                    // Also chdir now so this session's CHDIR reports, relative FLOAD names,
+                    // DIR listings, and the *next* bare fload panel all reflect where the user
+                    // just browsed to.
+                    UserDefaults.standard.set(parent.path, forKey: "LastFLOADDirectory")
+                    _ = FileManager.default.changeCurrentDirectoryPath(parent.path)
+
+                    self.forth.loadFile(url)
+
+                    if accessing {
+                        url.stopAccessingSecurityScopedResource()
+                    }
+                }
+            }
+            // Cancel: flag already cleared; no load.
+        }
+    }
+
+    private func handlePostFeedActions() {
+        // Unified handling after a feedLine (or empty) so that FLOAD/EDIT (dialog or named forms)
+        // that were executed during interpretation get serviced promptly. This covers:
+        // - bare "fload" / "edit" (set *Requested flag -> show dialog)
+        // - "fload foo" / "edit foo" (named; for EDIT sets pendingEditURL)
+        // - same when executed from inside colon defs or loaded source.
+        if forth.fileLoadRequested {
+            showFileLoadDialog()
+        }
+        handlePendingEditIfNeeded()
+        if forth.fileEditRequested {
+            showFileEditDialog()
+        }
+    }
+
+    private func handlePendingEditIfNeeded() {
+        guard let url = forth.pendingEditURL else { return }
+        forth.pendingEditURL = nil
+
+        let parent = url.deletingLastPathComponent()
+        // Persist + chdir so that this session's CHDIR/DIR/relative loads + next bare EDIT/FLOAD
+        // panel all start from the folder of the just-edited file. (Matches what dialog path does.)
+        UserDefaults.standard.set(parent.path, forKey: "LastFLOADDirectory")
+        _ = FileManager.default.changeCurrentDirectoryPath(parent.path)
+
+        // For *named* EDIT the URL was resolved from a path spec (possibly with ~), not from a
+        // fresh panel pick, so we may not have a brand-new security scope for it. We still
+        // attempt start/stop for consistency. NSWorkspace.open will launch the user's editor
+        // (TextEdit by default for text/.fth) on the file; the editor itself gets access.
+        let accessing = url.startAccessingSecurityScopedResource()
+        NSWorkspace.shared.open(url)
+        if accessing {
+            url.stopAccessingSecurityScopedResource()
+        }
+    }
+
+    private func showFileEditDialog() {
+        let requested = forth.fileEditRequested
+        forth.fileEditRequested = false
+        forth.fileLoadRequested = false
+        forth.pendingEditURL = nil
+        guard requested else { return }
+
+        let panel = NSOpenPanel()
+        panel.title = "EDIT File in Text Editor"
+        panel.message = "Select a source (or text) file to open in the system default editor (e.g. TextEdit). The current directory will be changed to the file's folder."
+        panel.prompt = "Edit"
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = false
+
+        // Start from the (seeded/CHDIR-updated) cwd, just like FLOAD. Broader content types so
+        // it's easy to pick any text/source while still allowing "All Files" navigation.
+        panel.directoryURL = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+        panel.allowedContentTypes = [
+            UTType(filenameExtension: "fth") ?? .plainText,
+            UTType(filenameExtension: "fs") ?? .plainText,
+            .plainText,
+            UTType(filenameExtension: "forth") ?? .plainText,
+            .text,
+            UTType.item
+        ]
+
+        panel.begin { result in
+            if result == .OK, let url = panel.url {
+                let parent = url.deletingLastPathComponent()
+                let accessing = url.startAccessingSecurityScopedResource()
+
+                DispatchQueue.main.async {
+                    // Same side effects as named EDIT handling and as FLOAD dialog:
+                    // persist last dir (for next launch), chdir (current session + relatives), open editor.
+                    UserDefaults.standard.set(parent.path, forKey: "LastFLOADDirectory")
+                    _ = FileManager.default.changeCurrentDirectoryPath(parent.path)
+
+                    NSWorkspace.shared.open(url)
+
+                    self.forth.editFile(url)
+
+                    if accessing {
+                        url.stopAccessingSecurityScopedResource()
+                    }
+                }
+            }
+            // Cancel: flag cleared; nothing to edit.
         }
     }
     
@@ -328,18 +510,14 @@ struct ConsoleView: View {
     }
     
     private func clearCurrentInputLine() {
-        var lines = consoleText.components(separatedBy: .newlines)
-        guard !lines.isEmpty else { return }
-        
-        let lastIndex = lines.count - 1
-        
-        if lastIndex > 0 && lines[lastIndex].trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            lines[lastIndex - 1] = ""
-        } else {
-            lines[lastIndex] = ""
+        // Truncate back to the last engine output (protectedLength). This removes any
+        // current/partial user input (including partial history attempts) so the recalled
+        // command cleanly replaces the editable area without corrupting previous output
+        // lines or protected state. Much more reliable than trying to edit the last
+        // visual line, especially after FLOAD (which can add many echoed lines + OKs).
+        if consoleText.count > protectedLength {
+            consoleText = String(consoleText.prefix(protectedLength))
         }
-        
-        consoleText = lines.joined(separator: "\n")
     }
 }
 

@@ -1,3 +1,6 @@
+.( HI)
+\s
+
 \\ COMPILE1.SEQ          A true Code compiler for Forth      by Tom Zimmer
 
           An optimizing target compiler for the Public Domain Forth

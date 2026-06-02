@@ -95,6 +95,34 @@ public final class LBForth {
     /// normal line interpretation.
     public var waitingForKey = false
 
+    /// Set by FLOAD when invoked with no filename argument. The host UI observes this flag
+    /// (typically via onOutput or post-feed checks) and presents a file dialog. After the user
+    /// picks a file (or cancels), the host calls loadFile(_:) or clears the flag.
+    public var fileLoadRequested = false
+
+    /// Optional callback invoked when FLOAD needs a filename dialog (for hosts other than the main app).
+    public var onFileLoadRequested: (() -> Void)?
+
+    /// Set by EDIT when invoked with no filename argument. The host UI observes this flag
+    /// and presents a file dialog (similar to FLOAD). After pick, host opens the file in the
+    /// system text editor (via NSWorkspace) and updates cwd to the file's folder.
+    public var fileEditRequested = false
+
+    /// Optional callback invoked when EDIT needs a filename dialog (for hosts other than the main app).
+    public var onFileEditRequested: (() -> Void)?
+
+    /// When EDIT <name> (named form) resolves a file, this URL is set by the engine.
+    /// The host (after feedLine returns, in its post-processing) performs the NSWorkspace.open,
+    /// chdir to parent, and persist of last dir. Cleared by host. This keeps UI/AppKit actions
+    /// out of the engine while still supporting named EDIT like named FLOAD.
+    public var pendingEditURL: URL? = nil
+
+    // Support for \\ (block comment to '{', can span lines in console or during FLOAD)
+    // and \S (stop loading current file; no-op from console).
+    private var inSlashSlashComment = false
+    private var sourceLoadStop = false
+    private var loadNesting = 0
+
     // Primitive dispatch table: ID -> implementation
     private var primitives: [(() -> Void)?] = []
 
@@ -103,9 +131,40 @@ public final class LBForth {
     private var exitID: Cell = 0
     private var litID: Cell = 0
 
+    // Address of the FILE-ECHO variable's data cell (populated at bootstrap).
+    private var fileEchoAddr: Cell = 0
+
     // Low-level branch primitives (captured so high-level control words can compile them)
     private var branchID: Cell = 0
     private var zeroBranchID: Cell = 0
+
+    // CREATE / DOES> support (ANS 2012)
+    private var createRuntimeID: Cell = 0
+    private var dodoesID: Cell = 0
+    private var doesPatchID: Cell = 0
+
+    // Used by (CREATE) and (DOES) runtimes so they can locate their data/does fields
+    // relative to the code cell being executed, even for top-level execution.
+    private var currentCodeAddr: Cell = 0
+
+    // True when the current primitive dispatch came from innerThread (threaded sub-call).
+    // Used by (DOES) to decide whether to manually run the does code (leaf case) or just redirect ip.
+    private var dispatchedFromInnerThread: Bool = false
+
+    // Compile-time stack for DO/LOOP control (dest + sentinel + leave/?DO placeholders).
+    // Using dedicated stack avoids interleaving issues with IF/ELSE/THEN/WHILE markers on data stack.
+    private var loopControlStack: [Cell] = []
+
+    // IDs for words used to emit setup code for DO/LOOP etc at compile time (for clean threaded DO...LOOP)
+    private var swapID: Cell = 0
+    private var toR_ID: Cell = 0
+    private var rFrom_ID: Cell = 0
+    private var rAt_ID: Cell = 0
+    private var dupID: Cell = 0
+    private var dropID: Cell = 0
+    private var onePlusID: Cell = 0
+    private var lessThanID: Cell = 0
+    private var equalsID: Cell = 0
 
     // Reverse map: primitive ID -> name (for SEE and debugging)
     private var primitiveNames: [Cell: String] = [:]
@@ -185,6 +244,8 @@ public final class LBForth {
         (">LFA",    "( xt -- lfa )",      "convert xt to link field (alias for >HEADER)"),
         ("VARIABLE","( -- ) name",        "create a variable"),
         ("CONSTANT","( n -- ) name",      "create a constant"),
+        ("CREATE",  "( -- ) name",        "create a word that pushes its data field address (for use with DOES>)"),
+        ("DOES>",   "( -- )",             "modify last CREATE'd word to execute the following code with data addr on stack (immediate)"),
         ("TRUE",    "( -- -1 )",          "true flag"),
         ("FALSE",   "( -- 0 )",           "false flag"),
         ("BL",      "( -- 32 )",          "blank character (space)"),
@@ -219,9 +280,13 @@ public final class LBForth {
         ("BRANCH",  "( -- )",             "internal: unconditional branch"),
         ("LIT",     "( -- n )",           "internal: literal value"),
         ("EXIT",    "( -- )",             "return from colon definition"),
-        ("DO",      "( limit start -- )", "start counted loop (not fully implemented)"),
-        ("LOOP",    "( -- )",             "end DO loop (not fully implemented)"),
-        ("I",       "( -- n )",           "current DO loop index (stub)"),
+        ("DO",      "( limit start -- )", "start counted loop"),
+        ("LOOP",    "( -- )",             "end DO loop (add 1 to index, branch back if < limit)"),
+        ("I",       "( -- n )",           "current DO loop index"),
+        ("UNLOOP",  "( -- )",             "discard current DO loop params from rstack"),
+        ("LEAVE",   "( -- )",             "exit current DO loop (branch to after LOOP)"),
+        ("?DO",     "( limit start -- )", "start counted loop that skips if start==limit"),
+        ("+LOOP",   "( n -- )",           "end DO loop with custom increment (delta from stack)"),
         
         // Comparisons & logic
         ("=",       "( n1 n2 -- flag )",  "equal"),
@@ -267,6 +332,25 @@ public final class LBForth {
         ("NIP",     "( a b -- b )",       "nip"),
         ("BL",      "( -- 32 )",          "blank (space)"),
         ("CHAR",    "( -- c )",           "parse next char (stub)"),
+
+        // New for FLOAD / EDIT / file helpers (cwd + dialog driven by host for sandbox friendliness)
+        ("\\",      "( -- )",             "comment to end of line (immediate)"),
+        ("\\\\",    "( -- )",             "block comment to next '{' (spans lines in console or FLOAD, for old code) (immediate)"),
+        ("\\S",     "( -- )",             "stop loading current file (no-op in console) (immediate)"),
+        ("FLOAD",   "( -- ) name|dialog", "load .fth file (auto .fth ext + cwd if needed; no name opens dialog)"),
+        ("EDIT",    "( -- ) name|dialog", "open in system text editor (nav dialog or name; updates cwd to file's folder; no load/interpret)"),
+        ("FILE-ECHO","( -- addr )",       "variable controlling FLOAD source echo (use with ON/OFF)"),
+        ("ON",      "( addr -- )",        "store 1 at addr (e.g. file-echo ON)"),
+        ("OFF",     "( addr -- )",        "store 0 at addr (e.g. file-echo OFF)"),
+        ("CHDIR",   "( -- ) path",        "change dir (no arg: show current); supports ~ and relative"),
+        ("DIR",     "( -- ) filespec",    "list dir (no arg: current; <path><filespec> with *? wildcards)"),
+        ("(DO)",    "( limit start -- )", "internal runtime for DO (setup rstack)"),
+        ("(?DO)",   "( limit start -- )", "internal runtime for ?DO"),
+        ("(LOOP)",  "( -- )",             "internal runtime for LOOP"),
+        ("(+LOOP)", "( n -- )",           "internal runtime for +LOOP"),
+        ("(CREATE)", "( -- a-addr )",     "internal runtime for CREATE (pushes data field address)"),
+        ("(DOES)",  "( -- a-addr )",      "internal runtime for CREATE...DOES> children (push data addr + run does code)"),
+        ("(DOES>)", "( -- )",             "internal: patch latest CREATE word for DOES> and return from parent"),
     ]
     
     private static let primitiveHelp: [String: (stack: String, desc: String)] = {
@@ -518,6 +602,229 @@ public final class LBForth {
         runInterpreter()
     }
 
+    // MARK: - FLOAD support (file loading / including source)
+
+    /// Public entry point for the host to load a file after a dialog (or programmatically).
+    /// Clears any pending request flag and processes the file's lines.
+    public func loadFile(_ url: URL) {
+        fileLoadRequested = false
+        fileEditRequested = false
+        pendingEditURL = nil
+        loadFileContents(url)
+    }
+
+    /// Public entry point for the host after EDIT dialog pick (or future programmatic).
+    /// Just clears flags; the actual open-in-editor + chdir + persist is done by the host
+    /// (in showFileEditDialog completion or post-feed handler) because it requires AppKit (NSWorkspace).
+    public func editFile(_ url: URL) {
+        fileEditRequested = false
+        pendingEditURL = nil
+        // No load/interpret happens for EDIT — that's the point (edit bad sources safely before FLOAD).
+    }
+
+    /// Common resolution for FLOAD/EDIT specs (auto .fth if basename has no dot, ~ expansion,
+    /// absolute vs relative to currentDirectoryPath). Factored to keep behavior identical.
+    private func resolvedURL(for spec: String) -> URL {
+        let fm = FileManager.default
+        var name = spec
+        // Only auto-append .fth if the basename has no extension at all (common Forth convention).
+        // If user gave an explicit ext (even .txt), respect it.
+        var base = name
+        if let slash = name.lastIndex(of: "/") ?? name.lastIndex(of: "\\") {
+            base = String(name[name.index(after: slash)...])
+        }
+        if !base.contains(".") {
+            name += ".fth"
+        }
+        let url: URL
+        if name.contains("/") || name.contains("\\") {
+            if name.hasPrefix("~") {
+                let expanded = (name as NSString).expandingTildeInPath
+                url = URL(fileURLWithPath: expanded)
+            } else {
+                url = URL(fileURLWithPath: name)
+            }
+        } else {
+            // Relative to current working directory (as specified).
+            let cwd = fm.currentDirectoryPath
+            url = URL(fileURLWithPath: cwd).appendingPathComponent(name)
+        }
+        return url
+    }
+
+    private func resolveAndLoadFile(spec: String) {
+        let url = resolvedURL(for: spec)
+        loadFileContents(url)
+    }
+
+    /// For named EDIT <spec>: resolve exactly like FLOAD would, set pendingEditURL so the
+    /// host's post-feedLine handler (in ConsoleView) can do NSWorkspace.open + chdir + persist.
+    /// We do not perform chdir or open inside the engine to keep AppKit/UserDefaults concerns
+    /// in the host, and to ensure post-feed checks run uniformly.
+    private func resolveAndEditFile(spec: String) {
+        let url = resolvedURL(for: spec)
+        self.pendingEditURL = url
+    }
+
+    private func loadFileContents(_ url: URL) {
+        do {
+            let data = try Data(contentsOf: url)
+            // Be tolerant of old source files (e.g. renamed .SEQ from OldSources) that may
+            // not be strict UTF-8 (high-bit chars, legacy encodings, etc.). Fall back so
+            // FLOAD doesn't complain "isn’t in the correct format".
+            let content: String
+            if let utf8 = String(data: data, encoding: .utf8) {
+                content = utf8
+            } else if let latin = String(data: data, encoding: .isoLatin1) {
+                content = latin
+            } else {
+                // Last resort: decode with replacement characters for any bad bytes.
+                content = String(decoding: data, as: UTF8.self)
+            }
+            // Split on any line ending (handles \n, \r, \r\n etc. cleanly).
+            let rawLines = content.components(separatedBy: .newlines)
+            let echoOn = (fileEchoAddr != 0) && (readCell(fileEchoAddr) != 0)
+
+            self.loadNesting += 1
+            self.sourceLoadStop = false
+            self.inSlashSlashComment = false
+            defer { self.loadNesting -= 1 }
+
+            for raw in rawLines {
+                if echoOn {
+                    tell(raw + "\n")
+                }
+                let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !trimmed.isEmpty {
+                    feedLine(raw)
+                    if self.sourceLoadStop {
+                        self.sourceLoadStop = false
+                        break
+                    }
+                    if errorFlag {
+                        tell("? FLOAD aborted after error in \(url.lastPathComponent)\n")
+                        break
+                    }
+                }
+            }
+        } catch {
+            tell("? FLOAD could not read '\(url.lastPathComponent)': \(error.localizedDescription)\n")
+            errorFlag = true
+        }
+    }
+
+    // CHDIR support (used by the CHDIR word)
+    private func changeDirectory(spec: String) {
+        let fm = FileManager.default
+        if spec.isEmpty {
+            tell("Current directory: \(fm.currentDirectoryPath)\n")
+            return
+        }
+        let expanded = (spec as NSString).expandingTildeInPath
+        let newURL: URL
+        if expanded.hasPrefix("/") {
+            newURL = URL(fileURLWithPath: expanded)
+        } else {
+            let cwd = fm.currentDirectoryPath
+            newURL = URL(fileURLWithPath: cwd).appendingPathComponent(expanded)
+        }
+        var isDirectory: ObjCBool = false
+        if fm.fileExists(atPath: newURL.path, isDirectory: &isDirectory), isDirectory.boolValue {
+            if fm.changeCurrentDirectoryPath(newURL.path) {
+                tell("Current directory: \(fm.currentDirectoryPath)\n")
+            } else {
+                tell("CHDIR error: could not change to '\(spec)'\n")
+                errorFlag = true
+            }
+        } else {
+            tell("CHDIR error: '\(spec)' is not a directory\n")
+            errorFlag = true
+        }
+    }
+
+    // DIR support (used by the DIR word). Supports optional <path><filespec> with * ? wildcards.
+    private func listDirectory(spec: String) {
+        let fm = FileManager.default
+        var basePath = fm.currentDirectoryPath
+        var filter = ""
+        if !spec.isEmpty {
+            let expanded = (spec as NSString).expandingTildeInPath
+            let hasWild = expanded.contains("*") || expanded.contains("?")
+            if hasWild {
+                if let lastSlash = expanded.lastIndex(of: "/") {
+                    let dirPart = String(expanded[..<lastSlash])
+                    filter = String(expanded[expanded.index(after: lastSlash)...])
+                    if dirPart.isEmpty {
+                        basePath = "/"
+                    } else {
+                        let dirExpanded = (dirPart as NSString).expandingTildeInPath
+                        if dirExpanded.hasPrefix("/") {
+                            basePath = dirExpanded
+                        } else {
+                            basePath = (basePath as NSString).appendingPathComponent(dirExpanded)
+                        }
+                    }
+                } else {
+                    filter = expanded
+                }
+            } else {
+                // no wildcard: prefer treating as directory if it exists
+                let testPath = (expanded as NSString).expandingTildeInPath
+                let testURL = testPath.hasPrefix("/") ? URL(fileURLWithPath: testPath) : URL(fileURLWithPath: (basePath as NSString).appendingPathComponent(testPath))
+                var isD: ObjCBool = false
+                if fm.fileExists(atPath: testURL.path, isDirectory: &isD) && isD.boolValue {
+                    basePath = testURL.path
+                    filter = ""
+                } else {
+                    filter = expanded
+                    // base remains current
+                }
+            }
+        }
+        let dirURL = URL(fileURLWithPath: basePath)
+        do {
+            let contents = try fm.contentsOfDirectory(at: dirURL, includingPropertiesForKeys: [.isDirectoryKey, .fileSizeKey])
+            tell("\nDirectory of \(dirURL.path)\n\n")
+            var count = 0
+            for fileURL in contents.sorted(by: { $0.lastPathComponent.lowercased() < $1.lastPathComponent.lowercased() }) {
+                let name = fileURL.lastPathComponent
+                if !filter.isEmpty {
+                    if !matchesWildcard(filter, in: name) {
+                        continue
+                    }
+                }
+                var isDir: ObjCBool = false
+                fm.fileExists(atPath: fileURL.path, isDirectory: &isDir)
+                let resourceValues = try? fileURL.resourceValues(forKeys: [.fileSizeKey])
+                let size = resourceValues?.fileSize ?? 0
+                if isDir.boolValue {
+                    tell(" \(name.padding(toLength: 30, withPad: " ", startingAt: 0)) <DIR>\n")
+                } else {
+                    let sizeStr = String(size).padding(toLength: 12, withPad: " ", startingAt: 0)
+                    tell(" \(name.padding(toLength: 30, withPad: " ", startingAt: 0)) \(sizeStr)\n")
+                }
+                count += 1
+            }
+            tell("\n \(count) file(s)\n\n")
+        } catch {
+            tell("DIR error: Cannot read directory '\(dirURL.path)'\n")
+            errorFlag = true
+        }
+    }
+
+    /// Simple MS-DOS style wildcard matcher (* and ? supported), case-insensitive.
+    private func matchesWildcard(_ pattern: String, in name: String) -> Bool {
+        let regexPattern = "^" + NSRegularExpression.escapedPattern(for: pattern)
+            .replacingOccurrences(of: "\\*", with: ".*")
+            .replacingOccurrences(of: "\\?", with: ".")
+            + "$"
+        if let regex = try? NSRegularExpression(pattern: regexPattern, options: .caseInsensitive) {
+            let range = NSRange(location: 0, length: name.utf16.count)
+            return regex.firstMatch(in: name, options: [], range: range) != nil
+        }
+        return false
+    }
+
     private func refillLineBuffer() -> Bool {
         // For simplicity in the first version we read directly from inputQueue
         // into wordBuffer when needed. The original used a separate line buffer.
@@ -718,9 +1025,9 @@ public final class LBForth {
         // Now safe to define the rest
         _ = register("EXIT") { /* already implemented above */ }
 
-        _ = register("DUP")   { let v = self.pop(); self.push(v); self.push(v) }
-        _ = register("DROP")  { _ = self.pop() }
-        _ = register("SWAP")  { let b = self.pop(); let a = self.pop(); self.push(b); self.push(a) }
+        dupID = register("DUP")   { let v = self.pop(); self.push(v); self.push(v) }
+        dropID = register("DROP")  { _ = self.pop() }
+        swapID = register("SWAP")  { let b = self.pop(); let a = self.pop(); self.push(b); self.push(a) }
         _ = register("OVER")  { let b = self.pop(); let a = self.pop(); self.push(a); self.push(b); self.push(a) }
 
         _ = register("+")     { let b = self.pop(); let a = self.pop(); self.push(a + b) }
@@ -775,6 +1082,10 @@ public final class LBForth {
         _ = register("@")     { let addr = Int(self.pop()); self.push(self.readCell(addr)) }
         _ = register("C!")    { let addr = Int(self.pop()); let val = self.pop(); self.writeByte(addr, UInt8(val & 0xff)) }
         _ = register("C@")    { let addr = Int(self.pop()); self.push(Cell(self.readByte(addr))) }
+
+        // Public "," and "C," so that interpret-time "42 ," and "65 C," work (compile into dictionary).
+        _ = register(",")  { self.comma() }
+        _ = register("C,") { self.commaByte() }
 
         _ = register("HERE")  { self.push(self.readCell(self.HERE)) }
         _ = register("LATEST"){ self.push(self.readCell(self.LATEST)) }
@@ -834,6 +1145,7 @@ public final class LBForth {
             self.writeByte(Int(l) + 8, fl & ~self.FLAG_HIDDEN)
 
             self.writeCell(self.STATE, 0)
+            self.loopControlStack.removeAll()  // clean any leftover from unbalanced loops in this def
         }
 
         // A few more essentials
@@ -859,6 +1171,65 @@ public final class LBForth {
                 self.tell("? Bad branch target (ip=\(self.ip) after BRANCH)\n")
                 self.errorFlag = true
             }
+        }
+
+        // === CREATE / DOES> (ANS Forth 2012) support ===
+        // These are internal runtimes. CREATE and DOES> (the user words) are registered later.
+
+        // (CREATE) -- runtime for plain CREATE words.
+        // Layout: [header] <createRuntimeID> <dataAddrValue> [data field starts here]
+        // Read the dataAddrValue from the following cell, advance ip past it (threaded case),
+        // push the data address.
+        createRuntimeID = register("(CREATE)") {
+            let dataAddr = self.readCell(self.currentCodeAddr + 8)
+            self.ip += 8
+            self.push(dataAddr)
+        }
+
+        // (DOES) -- runtime for CREATE ... DOES> children.
+        // Layout: [header] <dodoesID> <doesCodeAddr> [data field starts here]
+        // Pushes data addr (currentCodeAddr + 16), redirects ip to the does code.
+        dodoesID = register("(DOES)") {
+            let doesAddr = self.readCell(self.currentCodeAddr + 8)
+            let dataAddr = self.currentCodeAddr + 16
+            self.push(dataAddr)
+            self.ip = Int(doesAddr)
+            if !self.dispatchedFromInnerThread {
+                // This does-child is being executed directly (top-level or leaf from outer interpreter).
+                // No active caller innerThread to pick up the redirected ip, so run the does code here.
+                self.rpush(0)  // sentinel so the does code's EXIT can return cleanly
+                self.innerThread()
+                // After does code EXITS (rpop 0), this dodoes body returns; outer continues (e.g. to ".").
+            }
+            // If dispatchedFromInnerThread, we just redirected ip; the caller's innerThread will continue
+            // from the new ip when this body returns.
+        }
+
+        // Internal patch primitive compiled by DOES> .
+        // At runtime (inside a parent definition, right after a CREATE has defined a child):
+        //   stack: doesCodeAddr
+        // It patches the latest word (the child) to use dodoesID + doesCodeAddr instead of its plain create runtime,
+        // then returns from the parent definition (so the does code is not executed in the parent's context).
+        doesPatchID = register("(DOES>)") {
+            let doesAddr = self.pop()
+            let latest = self.readCell(self.LATEST)
+            if latest == 0 {
+                self.tell("? DOES> without a preceding CREATE\n")
+                self.errorFlag = true
+                return
+            }
+            let cfa = self.getCFA(latest)
+            // Patch the first cell after the header (was createRuntimeID) to dodoesID
+            self.writeCell(Int(cfa), self.dodoesID)
+            // Patch the second cell (was the dataAddr value) to the does code address
+            self.writeCell(Int(cfa) + 8, doesAddr)
+            // Consume the colon return frame (pushed by docol when entering the parent)
+            // to keep rstack accounting correct, then force this innerThread level to stop
+            // processing the does code (by setting ip=0). The outer context continues normally.
+            if self.rspGet() > 1 {
+                let _ = self.rpop()
+            }
+            self.ip = 0
         }
 
         // === Structured control flow (loops + conditionals) ===
@@ -1029,9 +1400,51 @@ public final class LBForth {
             }
         }
 
+        // \ comment to end of line — essential for loading typical .fth source files that use
+        // line comments. Immediate so it works while compiling too.
+        _ = register("\\", immediate: true) {
+            while !self.inputQueue.isEmpty {
+                let c = self.inputQueue.removeFirst()
+                if c == 10 || c == 13 { break }
+            }
+        }
+
+        // \\  (two backslashes) starts a block comment area, skipped until a '{' is seen.
+        // The skipped region can span multiple lines (works in console REPL and during FLOAD).
+        // Text after the '{' on the closing line is processed normally.
+        // Immediate so it works while compiling loaded files too. For old code compatibility.
+        _ = register("\\\\", immediate: true) {
+            while !self.inputQueue.isEmpty {
+                let c = self.inputQueue.removeFirst()
+                if c == 123 { // '{'
+                    return
+                }
+            }
+            // No '{' seen on this line (or in queue); set flag so subsequent feedLine/parseWord
+            // calls will skip until a line containing '{' is seen (then resume after it).
+            self.inSlashSlashComment = true
+        }
+
+        // \S  stops further loading/interpretation of the current source file (FLOAD).
+        // Drains rest of current line (so anything after \S on the line is ignored).
+        // If used from the console (loadNesting==0), the stop has no effect (no-op),
+        // but rest of the line is still drained for consistency.
+        // Immediate so it takes effect as soon as seen on a line during load.
+        _ = register("\\S", immediate: true) {
+            if self.loadNesting > 0 {
+                // Drain rest of line so anything after \S on the source line is ignored.
+                while !self.inputQueue.isEmpty {
+                    let c = self.inputQueue.removeFirst()
+                    if c == 10 || c == 13 { break }
+                }
+                self.sourceLoadStop = true
+            }
+            // else (console): do absolutely nothing — per spec "does nothing when interpreting"
+        }
+
         // Basic comparison words users expect immediately
-        _ = register("=")  { let b = self.pop(); let a = self.pop(); self.push(a == b ? -1 : 0) }
-        _ = register("<")  { let b = self.pop(); let a = self.pop(); self.push(a <  b ? -1 : 0) }
+        equalsID = register("=")  { let b = self.pop(); let a = self.pop(); self.push(a == b ? -1 : 0) }
+        lessThanID = register("<")  { let b = self.pop(); let a = self.pop(); self.push(a <  b ? -1 : 0) }
         _ = register(">")  { let b = self.pop(); let a = self.pop(); self.push(a >  b ? -1 : 0) }
         _ = register("0=") { let a = self.pop(); self.push(a == 0 ? -1 : 0) }
         _ = register("0<") { let a = self.pop(); self.push(a <  0 ? -1 : 0) }
@@ -1060,7 +1473,7 @@ public final class LBForth {
         _ = register("DEBUG-OFF") { self.debugEnabled = false }
 
         // === Additional words from help data (ported from GrokForthApp) to satisfy HELP ===
-        _ = register("1+") { let a = self.pop(); self.push(a + 1) }
+        onePlusID = register("1+") { let a = self.pop(); self.push(a + 1) }
         _ = register("1-") { let a = self.pop(); self.push(a - 1) }
         _ = register("ABS") { let a = self.pop(); self.push( a < 0 ? -a : a ) }
         _ = register("NEGATE") { let a = self.pop(); self.push( -a ) }
@@ -1074,9 +1487,9 @@ public final class LBForth {
         _ = register("RSHIFT") { let sh = self.pop(); let a = self.pop(); self.push( a >> sh ) }
         _ = register("ARSHIFT") { let sh = self.pop(); let a = self.pop(); self.push( a >> sh ) }
 
-        _ = register(">R") { self.rpush( self.pop() ) }
-        _ = register("R>") { self.push( self.rpop() ) }
-        _ = register("R@") {
+        toR_ID = register(">R") { self.rpush( self.pop() ) }
+        rFrom_ID = register("R>") { self.push( self.rpop() ) }
+        rAt_ID = register("R@") {
             let rs = self.rspGet()
             if rs < 2 { self.tell("? Return stack underflow\n"); self.errorFlag = true; self.push(0); return }
             self.push( self.readCell( self.rstackBase + (rs - 2) * 8 ) )
@@ -1173,14 +1586,257 @@ public final class LBForth {
             self.push( Int( w.utf8.first ?? 0 ) )
         }
 
-        // Stubs for loop words present in help data
-        _ = register("DO") { self.tell("? DO/LOOP not implemented yet\n"); self.errorFlag = true }
-        _ = register("LOOP") { self.tell("? DO/LOOP not implemented yet\n"); self.errorFlag = true }
-        _ = register("UNLOOP") { self.tell("? UNLOOP not implemented yet\n"); self.errorFlag = true }
-        _ = register("LEAVE") { self.tell("? LEAVE not implemented yet\n"); self.errorFlag = true }
-        _ = register("?DO") { self.tell("? ?DO not implemented yet\n"); self.errorFlag = true }
-        _ = register("I") { self.tell("? I not implemented yet\n"); self.errorFlag = true; self.push(0) }
-        _ = register("+LOOP") { self.tell("? +LOOP not implemented yet\n"); self.errorFlag = true }
+        // === Full implementation of counted loops: DO ... LOOP / +LOOP , ?DO, I, UNLOOP, LEAVE ===
+        // These use the return stack to hold (limit, index) with index on top.
+        // DO/?DO/LOOP/+LOOP/LEAVE are immediate (compile-time actions that emit threaded code + placeholders).
+        // I and UNLOOP are runtime primitives.
+        // Internal helpers (DO) (?DO) (LOOP) (+LOOP) are also registered so decompile/SEE shows them nicely.
+
+        let doSetupID = register("(DO)") {
+            let start = self.pop()
+            let limit = self.pop()
+            self.rpush(limit)
+            self.rpush(start)
+        }
+
+        let qdoSetupID = register("(?DO)") {
+            let start = self.pop()
+            let limit = self.pop()
+            if start == limit {
+                // skip the loop body: consume offset that follows in threaded code and branch forward
+                let offset = self.readCell(self.ip)
+                self.ip += 8
+                self.ip += offset
+                if self.ip < 0 || self.ip + 8 > self.memory.count {
+                    self.tell("? Bad branch target (ip=\(self.ip)) after ?DO\n")
+                    self.errorFlag = true
+                }
+            } else {
+                self.rpush(limit)
+                self.rpush(start)
+                // skip the inline offset cell (used only in the skip case)
+                self.ip += 8
+            }
+        }
+
+        let loopID = register("(LOOP)") {
+            // offset cell follows this in threaded code (back to body start)
+            let backOffset = self.readCell(self.ip)
+            self.ip += 8
+            // rstack: ... limit index(top)
+            let index = self.rpop()
+            let limit = self.rpop()
+            let newIndex = index + 1
+            if newIndex < limit {
+                self.rpush(limit)
+                self.rpush(newIndex)
+                self.ip += backOffset
+                if self.ip < 0 || self.ip + 8 > self.memory.count {
+                    self.tell("? Bad branch target (ip=\(self.ip)) after (LOOP)\n")
+                    self.errorFlag = true
+                }
+            } else {
+                // fall through to after LOOP; params already dropped by the rpops
+            }
+        }
+
+        let plusLoopID = register("(+LOOP)") {
+            let delta = self.pop()
+            let backOffset = self.readCell(self.ip)
+            self.ip += 8
+            let index = self.rpop()
+            let limit = self.rpop()
+            let newIndex = index + delta
+            let continueLoop = (delta >= 0) ? (newIndex < limit) : (newIndex > limit)
+            if continueLoop {
+                self.rpush(limit)
+                self.rpush(newIndex)
+                self.ip += backOffset
+                if self.ip < 0 || self.ip + 8 > self.memory.count {
+                    self.tell("? Bad branch target (ip=\(self.ip)) after (+LOOP)\n")
+                    self.errorFlag = true
+                }
+            } else {
+                // fall out, params dropped
+            }
+        }
+
+        // I -- current loop index (top item on rstack for active DO loop)
+        _ = register("I") {
+            let rs = self.rspGet()
+            if rs < 2 {
+                self.tell("? Return stack underflow\n")
+                self.errorFlag = true
+                self.push(0)
+                return
+            }
+            self.push( self.readCell( self.rstackBase + (rs - 2) * 8 ) )
+        }
+
+        // UNLOOP -- drop the current loop's limit+index from rstack (no branch)
+        let unloopID = register("UNLOOP") {
+            let rs = self.rspGet()
+            if rs < 3 {
+                self.tell("? Return stack underflow\n")
+                self.errorFlag = true
+                return
+            }
+            self.rspSet(rs - 2)
+        }
+
+        // LEAVE -- compile-time: emit unconditional branch to after the matching LOOP (patched by LOOP)
+        _ = register("LEAVE", immediate: true) {
+            if self.readCell(self.STATE) == 0 {
+                self.tell("? LEAVE only allowed while compiling a word\n")
+                self.errorFlag = true
+                return
+            }
+            self.push(unloopID); self.comma()  // ensure rstack loop params dropped at runtime before branching out
+            self.push(self.branchID); self.comma()
+            let placeholderAddr = self.readCell(self.HERE)
+            self.push(0); self.comma()
+            self.loopControlStack.append(placeholderAddr)  // leave for LOOP to resolve to after-loop addr (like a LEAVE ph)
+        }
+
+        // DO -- compile time immediate: emit setup, record body dest + leave sentinel on compile stack
+        _ = register("DO", immediate: true) {
+            if self.readCell(self.STATE) == 0 {
+                self.tell("? DO only allowed while compiling a word\n")
+                self.errorFlag = true
+                return
+            }
+            self.push(doSetupID); self.comma()
+            let dest = self.readCell(self.HERE)  // body starts right after setup
+            self.loopControlStack.append(dest)
+            self.loopControlStack.append(0)  // sentinel for leave/?DO placeholders (0 means end of list)
+        }
+
+        // ?DO -- like DO but skips body (and consumes limit/start) if start==limit
+        _ = register("?DO", immediate: true) {
+            if self.readCell(self.STATE) == 0 {
+                self.tell("? ?DO only allowed while compiling a word\n")
+                self.errorFlag = true
+                return
+            }
+            self.push(qdoSetupID); self.comma()
+            let phAddr = self.readCell(self.HERE)
+            self.push(0); self.comma()
+            let dest = self.readCell(self.HERE)  // body starts after the ph cell for skip branch
+            // append so collect gets: ... phs , 0 , dest   (phs after 0 get collected first)
+            self.loopControlStack.append(dest)
+            self.loopControlStack.append(0)
+            self.loopControlStack.append(phAddr)
+        }
+
+        // LOOP -- compile time: emit (LOOP) + back offset, resolve any pending LEAVE/?DO phs to after
+        _ = register("LOOP", immediate: true) {
+            if self.readCell(self.STATE) == 0 {
+                self.tell("? LOOP only allowed while compiling a word\n")
+                self.errorFlag = true
+                return
+            }
+            var leavePhs: [Cell] = []
+            while !self.loopControlStack.isEmpty {
+                let x = self.loopControlStack.removeLast()
+                if x == 0 { break }
+                leavePhs.append(x)
+            }
+            let dest = self.loopControlStack.removeLast()
+            self.push(loopID); self.comma()
+            let here = self.readCell(self.HERE)
+            let offset = dest - (here + 8)
+            self.push(offset); self.comma()
+            let afterLoop = self.readCell(self.HERE)
+            for ph in leavePhs {
+                let fwdOff = afterLoop - (ph + 8)
+                self.writeCell(Int(ph), fwdOff)
+            }
+        }
+
+        // +LOOP -- like LOOP but delta from stack at runtime
+        _ = register("+LOOP", immediate: true) {
+            if self.readCell(self.STATE) == 0 {
+                self.tell("? +LOOP only allowed while compiling a word\n")
+                self.errorFlag = true
+                return
+            }
+            var leavePhs: [Cell] = []
+            while !self.loopControlStack.isEmpty {
+                let x = self.loopControlStack.removeLast()
+                if x == 0 { break }
+                leavePhs.append(x)
+            }
+            let dest = self.loopControlStack.removeLast()
+            self.push(plusLoopID); self.comma()
+            let here = self.readCell(self.HERE)
+            let offset = dest - (here + 8)
+            self.push(offset); self.comma()
+            let afterLoop = self.readCell(self.HERE)
+            for ph in leavePhs {
+                let fwdOff = afterLoop - (ph + 8)
+                self.writeCell(Int(ph), fwdOff)
+            }
+        }
+
+        // ON / OFF — set a variable (addr) to 1 or 0. Used e.g. with file-echo.
+        _ = register("ON") {
+            let addr = Int(self.pop())
+            self.writeCell(addr, 1)
+        }
+        _ = register("OFF") {
+            let addr = Int(self.pop())
+            self.writeCell(addr, 0)
+        }
+
+        // FLOAD <name> — load and interpret/compile a text file as Forth source.
+        // - Adds .fth if no extension.
+        // - Resolves relative names against currentDirectoryPath.
+        // - If no name given, sets fileLoadRequested so host can show dialog.
+        _ = register("FLOAD") {
+            self.validateAndRepairSystemState()
+            let spec = self.parseWord()
+            if spec.isEmpty {
+                self.fileLoadRequested = true
+                self.onFileLoadRequested?()
+                return
+            }
+            self.resolveAndLoadFile(spec: spec)
+        }
+
+        // EDIT <name|dialog> — open in the system default text editor (TextEdit or user-chosen app for the type).
+        // - No name: sets fileEditRequested so host shows NSOpenPanel (starting at current dir, like FLOAD).
+        //   On pick: host opens the file via NSWorkspace, chdirs to its parent folder (so CHDIR/DIR/relative
+        //   FLOAD/EDIT etc. now use that folder), and persists it for next launch.
+        // - With name: resolves (same .fth auto-ext, ~, cwd-relative rules as FLOAD), sets pending so host
+        //   post-processing opens it in editor + updates cwd.
+        // This lets you navigate + pick a bad source file (e.g. one full of old cruft that would crash/hang
+        // on FLOAD) and edit it externally first, without ever feeding its contents to the interpreter.
+        // After editing/saving the file, you can FLOAD the cleaned version.
+        _ = register("EDIT") {
+            self.validateAndRepairSystemState()
+            let spec = self.parseWord()
+            if spec.isEmpty {
+                self.fileEditRequested = true
+                self.onFileEditRequested?()
+                return
+            }
+            self.resolveAndEditFile(spec: spec)
+        }
+
+        // CHDIR — with no arg: display current directory. With <path>: change to it (supports ~, relative).
+        _ = register("CHDIR") {
+            self.validateAndRepairSystemState()
+            let spec = self.parseWord()
+            self.changeDirectory(spec: spec)
+        }
+
+        // DIR — with no arg: list current dir. With <path><filespec>: list matching files in that path
+        // (supports * and ? wildcards, ~, relative paths).
+        _ = register("DIR") {
+            self.validateAndRepairSystemState()
+            let spec = self.parseWord()
+            self.listDirectory(spec: spec)
+        }
 
         // === Utility words ported/adapted from GrokForth style ===
 
@@ -1411,11 +2067,61 @@ public final class LBForth {
             self.createWord(name: name, immediate: false)
             self.push(self.docolID); self.comma()
             self.push(self.litID); self.comma()
-            let body = self.readCell(self.HERE) + 8   // address after the LIT cell we are about to write
-            self.push(body); self.comma()
+            // After docol + LIT we are at the value slot V. The EXIT will live at V+8, so the
+            // var's data cell lives at V+16. Store that address as the literal so the var
+            // word (when executed) pushes the correct data address.
+            let dataAddr = self.readCell(self.HERE) + 16
+            self.push(dataAddr); self.comma()
             self.push(self.exitID); self.comma()
-            // allocate one cell of data space
+            // allocate one cell of data space (advances the dict pointer past the data cell)
             self.writeCell(self.HERE, self.readCell(self.HERE) + 8)
+        }
+
+        // CREATE ( "<spaces>name" -- )  ANS 2012
+        // Create a word "name" whose execution semantics are to push its data-field address.
+        // The data field starts at the current HERE after CREATE (user can then , ALLOT etc.).
+        // Used together with DOES> for defining words.
+        _ = register("CREATE") {
+            let name = self.parseWord()
+            if name.isEmpty { self.tell("? CREATE needs a name\n"); self.errorFlag = true; return }
+            self.createWord(name: name, immediate: false)
+
+            // Set up the runtime for this new child word (two cells after header):
+            //   <createRuntimeID>
+            //   <dataAddr value>     (the PFA we will push)
+            // Data field starts after these two cells (HERE left there for user , ALLOT).
+            let dataAddr = self.readCell(self.HERE) + 16
+            self.push(self.createRuntimeID); self.comma()
+            self.push(dataAddr); self.comma()
+            // HERE is now at the data field start. No extra ALLOT (unlike VARIABLE).
+        }
+
+        // DOES> ( -- )  ANS 2012  (immediate)
+        // Modify the most recently defined word (which must have been created by CREATE)
+        // so that when it is executed it will push its data field address and then
+        // execute the code following this DOES> .
+        _ = register("DOES>", immediate: true) {
+            if self.readCell(self.STATE) == 0 {
+                self.tell("? DOES> only allowed while compiling a word\n")
+                self.errorFlag = true
+                return
+            }
+            // Compile into the current definition (the parent):
+            //   LIT <doesCodeAddr>
+            //   (DOES>)     -- the patch primitive
+            // The does code (user's code after DOES>) will be compiled by the normal loop right after this.
+            self.push(self.litID); self.comma()
+            let placeholder = self.readCell(self.HERE)
+            self.push(0); self.comma()
+            self.push(self.doesPatchID); self.comma()
+
+            // The does code starts at the current HERE.
+            let doesCodeAddr = self.readCell(self.HERE)
+            self.writeCell(Int(placeholder), doesCodeAddr)
+
+            // The user's code after DOES> (e.g. @ or more) continues to be compiled here
+            // into the parent's body. At runtime of the parent the (DOES>) patch will
+            // return early (via rpop) so the does code is not executed in the parent's context.
         }
     }
 
@@ -1458,6 +2164,29 @@ public final class LBForth {
         // The primitive version has the kernelLatest safety guard and good errors.
         // Advanced / teaching usage:  ' TEST FORGET-WORD
         self.feedLine(": FORGET-WORD >LFA @ LATEST ! ;")
+
+        // file-echo variable (user can do: file-echo ON   or   file-echo OFF ).
+        // Controls whether FLOAD echoes each source line to the console as it loads.
+        // Created via the VARIABLE word so it appears in WORDS / SEE / FORGET etc.
+        // Default is 0 (off) because the data cell lives in the zeroed memory area.
+        self.feedLine("VARIABLE FILE-ECHO")
+
+        // Capture the data address of FILE-ECHO by walking its colon body (DOCOL LIT <addr> EXIT).
+        // This lets FLOAD check it quickly without repeated dictionary lookup or tick+exec.
+        let hdr = self.findWord("FILE-ECHO")
+        if hdr != 0 {
+            let cfa = self.getCFA(hdr)
+            if self.readCell(Int(cfa)) == self.docolID {
+                if self.readCell(Int(cfa) + 8) == self.litID {
+                    self.fileEchoAddr = self.readCell(Int(cfa) + 16)
+                }
+            }
+        }
+        if self.fileEchoAddr == 0 {
+            // Fallback (should never happen): allocate a cell now.
+            self.fileEchoAddr = self.readCell(self.HERE)
+            self.writeCell(self.HERE, self.fileEchoAddr + 8)
+        }
 
         // We can add more high-level words later by feeding source once we have WORD, FIND, etc.
     }
@@ -1542,6 +2271,23 @@ public final class LBForth {
     }
 
     private func parseWord() -> String {
+        // Support \\ ... { block comments (can span lines in console REPL or during FLOAD).
+        // Flag set by the \\ word (when it sees no '{' on its line); cleared when '{' found.
+        if self.inSlashSlashComment {
+            while !self.inputQueue.isEmpty {
+                let c = self.inputQueue.removeFirst()
+                if c == 123 { // '{'
+                    self.inSlashSlashComment = false
+                    break
+                }
+            }
+            if self.inSlashSlashComment {
+                // This entire line (and future feeds until {) is comment; stop word parsing for this feed.
+                // (OK will still be emitted at end of this feedLine, consistent with \ and ( comments.)
+                return ""
+            }
+        }
+
         // Skip whitespace
         while let b = inputQueue.first, b <= 32 {
             _ = inputQueue.removeFirst()
@@ -1587,6 +2333,8 @@ public final class LBForth {
                     innerThread()
                 }
             } else {
+                self.currentCodeAddr = cfa
+                self.dispatchedFromInnerThread = false
                 body()
             }
         } else {
@@ -1609,6 +2357,7 @@ public final class LBForth {
         while safety < SAFETY_LIMIT && !errorFlag && !exitReq {
             safety += 1
 
+            let instrAddr = ip
             let cell = readCell(ip)
             ip += 8
 
@@ -1624,7 +2373,10 @@ public final class LBForth {
 
             if cell >= 0 && cell < Cell(primitives.count),
                let f = primitives[Int(cell)] {
+                self.currentCodeAddr = Cell(instrAddr)
+                self.dispatchedFromInnerThread = true
                 f()
+                self.dispatchedFromInnerThread = false
                 if waitingForKey {
                     // A blocking primitive (KEY) has decided to wait for host input.
                     // Rewind IP so the next innerThread() call will hit this cell again.
@@ -1748,6 +2500,9 @@ public final class LBForth {
     /// Force the engine back to a known-good state.
     /// Stacks are emptied, errorFlag cleared, STATE forced to interpret mode.
     /// Safe to call from the host app (ConsoleView, tests) at any time.
+    // Temp for debug
+    public func debugFind(_ n: String) -> Bool { return findWord(n) != 0 }
+
     public func resetToSafeState() {
         validateAndRepairSystemState()   // extra belt-and-suspenders
         spSet(1)
@@ -1759,6 +2514,12 @@ public final class LBForth {
         debugEnabled = false   // return to clean default
         clearScreenRequested = false
         waitingForKey = false
+        fileLoadRequested = false
+        fileEditRequested = false
+        pendingEditURL = nil
+        loopControlStack.removeAll()
+        self.inSlashSlashComment = false
+        self.sourceLoadStop = false
         // Leave IP wherever it is; the next feedLine will start fresh parsing from
         // whatever input arrives next. Future improvement: point ip at a real QUIT
         // threaded-code sequence once we have one.
@@ -1776,6 +2537,12 @@ public final class LBForth {
         //    This is the main fix for "left over stuff in a buffer".
         inputQueue.removeAll(keepingCapacity: true)
         waitingForKey = false
+        fileLoadRequested = false
+        fileEditRequested = false
+        pendingEditURL = nil
+        loopControlStack.removeAll()
+        self.inSlashSlashComment = false
+        self.sourceLoadStop = false
 
         // 2. Error handling during compilation vs interpretation.
         //

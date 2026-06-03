@@ -534,6 +534,10 @@ hello
     ansTest("DEFER IS DEFER@ DEFER!", "DEFER d1 : a1 777 ; ' a1 IS d1 d1 . : a2 888 ; ' a2 ' d1 DEFER! d1 .", "777 888")
     ansTest("CASE OF ENDOF ENDCASE", " ' CASE  ' OF  ' ENDOF  ' ENDCASE  DROP DROP DROP DROP 42 .", "42")
 
+    // Vocabularies and filtered WORDS (all words currently in FORTH)
+    ansTest("VOCABULARY FORTH DEFINITIONS", "VOCABULARY FOO FOO DEFINITIONS 123 CONSTANT baz FORTH DEFINITIONS 456 .", "456")
+    ansTest("WORDS filter", "WORDS CONSTANT", "CONSTANT")
+
     print("TEST6 ANS core summary: \(ansPassed)/\(ansTotal) passed")
     if ansPassed != ansTotal {
         print("WARNING: some ANS 2012 core tests failed — review against standard stack effects.")

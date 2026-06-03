@@ -33,6 +33,8 @@ extension TZForth {
         // (no pollution / "corruption").
         let preValidationLatest = self.readCell(self.LATEST)
         let preValidationHere = self.readCell(self.DP_ADDR)
+        let preValidationContext = self.readCell(self.CONTEXT)
+        let preValidationCurrent = self.readCell(self.CURRENT)
 
         var results = "=== ANS-VALIDATE: 2012 ANS Forth Core + Core Ext validation (from TestTZForth / original TestLBForth FTEST logic) ===\n\n"
         var collected = ""
@@ -447,6 +449,10 @@ extension TZForth {
         ansTest("DEFER IS DEFER@ DEFER!", "DEFER d1 : a1 777 ; ' a1 IS d1 d1 . : a2 888 ; ' a2 ' d1 DEFER! d1 .", "777 888")
         ansTest("CASE OF ENDOF ENDCASE", " ' CASE  ' OF  ' ENDOF  ' ENDCASE  DROP DROP DROP DROP 42 .", "42")
 
+        // Vocabularies and filtered WORDS (all words currently in FORTH)
+        ansTest("VOCABULARY FORTH DEFINITIONS", "VOCABULARY FOO FOO DEFINITIONS 123 CONSTANT baz FORTH DEFINITIONS 456 .", "456")
+        ansTest("WORDS filter", "WORDS CONSTANT", "CONSTANT")
+
         results += "TEST6 ANS core summary: \(ansPassed)/\(ansTotal) passed\n"
         if ansPassed != ansTotal {
             results += "WARNING: some ANS 2012 core tests failed — review against standard stack effects.\n"
@@ -465,6 +471,8 @@ extension TZForth {
         // "dictionary corrupted / polluted" symptom after running ANS-VALIDATE.
         self.writeCell(self.LATEST, preValidationLatest)
         self.writeCell(self.DP_ADDR, preValidationHere)
+        self.writeCell(self.CONTEXT, preValidationContext)
+        self.writeCell(self.CURRENT, preValidationCurrent)
 
         // Make sure runtime state (stacks, STATE, flags, etc.) is clean too.
         self.resetRuntimeState()

@@ -26,7 +26,7 @@ Notes:
 - ENVIRONMENT? now returns values for "CORE", "/COUNTED-STRING", "ADDRESS-UNIT-BITS", "MAX-CHAR" etc.
 
 ## Missing from Core Extensions Word Set (6.2)
-(~15 items after this batch.)
+(~10 items.)
 
 .R
 :NONAME
@@ -44,22 +44,21 @@ U>
 UNUSED
 
 Notes:
-- The engine has good coverage of practical extensions (PICK/ROLL/TUCK/NIP/U.R/WITHIN/?DO etc.).
-- Added in this batch (with ansTest in both harnesses): VALUE IS CASE OF ENDOF ENDCASE 0<> COMPILE, ERASE DEFER DEFER! DEFER@ .
-- CASE/OF/ENDOF/ENDCASE added as high-level Forth defs in bootstrap so they decompile cleanly via SEE (per guidance).
-- VALUE uses IS for assignment (also works for DEFER); DEFER family fully supported (DEFER DEFER! DEFER@ IS).
-- Still missing many for full "programming tools" like :NONAME, ACTION-OF, BUFFER:, C", HOLDS, MARKER, PARSE-NAME, RESTORE/SAVE-INPUT, SOURCE-ID, UNUSED (planned post-Core; many good as high-level : defs for SEE).
+- Added: VOCABULARY, FORTH, DEFINITIONS (basic single-vocab support; all words in FORTH for now), plus WORDS with optional case-insensitive substring filter (only shows from current vocab).
+- CONTEXT / CURRENT exposed.
+- WORDS filter and per-vocab listing implemented; lookup falls back to FORTH for system words.
+- Previous batch notes still apply.
 - Some like AGAIN, 2>R etc. *are* present.
 
 ## Recommendations / Status
 - The system is **highly functional** for the user's needs (loading classic sources, REPL, FLOAD/EDIT/CHDIR in sandbox, FILE-ECHO, \S, ." , WORD, etc.).
-- Core word set complete (101/101). This batch added requested Core Ext words (VALUE IS CASE OF ENDOF ENDCASE 0<> COMPILE, ERASE + full DEFER family). Tests now higher count in both harnesses.
-- CASE etc defined high-level in bootstrap for nice SEE output. IS works for both VALUE and DEFER.
-- Per user direction: more high-level Forth for remaining Ext and complex tools (debugger etc.) when we get to them; vocabularies after more Ext.
+- Core complete. Core Ext: previous + VOCABULARY/FORTH/DEFINITIONS + enhanced WORDS (optional filter, current-vocab only).
+- Basic vocab: FORTH is default; new vocabs empty; lookup falls back to FORTH so system words always available; WORDS respects current + optional contains filter (ci).
+- Per prior: high-level for complex where sensible.
 - Current tests (TestTZForth.swift FTEST + embedded ANS-VALIDATE) cover the implemented words per standard + special behaviors (smart quotes, load semantics, etc.).
 - To continue: next would be remaining Core Ext per explicit plan, then vocabularies to hide internals.
 
 Generated from codebase inspection (TZForth.swift, TZForthTests.swift, TestTZForth.swift, live runs).
-Last update: after Core Ext batch (VALUE IS CASE/OF/ENDOF/ENDCASE 0<> COMPILE, ERASE DEFER family).
+Last update: after adding VOCABULARY, FORTH, DEFINITIONS + filtered WORDS (per current vocab).
 
 For full standard details, refer to the official 2012 ANS Forth document (sections 6.1 and 6.2).

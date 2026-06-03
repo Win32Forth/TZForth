@@ -69,3 +69,7 @@ fastlane/test_output
 .idea/
 .vscode/
 
+# Generated review artifact from the ANS-VALIDATE word (run it to (re)produce
+# a current report with full test log next to TestLBForth.swift).
+TZForth/ANS-VALIDATE.txt
+

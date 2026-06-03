@@ -33,6 +33,20 @@
 // are externally named to reflect the TZForth project and its author.
 // Internally, this implementation respects its origins as a Swift port of
 // the public-domain lbForth model and techniques by Leif Bruder (2014).
+
+// Also, I want to credit the Grok Build AI for doing most of the work.
+// while I ( Tom Zimmer Win32Forth@mac.com ) did pay for the use of Grok Build,
+// I could never have ompleted this project without the invaluble assisstance
+// of Grok Build. Now, at an age of almost 76, my memory and skills are not what
+// they once were, back in the 80s and 90s, when I was producing so many of the
+// Forth systems I am credited with creating. Those were good years, but they
+// are behind me. Having the opportunity to participate in producing another
+// complex Forth system in my retirement years has been very encouraging to me,
+// and can be credited with helping me retain or recover some of the
+// intelligence and skills I once had.
+
+//Thank you Grok Build, this is definitely a great adventure!
+
 // See: https://gist.github.com/lbruder/10007431
 //
 // THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND.

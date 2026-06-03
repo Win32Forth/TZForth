@@ -2194,8 +2194,17 @@ public final class LBForth {
             // it had when ANS-VALIDATE was invoked. Use it (or fm cwd) for the output file.
             // This ensures ANS-VALIDATE.txt lands in "the same folder where your current test
             // .swift file is located" if the user CHDIR'd there (or launched with that as cwd).
-            let baseDir = self.logicalCurrentDirectory.isEmpty ? FileManager.default.currentDirectoryPath : self.logicalCurrentDirectory
-            let outURL = URL(fileURLWithPath: baseDir).appendingPathComponent("ANS-VALIDATE.txt")
+            var outBase = self.logicalCurrentDirectory.isEmpty ? FileManager.default.currentDirectoryPath : self.logicalCurrentDirectory
+            let fm2 = FileManager.default
+            let subDir = URL(fileURLWithPath: outBase).appendingPathComponent("TZForth")
+            let directTest = URL(fileURLWithPath: outBase).appendingPathComponent("TestLBForth.swift")
+            let subTest = subDir.appendingPathComponent("TestLBForth.swift")
+            if fm2.fileExists(atPath: subTest.path) {
+                outBase = subDir.path   // txt next to .swift inside TZForth/ subdir
+            } else if fm2.fileExists(atPath: directTest.path) {
+                outBase = outBase       // already in the folder with TestLBForth.swift
+            }
+            let outURL = URL(fileURLWithPath: outBase).appendingPathComponent("ANS-VALIDATE.txt")
             do {
                 try results.write(to: outURL, atomically: true, encoding: .utf8)
                 self.tell("ANS-VALIDATE results written to \(outURL.path)\n")

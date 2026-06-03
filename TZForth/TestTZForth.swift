@@ -399,6 +399,7 @@ hello
     ansTest("FM/MOD", "10 0 3 FM/MOD . .", "3 1")
     ansTest("SM/REM", "10 0 3 SM/REM . .", "3 1")
     ansTest("U<", "1 2 U< .", "-1")
+    ansTest("U>", "2 1 U> .  1 2 U> .", "-1 0")
     ansTest("UM*", "100 100 UM* . .", "0 10000")
     ansTest("UM/MOD", "0 100 10 UM/MOD . .", "10 0")
     ansTest("MOD", "10 3 MOD .", "1")
@@ -422,6 +423,7 @@ hello
     ansTest("=", "5 6 = .", "0")
     ansTest("<", "3 5 < .", "-1")
     ansTest(">", "5 3 > .", "-1")
+    ansTest("<>", "5 5 <> .  5 6 <> .", "0 -1")
     ansTest("0=", "0 0= .", "-1")
     ansTest("0=", "1 0= .", "0")
     ansTest("0<", "-1 0< .", "-1")
@@ -526,7 +528,7 @@ hello
     // POSTPONE test: use an immediate word; with POSTPONE the imm action happens at runtime of tpo, not during its definition
     ansTest("POSTPONE", "VARIABLE tpv 0 tpv ! : timp 99 tpv ! ; IMMEDIATE : tpo POSTPONE timp 42 ; tpv @ . tpo tpv @ .", "0 99")
 
-    // Core Ext batch: VALUE IS CASE OF ENDOF ENDCASE 0<> COMPILE, ERASE DEFER DEFER! DEFER@
+    // Core Ext batch: VALUE IS CASE OF ENDOF ENDCASE 0<> <> U> COMPILE, ERASE DEFER DEFER! DEFER@
     ansTest("0<>", "0 0<> .  5 0<> .", "0 -1")
     ansTest("ERASE", "HERE 5 ERASE HERE C@ HERE 4 + C@ . .", "0 0")
     ansTest("COMPILE,", ": [c+] ['] + COMPILE, ; IMMEDIATE : tcm [c+] ; 10 20 tcm .", "30")

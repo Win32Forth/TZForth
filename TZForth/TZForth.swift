@@ -256,6 +256,7 @@ public final class TZForth {
         ("FM/MOD",  "( d n -- rem quot )", "floored divmod"),
         ("SM/REM",  "( d n -- rem quot )", "symmetric divmod"),
         ("U<",      "( u1 u2 -- flag )",  "unsigned less"),
+        ("U>",      "( u1 u2 -- flag )",  "unsigned greater"),
         ("UM*",     "( u1 u2 -- ud )",    "unsigned double multiply"),
         ("UM/MOD",  "( ud u -- rem quot )", "unsigned divmod"),
         ("+!",      "( n addr -- )",      "add to memory"),
@@ -350,6 +351,7 @@ public final class TZForth {
         (">",       "( n1 n2 -- flag )",  "greater than?"),
         ("0=",      "( n -- flag )",      "zero?"),
         ("0<",      "( n -- flag )",      "negative?"),
+        ("<>",      "( n1 n2 -- flag )",  "not equal?"),
         
         // Dictionary & System
         ("WORDS",   "( -- )",             "list all words (kernel alpha, then user in order)"),
@@ -424,6 +426,8 @@ public final class TZForth {
         ("0=",      "( n -- flag )",      "zero?"),
         ("0<",      "( n -- flag )",      "negative?"),
         ("0>",      "( n -- flag )",      "positive?"),
+        ("<>",      "( n1 n2 -- flag )",  "not equal?"),
+        ("U>",      "( u1 u2 -- flag )",  "unsigned greater"),
         
         // Misc
         ("CELL+",   "( addr -- addr' )",  "add size of one cell"),
@@ -471,6 +475,8 @@ public final class TZForth {
 
         // Core Extensions (6.2)
         ("0<>",     "( x -- flag )",      "true if not zero"),
+        ("<>",      "( n1 n2 -- flag )",  "not equal"),
+        ("U>",      "( u1 u2 -- flag )",  "unsigned greater"),
         ("ERASE",   "( addr u -- )",      "fill u bytes at addr with zero"),
         ("COMPILE,","( xt -- )",          "compile the execution token xt"),
         ("VALUE",   "( n -- ) name",      "create a value (mutable constant); set with IS or TO"),
@@ -1435,6 +1441,7 @@ public final class TZForth {
             self.push( d % n ); self.push( d / n )
         }
         _ = register("U<") { let b = self.pop(); let a = self.pop(); let ua = UInt64( bitPattern: Int64(a) ); let ub = UInt64( bitPattern: Int64(b) ); self.push( ua < ub ? -1 : 0 ) }
+        _ = register("U>") { let b = self.pop(); let a = self.pop(); let ua = UInt64( bitPattern: Int64(a) ); let ub = UInt64( bitPattern: Int64(b) ); self.push( ua > ub ? -1 : 0 ) }
         _ = register("UM*") {
             let b = self.pop(); let a = self.pop()
             let ua = UInt64( bitPattern: Int64(a) )
@@ -2268,6 +2275,7 @@ public final class TZForth {
         _ = register("0<") { let a = self.pop(); self.push(a <  0 ? -1 : 0) }
         _ = register("0>") { let a = self.pop(); self.push(a >  0 ? -1 : 0) }
         _ = register("0<>") { let a = self.pop(); self.push(a != 0 ? -1 : 0) }
+        _ = register("<>") { let b = self.pop(); let a = self.pop(); self.push(a != b ? -1 : 0) }
 
         // A couple of stack words that are used constantly in examples
         _ = register("?DUP") { let v = self.pop(); self.push(v); if v != 0 { self.push(v) } }

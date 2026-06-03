@@ -26,11 +26,10 @@ Notes:
 - ENVIRONMENT? now returns values for "CORE", "/COUNTED-STRING", "ADDRESS-UNIT-BITS", "MAX-CHAR" etc.
 
 ## Missing from Core Extensions Word Set (6.2)
-(~10 items.)
+(~8 items.)
 
 .R
 :NONAME
-<>
 ACTION-OF
 BUFFER:
 C"
@@ -40,11 +39,10 @@ PARSE-NAME
 RESTORE-INPUT
 SAVE-INPUT
 SOURCE-ID
-U>
 UNUSED
 
 Notes:
-- Added: VOCABULARY, FORTH, DEFINITIONS, ALSO, ONLY, VOCABULARIES (full search-order stack support using ALSO/ONLY; VOCABULARIES lists the order + current defs), plus prior WORDS filter. All kernel words in FORTH; new vocabs start empty. Lookup searches the order (top first).
+- Added: <> U> (Core Ext relational). Plus prior: VOCABULARY, FORTH, DEFINITIONS, ALSO, ONLY, VOCABULARIES (full search-order stack support using ALSO/ONLY; VOCABULARIES lists the order + current defs), plus prior WORDS filter. All kernel words in FORTH; new vocabs start empty. Lookup searches the order (top first).
 - CONTEXT / CURRENT exposed.
 - WORDS filter and per-vocab listing implemented; lookup falls back to FORTH for system words.
 - Previous batch notes still apply.
@@ -52,13 +50,13 @@ Notes:
 
 ## Recommendations / Status
 - The system is **highly functional** for the user's needs (loading classic sources, REPL, FLOAD/EDIT/CHDIR in sandbox, FILE-ECHO, \S, ." , WORD, etc.).
-- Core complete. Core Ext: previous + VOCABULARY/FORTH/DEFINITIONS + enhanced WORDS (optional filter, current-vocab only).
+- Core complete. Core Ext: <> U> + previous + VOCABULARY/FORTH/DEFINITIONS + enhanced WORDS (optional filter, current-vocab only).
 - Basic vocab: FORTH is default; new vocabs empty; lookup falls back to FORTH so system words always available; WORDS respects current + optional contains filter (ci).
 - Per prior: high-level for complex where sensible.
 - Current tests (TestTZForth.swift FTEST + embedded ANS-VALIDATE) cover the implemented words per standard + special behaviors (smart quotes, load semantics, etc.).
 - To continue: next would be remaining Core Ext per explicit plan, then vocabularies to hide internals.
 
 Generated from codebase inspection (TZForth.swift, TZForthTests.swift, TestTZForth.swift, live runs).
-Last update: after adding ALSO, ONLY, VOCABULARIES + search order stack.
+Last update: after adding <> and U> (Core Ext) + prior vocab words.
 
 For full standard details, refer to the official 2012 ANS Forth document (sections 6.1 and 6.2).

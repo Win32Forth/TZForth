@@ -2,7 +2,7 @@
 //  ContentView.swift
 //  TZForth
 //
-//  Created by Thomas Zimmer mini on 5/30/26.
+//  Created by Thomas Zimmer on 5/30/26.
 //
 
 //

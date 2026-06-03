@@ -2,7 +2,7 @@
 //  TZForthApp.swift
 //  TZForth
 //
-//  Created by Thomas Zimmer mini on 5/30/26.
+//  Created by Thomas Zimmer on 5/30/26.
 //
 
 //
@@ -14,7 +14,9 @@
 // 
 // TZForthApp.swift is the @main entry for the TZForth macOS app.
 // The core engine (TZForth class) is based on Leif Bruder's public-domain
-// lbForth model internally. See the engine source for details and credit.
+// lbForth model internally. 
+//
+// See TZForth.swift for full credit and the original model link.
 //
 // THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND.
 //

@@ -38,6 +38,8 @@
 // model origins for the engine and test techniques.
 // See engine header for the gist link.
 //
+// See TZForth.swift for full credit and the original model link.
+//
 // THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND.
 //
 

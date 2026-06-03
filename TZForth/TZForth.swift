@@ -731,7 +731,6 @@ public final class TZForth {
     private func picturedAddDigit(_ digit: Cell) {
         if pnoPtr <= pnoBufferAddr { return }
         pnoPtr -= 1
-        let b = max(2, min(36, readCell(BASE)))
         let ch: UInt8 = (digit < 10) ? UInt8(48 + digit) : UInt8(55 + digit)  // 0-9, A-Z
         writeByte(pnoPtr, ch)
     }

@@ -526,6 +526,14 @@ hello
     // POSTPONE test: use an immediate word; with POSTPONE the imm action happens at runtime of tpo, not during its definition
     ansTest("POSTPONE", "VARIABLE tpv 0 tpv ! : timp 99 tpv ! ; IMMEDIATE : tpo POSTPONE timp 42 ; tpv @ . tpo tpv @ .", "0 99")
 
+    // Core Ext batch: VALUE IS CASE OF ENDOF ENDCASE 0<> COMPILE, ERASE DEFER DEFER! DEFER@
+    ansTest("0<>", "0 0<> .  5 0<> .", "0 -1")
+    ansTest("ERASE", "HERE 5 ERASE HERE C@ HERE 4 + C@ . .", "0 0")
+    ansTest("COMPILE,", ": [c+] ['] + COMPILE, ; IMMEDIATE : tcm [c+] ; 10 20 tcm .", "30")
+    ansTest("VALUE IS", "123 VALUE v1 v1 .  456 IS v1 v1 .", "123 456")
+    ansTest("DEFER IS DEFER@ DEFER!", "DEFER d1 : a1 777 ; ' a1 IS d1 d1 . : a2 888 ; ' a2 ' d1 DEFER! d1 .", "777 888")
+    ansTest("CASE OF ENDOF ENDCASE", " ' CASE  ' OF  ' ENDOF  ' ENDCASE  DROP DROP DROP DROP 42 .", "42")
+
     print("TEST6 ANS core summary: \(ansPassed)/\(ansTotal) passed")
     if ansPassed != ansTotal {
         print("WARNING: some ANS 2012 core tests failed — review against standard stack effects.")

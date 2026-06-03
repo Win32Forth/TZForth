@@ -456,6 +456,20 @@ public final class TZForth {
         ("WORD",    "( char -- addr )",   "parse input up to delimiter char, return addr of counted string (trailing blank appended)"),
         ("COUNT",   "( c-addr -- addr u )", "from counted string addr return char-addr and length"),
 
+        // Core Extensions (6.2)
+        ("0<>",     "( x -- flag )",      "true if not zero"),
+        ("ERASE",   "( addr u -- )",      "fill u bytes at addr with zero"),
+        ("COMPILE,","( xt -- )",          "compile the execution token xt"),
+        ("VALUE",   "( n -- ) name",      "create a value (mutable constant); set with IS or TO"),
+        ("IS",      "( xt -- ) name",     "set the xt for a DEFER or the value for a VALUE (parsing)"),
+        ("DEFER",   "( -- ) name",        "create a deferred word (execution can be changed)"),
+        ("DEFER!",  "( xt1 xt2 -- )",     "set defer xt2 to execute xt1"),
+        ("DEFER@",  "( xt1 -- xt2 )",     "get the xt that defer xt1 currently executes"),
+        ("CASE",    "( -- )",             "start CASE structure (immediate)"),
+        ("OF",      "( x x -- | x )",     "CASE of branch (immediate)"),
+        ("ENDOF",   "( -- )",             "end of OF, branch to ENDCASE (immediate)"),
+        ("ENDCASE", "( -- )",             "end CASE, resolve branches (immediate)"),
+
         // New for FLOAD / EDIT / file helpers (cwd + dialog driven by host for sandbox friendliness)
         ("\\",      "( -- )",             "comment to end of line (immediate)"),
         ("\\\\",    "( -- )",             "block comment to next '{' (spans lines; use \\ not single \\ for single-line comments) (immediate)"),
@@ -494,6 +508,7 @@ public final class TZForth {
     private var pnoPtr: Int = 0
 
     private var executeID: Cell = 0  // captured ID for EXECUTE so POSTPONE can emit LIT xt EXECUTE for immediates
+    private var fetchID: Cell = 0    // ID for @
     private var sQuoteID: Cell = 0   // runtime for (S") used by S" to embed compact string literals that leave c-addr u
     private var abortQuoteID: Cell = 0  // runtime for (ABORT")
 
@@ -1435,7 +1450,7 @@ public final class TZForth {
         }
 
         _ = register("!")     { let addr = Int(self.pop()); let val = self.pop(); self.writeCell(addr, val) }
-        _ = register("@")     { let addr = Int(self.pop()); self.push(self.readCell(addr)) }
+        fetchID = register("@")     { let addr = Int(self.pop()); self.push(self.readCell(addr)) }
         _ = register("C!")    { let addr = Int(self.pop()); let val = self.pop(); self.writeByte(addr, UInt8(val & 0xff)) }
         _ = register("C@")    { let addr = Int(self.pop()); self.push(Cell(self.readByte(addr))) }
 
@@ -1535,6 +1550,22 @@ public final class TZForth {
                 self.push(first); self.comma()
             } else {
                 self.push(cfa); self.comma()
+            }
+        }
+
+        // COMPILE, ( xt -- )  Core Ext. Compile the given xt as if it had been found while compiling.
+        // Useful with ' and ['] .
+        _ = register("COMPILE,") {
+            if self.readCell(self.STATE) == 0 {
+                self.tell("? COMPILE, only while compiling\n")
+                self.errorFlag = true
+                return
+            }
+            let xt = self.pop()
+            if xt < Cell(self.MAX_BUILTIN_ID) && xt != self.docolID {
+                self.push(xt); self.comma()
+            } else {
+                self.push(xt); self.comma()
             }
         }
 
@@ -1839,6 +1870,92 @@ public final class TZForth {
             self.writeCell(Int(placeholder), forwardOffset)
         }
 
+        // === CASE / OF / ENDOF / ENDCASE (Core Ext 6.2) ===
+        // Implemented in Swift for reliable compile-time data stack management (same technique as IF).
+        // 0 is used as sentinel on the compile-time stack (left by CASE, consumed by ENDCASE).
+        // This allows clean decompile of user code (the structure words are in the dict) even if
+        // the generated body shows the 0BRANCH/BRANCH details.
+        _ = register("CASE", immediate: true) {
+            if self.readCell(self.STATE) == 0 {
+                self.tell("? CASE only allowed while compiling a word\n")
+                self.errorFlag = true
+                return
+            }
+            self.push(0)  // sentinel for ENDCASE
+        }
+
+        _ = register("OF", immediate: true) {
+            if self.readCell(self.STATE) == 0 {
+                self.tell("? OF only allowed while compiling a word\n")
+                self.errorFlag = true
+                return
+            }
+            // Emit: OVER =   then the IF part (0BRANCH ph + push ph)
+            // Then emit DROP (so matched case drops the selector before running the OF code)
+            func emitRef(_ name: String) {
+                let hdr = self.findWord(name)
+                if hdr != 0 {
+                    let cfa = self.getCFA(hdr)
+                    let first = self.readCell(Int(cfa))
+                    let toEmit = (first < Cell(self.MAX_BUILTIN_ID) && first != self.docolID) ? first : cfa
+                    self.push(toEmit); self.comma()
+                }
+            }
+            emitRef("OVER")
+            emitRef("=")
+            // The IF emit:
+            self.push(self.zeroBranchID); self.comma()
+            let ph = self.readCell(self.DP_ADDR)
+            self.push(0); self.comma()
+            self.push(ph)
+            emitRef("DROP")
+        }
+
+        _ = register("ENDOF", immediate: true) {
+            if self.readCell(self.STATE) == 0 {
+                self.tell("? ENDOF only allowed while compiling a word\n")
+                self.errorFlag = true
+                return
+            }
+            // Like ELSE: resolve previous ph (from OF or prev ENDOF), emit forward BRANCH with new ph
+            let prevPh = self.pop()
+            self.push(self.branchID); self.comma()
+            let newPhAddr = self.readCell(self.DP_ADDR)
+            self.push(0); self.comma()
+            self.push(newPhAddr)
+            // resolve prev to after the branch we just emitted
+            let here = self.readCell(self.DP_ADDR)
+            let off = here - (prevPh + 8)
+            self.writeCell(Int(prevPh), off)
+        }
+
+        _ = register("ENDCASE", immediate: true) {
+            if self.readCell(self.STATE) == 0 {
+                self.tell("? ENDCASE only allowed while compiling a word\n")
+                self.errorFlag = true
+                return
+            }
+            // Resolve the pending forward branches from ENDOFs (and last false OF) to the cleanup point.
+            // At this moment HERE is right after the default code (if any). Patch targets the upcoming DROP.
+            while true {
+                let s = self.spGet()
+                if s <= 1 { break }
+                let x = self.pop()
+                if x == 0 { break }
+                let here = self.readCell(self.DP_ADDR)
+                let off = here - (x + 8)
+                self.writeCell(Int(x), off)
+            }
+            // Now emit the final DROP (cleans the case selector for default path and after patches).
+            let hdr = self.findWord("DROP")
+            if hdr != 0 {
+                let cfa = self.getCFA(hdr)
+                let first = self.readCell(Int(cfa))
+                let toEmit = (first < Cell(self.MAX_BUILTIN_ID) && first != self.docolID) ? first : cfa
+                self.push(toEmit); self.comma()
+            }
+        }
+
         // ' (tick) — simplified non-immediate version for now
         _ = register("'") {
             // parseWord() has already normalized any curly/smart quote that the
@@ -2054,6 +2171,7 @@ public final class TZForth {
         _ = register("0=") { let a = self.pop(); self.push(a == 0 ? -1 : 0) }
         _ = register("0<") { let a = self.pop(); self.push(a <  0 ? -1 : 0) }
         _ = register("0>") { let a = self.pop(); self.push(a >  0 ? -1 : 0) }
+        _ = register("0<>") { let a = self.pop(); self.push(a != 0 ? -1 : 0) }
 
         // A couple of stack words that are used constantly in examples
         _ = register("?DUP") { let v = self.pop(); self.push(v); if v != 0 { self.push(v) } }
@@ -2247,6 +2365,11 @@ public final class TZForth {
         _ = register("FILL") {
             let b = UInt8( self.pop() & 0xff ); let u = Int(self.pop()); let addr = Int(self.pop())
             for i in 0..<u { self.writeByte( addr + i , b ) }
+        }
+        // ERASE can be high-level too (: ERASE 0 FILL ;), but primitive for speed and to appear in WORDS early.
+        _ = register("ERASE") {
+            let u = Int(self.pop()); let addr = Int(self.pop())
+            for i in 0..<u { self.writeByte( addr + i , 0 ) }
         }
         _ = register("MOVE") {
             let u = Int(self.pop()); let dst = Int(self.pop()); let src = Int(self.pop())
@@ -3015,6 +3138,113 @@ public final class TZForth {
             self.writeCell(self.DP_ADDR, self.readCell(self.DP_ADDR) + 8)
         }
 
+        // DEFER ( "<spaces>name" -- )  Core Ext
+        // Creates a word "name" whose execution semantics can be changed later.
+        // Body layout: docol  LIT <xt-cell>  @  EXECUTE  EXIT
+        _ = register("DEFER") {
+            let name = self.parseWord()
+            if name.isEmpty { self.tell("? DEFER needs a name\n"); self.errorFlag = true; return }
+            self.createWord(name: name, immediate: false)
+            self.push(self.docolID); self.comma()
+            self.push(self.litID); self.comma()
+            // After docol + LIT + <payload> + @ + EXECUTE + EXIT (6 cells) the storage cell will be here.
+            // At this moment (after LIT comma) we have written 2 cells, 4 more 8-byte commas ahead => +32
+            let xtCellAddr = self.readCell(self.DP_ADDR) + 32
+            self.push(xtCellAddr); self.comma()
+            // Fetch the xt and EXECUTE it at runtime
+            self.push(self.fetchID); self.comma()
+            self.push(self.executeID); self.comma()
+            self.push(self.exitID); self.comma()
+            // allocate the xt cell (DP now points at it)
+            self.writeCell(self.DP_ADDR, self.readCell(self.DP_ADDR) + 8)
+            // initial xt = 0 (executing an uninitialized defer will try to execute 0 -> error in execute())
+        }
+
+        // VALUE ( n "<spaces>name" -- )  Core Ext
+        // Like a VARIABLE but executes to push the contents ( -- n ).
+        // Body: docol  LIT <val-cell>  @  EXIT
+        // Assignment via IS (or we can add TO later).
+        _ = register("VALUE") {
+            let name = self.parseWord()
+            if name.isEmpty { self.tell("? VALUE needs a name\n"); self.errorFlag = true; return }
+            let n = self.pop()
+            self.createWord(name: name, immediate: false)
+            self.push(self.docolID); self.comma()
+            self.push(self.litID); self.comma()
+            // docol + lit + payload + @ + exit = 5 cells. After lit comma: +24 bytes to the data cell.
+            let valCellAddr = self.readCell(self.DP_ADDR) + 24
+            self.push(valCellAddr); self.comma()
+            self.push(self.fetchID); self.comma()   // @
+            self.push(self.exitID); self.comma()
+            // allocate the value cell and store the initial n
+            self.writeCell(self.DP_ADDR, self.readCell(self.DP_ADDR) + 8)
+            self.writeCell(Int(valCellAddr), n)
+        }
+
+        // DEFER! ( xt2 xt1 -- )  Core Ext
+        // Set the word represented by defer-xt1 to execute xt2.
+        _ = register("DEFER!") {
+            let deferXt = self.pop()
+            let newXt = self.pop()
+            // deferXt should be the cfa (or id, but for user defers it's cfa)
+            // For our defers, the cfa points to docol; the storage cell is at cfa+16 (after docol + LIT + addr)
+            if deferXt < Cell(self.MAX_BUILTIN_ID) {
+                self.tell("? DEFER! on a primitive\n"); self.errorFlag = true; return
+            }
+            let cfa = Int(deferXt)
+            let first = self.readCell(cfa)
+            if first != self.docolID {
+                self.tell("? DEFER! target is not a colon def\n"); self.errorFlag = true; return
+            }
+            let second = self.readCell(cfa + 8)
+            if second != self.litID {
+                self.tell("? DEFER! target does not look like a DEFER or VALUE\n"); self.errorFlag = true; return
+            }
+            let storageAddr = Int( self.readCell(cfa + 16) )
+            self.writeCell(storageAddr, newXt)
+        }
+
+        // DEFER@ ( xt1 -- xt2 )  Core Ext
+        // Return the xt that the defer xt1 currently executes.
+        _ = register("DEFER@") {
+            let deferXt = self.pop()
+            if deferXt < Cell(self.MAX_BUILTIN_ID) {
+                self.tell("? DEFER@ on a primitive\n"); self.errorFlag = true; return
+            }
+            let cfa = Int(deferXt)
+            let first = self.readCell(cfa)
+            if first != self.docolID {
+                self.push(0); return
+            }
+            let second = self.readCell(cfa + 8)
+            if second != self.litID {
+                self.push(0); return
+            }
+            let storageAddr = Int( self.readCell(cfa + 16) )
+            self.push( self.readCell(storageAddr) )
+        }
+
+        // IS ( xt "<name>" -- )  Core Ext (parsing form of DEFER! / VALUE assignment)
+        // Also works for VALUEs (stores the new value into the VALUE's cell).
+        _ = register("IS", immediate: false) {   // not immediate; the parsing version
+            let newXt = self.pop()
+            let name = self.parseWord()
+            if name.isEmpty { self.tell("? IS needs a name\n"); self.errorFlag = true; return }
+            let hdr = self.findWord(name)
+            if hdr == 0 { self.tell("? IS ? " + name + "\n"); self.errorFlag = true; return }
+            let cfa = self.getCFA(hdr)
+            let first = self.readCell(Int(cfa))
+            if first != self.docolID {
+                self.tell("? IS target is not a defer or value\n"); self.errorFlag = true; return
+            }
+            let second = self.readCell(Int(cfa) + 8)
+            if second != self.litID {
+                self.tell("? IS target does not look like DEFER/VALUE\n"); self.errorFlag = true; return
+            }
+            let storageAddr = Int( self.readCell(Int(cfa) + 16) )
+            self.writeCell(storageAddr, newXt)
+        }
+
         // CREATE ( "<spaces>name" -- )  ANS 2012
         // Create a word "name" whose execution semantics are to push its data-field address.
         // The data field starts at the current HERE after CREATE (user can then , ALLOT etc.).
@@ -3122,6 +3352,7 @@ public final class TZForth {
         // Created via the VARIABLE word so it appears in WORDS / SEE / FORGET etc.
         // Default is 0 (off) because the data cell lives in the zeroed memory area.
         self.feedLine("VARIABLE FILE-ECHO")
+        self.feedLine(": ERASE 0 FILL ;")  // high-level so SEE shows source (0 FILL)
 
         // Capture the data address of FILE-ECHO by walking its colon body (DOCOL LIT <addr> EXIT).
         // This lets FLOAD check it quickly without repeated dictionary lookup or tick+exec.

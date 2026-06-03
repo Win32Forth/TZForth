@@ -1162,6 +1162,19 @@ public final class TZForth {
         }
     }
 
+    /// Returns true for any character that should be treated as a double quote
+    /// for the purposes of S" . " ABORT" etc. string delimiters and word names like S".
+    /// Covers straight ASCII " plus various curly/smart double quotes that macOS produces.
+    private func isDoubleQuoteLike(_ c: Character) -> Bool {
+        switch c {
+        case "\"", "“", "”", "„", "‟", "«", "»",
+             "\u{2033}", "\u{2036}", "\u{FF02}":
+            return true
+        default:
+            return false
+        }
+    }
+
     private func isValidDictionaryLink(_ addr: Cell) -> Bool {
         if addr == 0 { return true }
         if (addr & 7) != 0 { return false } // must be 8-byte aligned
@@ -2712,10 +2725,7 @@ public final class TZForth {
         // instead of a huge LIT/EMIT expansion.
         _ = register(".\"", immediate: true) {
             let caddr = self.parseToWordBuffer(using: 34)
-            // consume the closing delimiter left by the parser (so outer parser doesn't see stray ")
-            if !self.inputQueue.isEmpty && self.inputQueue.first == 34 {
-                _ = self.inputQueue.removeFirst()
-            }
+            // closing " already consumed by parseToWordBuffer (tolerates smart quotes)
             var len = Int( self.readByte( Int(caddr) ) )
             var saddr = Int(caddr) + 1
             // skip leading ws separator if present (so ." text" yields "text" not " text")
@@ -2743,9 +2753,7 @@ public final class TZForth {
         // Similar to ."
         _ = register("ABORT\"", immediate: true) {
             let caddr = self.parseToWordBuffer(using: 34)
-            if !self.inputQueue.isEmpty && self.inputQueue.first == 34 {
-                _ = self.inputQueue.removeFirst()
-            }
+            // closing " consumed inside parseToWordBuffer
             var len = Int( self.readByte( Int(caddr) ) )
             var saddr = Int(caddr) + 1
             if len > 0 && self.readByte(saddr) <= 32 {
@@ -2760,15 +2768,6 @@ public final class TZForth {
                 }
                 self.alignHere()
             } else {
-                // Interpret: check flag on stack? Standard ABORT" ( flag -- )
-                // Wait, in interp, the flag is before the ABORT" word.
-                // But parse consumed the string. The flag should have been pushed before calling ABORT".
-                // So in interp path, flag is already on stack before this? No: the word ABORT" when executed in interp pops the flag.
-                // In our case, since immediate always executes the body.
-                // For interp: we need the flag to be on stack when ABORT" runs.
-                // But the string parse happens, then we pop flag here? Standard is flag is on stack, then ABORT" parses string at compile or runtime?
-                // In interp, user does: flag ABORT" msg"
-                // So when executing ABORT", flag is on stack, then ABORT" body runs, parses the "msg" from queue.
                 let flag = self.pop()
                 if flag != 0 {
                     for i in 0..<len {
@@ -2800,7 +2799,7 @@ public final class TZForth {
         // For this minimal impl, always return false (0).
         _ = register("ENVIRONMENT?") {
             let u = Int(self.pop())
-            let caddr = Int(self.pop())
+            _ = self.pop()  // c-addr unused
             // consume the query string (we don't support any yet)
             for _ in 0..<u { /* ignore */ }
             self.push(0)
@@ -2811,9 +2810,7 @@ public final class TZForth {
         // In compile: compile (S") + inline counted string (so at runtime it pushes the addr u of the literal string data).
         _ = register("S\"", immediate: true) {
             let caddr = self.parseToWordBuffer(using: 34)
-            if !self.inputQueue.isEmpty && self.inputQueue.first == 34 {
-                _ = self.inputQueue.removeFirst()
-            }
+            // closing delim already consumed inside parseToWordBuffer (supports smart quotes)
             var len = Int( self.readByte( Int(caddr) ) )
             var saddr = Int(caddr) + 1
             if len > 0 && self.readByte(saddr) <= 32 {
@@ -3119,10 +3116,69 @@ public final class TZForth {
         //   see ‘
         //   ‘foo       (no space — becomes 'foo)
         if !result.isEmpty {
-            result = String(result.map { isApostropheLike($0) ? "'" : $0 })
+            result = String(result.map { 
+                if isApostropheLike($0) { return "'" }
+                if isDoubleQuoteLike($0) { return "\"" }
+                return $0 
+            })
         }
 
         return result
+    }
+
+    /// Returns true if the current queue position starts a delimiter matching 'delim'.
+    /// For delim==34, also accepts multi-byte UTF-8 smart/curly double quotes.
+    /// Does not consume.
+    private func peekIsDelim(_ delim: UInt8) -> Bool {
+        if inputQueue.isEmpty { return false }
+        let b0 = inputQueue.first!
+        if b0 == delim { return true }
+        if delim != 34 { return false }
+        if inputQueue.count >= 3 {
+            let b1 = inputQueue[1]
+            let b2 = inputQueue[2]
+            if b0 == 0xe2 && b1 == 0x80 && [0x9c, 0x9d, 0x9e, 0x9f, 0xb3, 0xb6].contains(b2) { return true }
+            if b0 == 0xef && b1 == 0xbc && b2 == 0x82 { return true }
+        }
+        if inputQueue.count >= 2 {
+            let b1 = inputQueue[1]
+            if b0 == 0xc2 && [0xab, 0xbb].contains(b1) { return true }
+        }
+        return false
+    }
+
+    /// If current position matches the given delim (exact for non-34, or ascii+smart for 34),
+    /// consume the matching byte(s) and return true.
+    private func consumeDelim(_ delim: UInt8) -> Bool {
+        if inputQueue.isEmpty { return false }
+        let b0 = inputQueue.first!
+        if b0 == delim {
+            _ = inputQueue.removeFirst()
+            return true
+        }
+        if delim != 34 { return false }
+        // smart doubles
+        if inputQueue.count >= 3 {
+            let b1 = inputQueue[1]
+            let b2 = inputQueue[2]
+            if b0 == 0xe2 && b1 == 0x80 && [0x9c, 0x9d, 0x9e, 0x9f, 0xb3, 0xb6].contains(b2) {
+                for _ in 0..<3 { _ = inputQueue.removeFirst() }
+                return true
+            }
+            if b0 == 0xef && b1 == 0xbc && b2 == 0x82 {
+                for _ in 0..<3 { _ = inputQueue.removeFirst() }
+                return true
+            }
+        }
+        if inputQueue.count >= 2 {
+            let b1 = inputQueue[1]
+            if b0 == 0xc2 && [0xab, 0xbb].contains(b1) {
+                _ = inputQueue.removeFirst()
+                _ = inputQueue.removeFirst()
+                return true
+            }
+        }
+        return false
     }
 
     // Helper used by WORD and CHAR (and future string parsers). Consumes from inputQueue
@@ -3133,11 +3189,9 @@ public final class TZForth {
     private func parseToWordBuffer(using delim: UInt8) -> Cell {
         var collected: [UInt8] = []
 
-        // Skip leading delimiters (exact match)
+        // Skip leading delimiters (exact ascii or smart-double for ")
         while !self.inputQueue.isEmpty {
-            if self.inputQueue.first == delim {
-                _ = self.inputQueue.removeFirst()
-            } else {
+            if !self.consumeDelim(delim) {
                 break
             }
         }
@@ -3145,11 +3199,14 @@ public final class TZForth {
         // Collect non-delim chars; also stop at line ends (10/13) so we don't eat \n etc.
         while !self.inputQueue.isEmpty {
             let b = self.inputQueue.first!
-            if b == delim || b == 10 || b == 13 {
+            if self.peekIsDelim(delim) || b == delim || b == 10 || b == 13 {
                 break
             }
             collected.append(self.inputQueue.removeFirst())
         }
+
+        // Consume a closing delim if present (supports smart doubles for ")
+        _ = self.consumeDelim(delim)
 
         let len = min(collected.count, self.WORD_BUFFER_SIZE - 2)
         self.writeByte(self.WORD_BUFFER, UInt8(len))

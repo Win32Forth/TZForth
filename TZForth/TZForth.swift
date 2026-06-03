@@ -3407,6 +3407,58 @@ public final class TZForth {
                 continue
             }
 
+            // Special handling for the runtime string emitter used by S"
+            // Mirrors the dotQuote handling so SEE produces "S" text " " instead of
+            // (S\") <garbage number> etc.
+            if cell == self.sQuoteID {
+                self.tell("S\" ")
+                let strAddr = ip
+                let len = Int(self.readByte(strAddr))
+                var content = ""
+                for i in 0..<len {
+                    let b = self.readByte(strAddr + 1 + i)
+                    if b == 34 {
+                        content += "\\\""
+                    } else if b == 92 {
+                        content += "\\\\"
+                    } else if let scalar = UnicodeScalar(UInt32(b)) {
+                        content += String(Character(scalar))
+                    } else {
+                        content += "?"
+                    }
+                }
+                self.tell(content + "\" ")
+                var newIP = ip + 1 + len
+                while (newIP & 7) != 0 { newIP += 1 }
+                ip = newIP
+                continue
+            }
+
+            // Special handling for the runtime used by ABORT" (for completeness in decompiles)
+            if cell == self.abortQuoteID {
+                self.tell("ABORT\" ")
+                let strAddr = ip
+                let len = Int(self.readByte(strAddr))
+                var content = ""
+                for i in 0..<len {
+                    let b = self.readByte(strAddr + 1 + i)
+                    if b == 34 {
+                        content += "\\\""
+                    } else if b == 92 {
+                        content += "\\\\"
+                    } else if let scalar = UnicodeScalar(UInt32(b)) {
+                        content += String(Character(scalar))
+                    } else {
+                        content += "?"
+                    }
+                }
+                self.tell(content + "\" ")
+                var newIP = ip + 1 + len
+                while (newIP & 7) != 0 { newIP += 1 }
+                ip = newIP
+                continue
+            }
+
             if let pname = self.primitiveNames[cell] {
                 self.tell(pname + " ")
                 continue

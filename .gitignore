@@ -67,3 +67,6 @@ fastlane/test_output
 *~
 .idea/
 .vscode/
+# Temporary Grok build artifacts
+Launch-Grok Build.app/
+

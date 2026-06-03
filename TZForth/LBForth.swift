@@ -27,6 +27,8 @@ public final class LBForth {
     private let MEM_SIZE = 256 * 1024   // generous for a modern machine
     private let STACK_SIZE = 256
     private let RSTACK_SIZE = 128
+    private let WORD_BUFFER_SIZE = 64
+    private let WORD_BUFFER: Int = 256  // fixed buffer for WORD, before stacks at 1024
     private let MAX_BUILTIN_ID = 256    // plenty of room
 
     private let FLAG_IMMEDIATE: UInt8 = 0x80
@@ -45,7 +47,7 @@ public final class LBForth {
 
     // System variables live at the bottom of memory (classic layout)
     private var LATEST:  Int { 0 }
-    private var HERE:    Int { 8 }
+    private var DP_ADDR: Int { 8 }   // address of the DP variable (the cell holding the current dictionary pointer value)
     private var STATE:   Int { 16 }
     private var BASE:    Int { 24 }
     private var SP:      Int { 32 }   // address for future "SP @" compatibility (the live pointer is in the Swift var below)
@@ -64,7 +66,7 @@ public final class LBForth {
     private var ip: Int = 0
     private var commandAddress: Int = 0
 
-    private var errorFlag = false
+    var errorFlag = false   // internal (module-visible) so host can check after named load for bookmark decisions
     private var exitReq = false
 
     // Debug output control (per-line state + stack dump after each feedLine)
@@ -76,6 +78,18 @@ public final class LBForth {
     /// The value of LATEST right after all kernel primitives have been registered.
     /// FORGET is not allowed to truncate past this point.
     private var kernelLatest: Cell = 0
+
+    /// The value of the dictionary pointer (at DP_ADDR) right after bootstrap (kernel + high-level
+    /// bootstrap words like FILE-ECHO, >LFA, etc.). RESET and full clear restore the dictionary to this point.
+    private var kernelHere: Cell = 0
+
+    /// Logical current directory maintained for the Forth environment (used for CHDIR reports,
+    /// relative FLOAD/EDIT/DIR resolution, etc.). In a sandboxed app, the underlying
+    /// FileManager.currentDirectoryPath can become empty or stuck in the container after
+    /// user CHDIR to paths without active security scope. We keep this logical view in sync
+    /// with user CHDIR and host-authorized dirs (from dialogs/bookmarks) so that Forth
+    /// sees a sensible cwd even if the process cwd is restricted.
+    public var logicalCurrentDirectory: String = ""
 
     // Input
     private var inputQueue: [UInt8] = []
@@ -117,6 +131,18 @@ public final class LBForth {
     /// out of the engine while still supporting named EDIT like named FLOAD.
     public var pendingEditURL: URL? = nil
 
+    /// When FLOAD <name> (named form, not bare) resolves a file, this URL is set by the engine
+    /// instead of loading immediately. The host (after feedLine returns, in post-processing)
+    /// performs startAccessingSecurityScopedResource (required in sandboxed app), chdir to
+    /// parent, persists LastFLOADDirectory, then calls loadFile(url) to actually read it.
+    /// This mirrors the pendingEditURL mechanism for sandbox friendliness.
+    public var pendingLoadURL: URL? = nil
+
+    /// Optional callback fired after a successful CHDIR (host uses it to persist a
+    /// security-scoped bookmark for the new directory if the current scope allows,
+    /// so that named FLOAD/EDIT continue to work after chdir without re-picking).
+    public var onDirectoryChanged: ((URL) -> Void)? = nil
+
     // Support for \\ (block comment to '{', can span lines in console or during FLOAD)
     // and \S (stop loading current file; no-op from console).
     private var inSlashSlashComment = false
@@ -130,6 +156,8 @@ public final class LBForth {
     private var docolID: Cell = 0
     private var exitID: Cell = 0
     private var litID: Cell = 0
+    private var emitID: Cell = 0
+    private var dotQuoteID: Cell = 0   // runtime ID for (." ) used by . " to embed compact string literals
 
     // Address of the FILE-ECHO variable's data cell (populated at bootstrap).
     private var fileEchoAddr: Cell = 0
@@ -207,10 +235,13 @@ public final class LBForth {
         ("!",       "( n addr -- )",      "store cell"),
         ("C@",      "( addr -- byte )",   "fetch byte"),
         ("C!",      "( byte addr -- )",   "store byte"),
-        ("HERE",    "( -- addr )",        "current dictionary pointer"),
+        ("HERE",    "( -- addr )",        "current dictionary pointer (value)"),
         ("LATEST",  "( -- addr )",        "latest dictionary header"),
+        ("DP",      "( -- addr )",        "dictionary pointer variable address (HERE is DP @)"),
         ("STATE",   "( -- addr )",        "compilation state variable"),
         ("BASE",    "( -- addr )",        "current numeric base variable"),
+        ("SP",      "( -- addr )",        "data stack pointer (SP @ for compatibility)"),
+        ("RSP",     "( -- addr )",        "return stack pointer (RSP @ for compatibility)"),
         ("ALLOT",   "( n -- )",           "allocate n bytes in dictionary"),
         (",",       "( n -- )",           "compile a cell"),
         ("C,",      "( b -- )",           "compile a byte"),
@@ -240,8 +271,10 @@ public final class LBForth {
         ("' ",      "( -- xt ) name",     "tick: get execution token of name"),
         ("FORGET",  "( -- ) name",        "forget name and all words defined after it"),
         ("FORGET-WORD", "( xt -- )",      "forget using xt ( ' NAME FORGET-WORD )"),
-        (">HEADER", "( xt -- header )",   "convert xt to header address"),
+        (">HEADER", "( xt -- header )",   "convert xt to header (starts with link field; name count+text at +8/+9)"),
         (">LFA",    "( xt -- lfa )",      "convert xt to link field (alias for >HEADER)"),
+        (">NFA",    "( xt -- nfa )",      "convert xt to name field addr (flags+len byte; COUNT TYPE works for ordinary words)"),
+        ("ID.",     "( xt -- )",          "print the name of the word given its xt (robust, masks flags from count)"),
         ("VARIABLE","( -- ) name",        "create a variable"),
         ("CONSTANT","( n -- ) name",      "create a constant"),
         ("CREATE",  "( -- ) name",        "create a word that pushes its data field address (for use with DOES>)"),
@@ -251,10 +284,11 @@ public final class LBForth {
         ("BL",      "( -- 32 )",          "blank character (space)"),
         ("DUMP",    "( addr u -- )",      "dump u cells starting at addr"),
         (".(",      "( -- )",             "print text until ) immediately (immediate)"),
+        (".\"",     "( -- )",             "print text until \" (immediate)"),
         ("(",       "( -- )",             "comment until ) (immediate)"),
         ("DEBUG-ON","( -- )",             "enable per-line [DEBUG] state+stack output"),
         ("DEBUG-OFF","( -- )",            "disable per-line debug output"),
-        ("RESET",   "( -- )",             "reset stacks, state, clear screen"),
+        ("RESET",   "( -- )",             "reset stacks + dictionary to kernel, state, clear screen"),
         ("CLS",     "( -- )",             "clear the console screen"),
         
         // Base
@@ -332,13 +366,15 @@ public final class LBForth {
         ("NIP",     "( a b -- b )",       "nip"),
         ("BL",      "( -- 32 )",          "blank (space)"),
         ("CHAR",    "( -- c )",           "parse next char (stub)"),
+        ("WORD",    "( char -- addr )",   "parse input up to delimiter char, return addr of counted string (trailing blank appended)"),
+        ("COUNT",   "( c-addr -- addr u )", "from counted string addr return char-addr and length"),
 
         // New for FLOAD / EDIT / file helpers (cwd + dialog driven by host for sandbox friendliness)
         ("\\",      "( -- )",             "comment to end of line (immediate)"),
-        ("\\\\",    "( -- )",             "block comment to next '{' (spans lines in console or FLOAD, for old code) (immediate)"),
+        ("\\\\",    "( -- )",             "block comment to next '{' (spans lines; use \\ not single \\ for single-line comments) (immediate)"),
         ("\\S",     "( -- )",             "stop loading current file (no-op in console) (immediate)"),
-        ("FLOAD",   "( -- ) name|dialog", "load .fth file (auto .fth ext + cwd if needed; no name opens dialog)"),
-        ("EDIT",    "( -- ) name|dialog", "open in system text editor (nav dialog or name; updates cwd to file's folder; no load/interpret)"),
+        ("FLOAD",   "( -- ) name|dialog", "load .fth file (auto .fth if no ext in name; relative to cwd or abs/~; named uses host for sandbox scope+chdir; bare opens dialog)"),
+        ("EDIT",    "( -- ) name|dialog", "open in system text editor (nav dialog or name; auto .fth fallback for bare names like FLOAD; updates cwd to file's folder; no load/interpret)"),
         ("FILE-ECHO","( -- addr )",       "variable controlling FLOAD source echo (use with ON/OFF)"),
         ("ON",      "( addr -- )",        "store 1 at addr (e.g. file-echo ON)"),
         ("OFF",     "( addr -- )",        "store 0 at addr (e.g. file-echo OFF)"),
@@ -376,7 +412,7 @@ public final class LBForth {
 
         // Initialize system variables
         writeCell(LATEST, 0)
-        writeCell(HERE, rstackBase + RSTACK_SIZE * CELL_SIZE)   // start of dictionary
+        writeCell(DP_ADDR, rstackBase + RSTACK_SIZE * CELL_SIZE)   // initial value of the dictionary pointer (stored at DP_ADDR)
         writeCell(STATE, 0)
         writeCell(BASE, 10)
 
@@ -395,11 +431,16 @@ public final class LBForth {
         // Bootstrap a tiny set of immediate and defining words by hand
         bootstrapMinimalDictionary()
 
-        // Record the end of the kernel dictionary so FORGET cannot delete primitives.
+        // Record the end of the kernel dictionary (and HERE) so FORGET/RESET cannot
+        // delete or go before the kernel + bootstrap words (TRUE, FILE-ECHO, >LFA, etc.).
         kernelLatest = readCell(LATEST)
+        kernelHere = readCell(DP_ADDR)
 
         // Seed the interpreter IP at the QUIT code we just created
         ip = quitCodeAddress
+
+        // Initial logical cwd (host may override via setup or after scoped chdirs)
+        logicalCurrentDirectory = FileManager.default.currentDirectoryPath
 
         // === Strong diagnostic after registration ===
         print("=== LBForth INIT DIAGNOSTICS ===")
@@ -464,10 +505,16 @@ public final class LBForth {
     // MARK: - Stacks
 
     private func spGet() -> Cell { dataStackPointer }
-    private func spSet(_ v: Cell) { dataStackPointer = v }
+    private func spSet(_ v: Cell) {
+        dataStackPointer = v
+        writeCell(SP, v)  // keep memory mirror for "SP @" compatibility and raw inspection
+    }
 
     private func rspGet() -> Cell { returnStackPointer }
-    private func rspSet(_ v: Cell) { returnStackPointer = v }
+    private func rspSet(_ v: Cell) {
+        returnStackPointer = v
+        writeCell(RSP, v)  // keep memory mirror for "RSP @" compatibility and raw inspection
+    }
 
     private func pop() -> Cell {
         var s = spGet()
@@ -539,6 +586,18 @@ public final class LBForth {
         rspSet(rs + 1)
     }
 
+    // Helper for number output that respects BASE (2..36). Used by ., U., U.R etc.
+    // signed: true for . (handles negative with - sign), false for U. (treats Cell as unsigned)
+    private func formatNumber(_ n: Cell, base: Cell, signed: Bool) -> String {
+        let b = Int( max(2, min(36, base)) )
+        if signed {
+            return String(n, radix: b).uppercased()
+        } else {
+            let u = UInt64(bitPattern: Int64(n))
+            return String(u, radix: b).uppercased()
+        }
+    }
+
     // MARK: - Output
 
     private func putkey(_ c: UInt8) {
@@ -570,10 +629,21 @@ public final class LBForth {
 
         // Optional per-line debug output (state + stack after each feedLine).
         // Enabled via DEBUG-ON / DEBUG-OFF. Default is off.
+        // Changes take effect immediately, including for subsequent lines when
+        // DEBUG-ON/OFF appears inside a file being FLOADed (live flag, checked after
+        // each feedLine, independent of loadNesting).
         if debugEnabled {
             let stateStr = readCell(STATE) != 0 ? "compiling" : "interpreting"
             let depth = Int(spGet() - 1)
             tell("[DEBUG] state=\(stateStr)  stack=<\(depth)> \(stackAsString)\n")
+        }
+
+        // Ensure a clean IP (0 = top-level sentinel) after each top-level feed in
+        // interpret mode. This prevents a dirty IP (leftover from errors, FLOAD
+        // recursion, or previous bad threaded runs) from being rpush'ed as the
+        // return frame for the *next* command line's colon executions.
+        if readCell(STATE) == 0 && !waitingForKey {
+            ip = 0
         }
     }
 
@@ -598,7 +668,8 @@ public final class LBForth {
         }
         // In all cases (top-level KEY or after a colon def), give the outer interpreter
         // a chance to finish processing any remaining words on the current top-level line
-        // (e.g. nothing, or if somehow more) and print the "OK" if the line completed.
+        // (e.g. nothing, or if somehow more) and print the "OK" if the line completed
+        // (note: OK is suppressed for feeds that happen during FLOAD).
         runInterpreter()
     }
 
@@ -610,6 +681,7 @@ public final class LBForth {
         fileLoadRequested = false
         fileEditRequested = false
         pendingEditURL = nil
+        pendingLoadURL = nil
         loadFileContents(url)
     }
 
@@ -618,24 +690,18 @@ public final class LBForth {
     /// (in showFileEditDialog completion or post-feed handler) because it requires AppKit (NSWorkspace).
     public func editFile(_ url: URL) {
         fileEditRequested = false
+        fileLoadRequested = false
         pendingEditURL = nil
+        pendingLoadURL = nil
         // No load/interpret happens for EDIT — that's the point (edit bad sources safely before FLOAD).
     }
 
-    /// Common resolution for FLOAD/EDIT specs (auto .fth if basename has no dot, ~ expansion,
-    /// absolute vs relative to currentDirectoryPath). Factored to keep behavior identical.
+    /// Common resolution for FLOAD/EDIT specs (~ expansion, absolute vs relative to
+    /// currentDirectoryPath). Factored to keep behavior identical. Auto .fth append for
+    /// FLOAD (when leaf name has no dot) is handled in FLOAD's resolve path.
     private func resolvedURL(for spec: String) -> URL {
         let fm = FileManager.default
-        var name = spec
-        // Only auto-append .fth if the basename has no extension at all (common Forth convention).
-        // If user gave an explicit ext (even .txt), respect it.
-        var base = name
-        if let slash = name.lastIndex(of: "/") ?? name.lastIndex(of: "\\") {
-            base = String(name[name.index(after: slash)...])
-        }
-        if !base.contains(".") {
-            name += ".fth"
-        }
+        let name = spec
         let url: URL
         if name.contains("/") || name.contains("\\") {
             if name.hasPrefix("~") {
@@ -645,8 +711,8 @@ public final class LBForth {
                 url = URL(fileURLWithPath: name)
             }
         } else {
-            // Relative to current working directory (as specified).
-            let cwd = fm.currentDirectoryPath
+            // Relative to current (logical) working directory (as specified).
+            let cwd = logicalCurrentDirectory.isEmpty ? fm.currentDirectoryPath : logicalCurrentDirectory
             url = URL(fileURLWithPath: cwd).appendingPathComponent(name)
         }
         return url
@@ -654,7 +720,9 @@ public final class LBForth {
 
     private func resolveAndLoadFile(spec: String) {
         let url = resolvedURL(for: spec)
-        loadFileContents(url)
+        // Defer actual load (and any .fth auto-fallback) to host + loadFileContents.
+        // Host will scope + chdir + call loadFile.
+        self.pendingLoadURL = url
     }
 
     /// For named EDIT <spec>: resolve exactly like FLOAD would, set pendingEditURL so the
@@ -667,57 +735,86 @@ public final class LBForth {
     }
 
     private func loadFileContents(_ url: URL) {
-        do {
-            let data = try Data(contentsOf: url)
-            // Be tolerant of old source files (e.g. renamed .SEQ from OldSources) that may
-            // not be strict UTF-8 (high-bit chars, legacy encodings, etc.). Fall back so
-            // FLOAD doesn't complain "isn’t in the correct format".
-            let content: String
-            if let utf8 = String(data: data, encoding: .utf8) {
-                content = utf8
-            } else if let latin = String(data: data, encoding: .isoLatin1) {
-                content = latin
-            } else {
-                // Last resort: decode with replacement characters for any bad bytes.
-                content = String(decoding: data, as: UTF8.self)
-            }
-            // Split on any line ending (handles \n, \r, \r\n etc. cleanly).
-            let rawLines = content.components(separatedBy: .newlines)
-            let echoOn = (fileEchoAddr != 0) && (readCell(fileEchoAddr) != 0)
+        // Support FLOAD auto .fth: if the provided url's leaf has no dot, try the literal
+        // name first; if it doesn't exist, fall back to name + ".fth". This lets
+        // "fload foo" work whether the file is "foo" or "foo.fth".
+        let leaf = url.lastPathComponent
+        let candidates: [URL] = !leaf.contains(".") ?
+            [url, url.deletingLastPathComponent().appendingPathComponent(leaf + ".fth")] :
+            [url]
 
-            self.loadNesting += 1
-            self.sourceLoadStop = false
-            self.inSlashSlashComment = false
-            defer { self.loadNesting -= 1 }
+        for target in candidates {
+            do {
+                let data = try Data(contentsOf: target)
+                // Be tolerant of old source files (e.g. renamed .SEQ from OldSources) that may
+                // not be strict UTF-8 (high-bit chars, legacy encodings, etc.). Fall back so
+                // FLOAD doesn't complain "isn’t in the correct format".
+                let content: String
+                if let utf8 = String(data: data, encoding: .utf8) {
+                    content = utf8
+                } else if let latin = String(data: data, encoding: .isoLatin1) {
+                    content = latin
+                } else {
+                    // Last resort: decode with replacement characters for any bad bytes.
+                    content = String(decoding: data, as: UTF8.self)
+                }
+                // Split on any line ending (handles \n, \r, \r\n etc. cleanly).
+                let rawLines = content.components(separatedBy: .newlines)
 
-            for raw in rawLines {
-                if echoOn {
-                    tell(raw + "\n")
+                self.loadNesting += 1
+                self.sourceLoadStop = false
+                self.inSlashSlashComment = false
+                defer {
+                    if self.loadNesting > 0 { self.loadNesting -= 1 }
+                    self.sourceLoadStop = false
+                    self.inSlashSlashComment = false
                 }
-                let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-                if !trimmed.isEmpty {
-                    feedLine(raw)
-                    if self.sourceLoadStop {
-                        self.sourceLoadStop = false
-                        break
+
+                for raw in rawLines {
+                    // Re-evaluate echoOn on every line so that FILE-ECHO ON (or OFF) executed
+                    // from earlier lines in *this* file take effect for subsequent lines.
+                    // Also force-echo the directive line itself so "FILE-ECHO ON" at top of
+                    // file visibly enables echo for the load (and turns on for lines after it).
+                    let echoOn = (fileEchoAddr != 0) && (readCell(fileEchoAddr) != 0)
+                    let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+                    let lower = trimmed.lowercased()
+                    let isEchoToggle = lower.hasPrefix("file-echo") && (lower.contains("on") || lower.contains("off"))
+                    if echoOn || isEchoToggle {
+                        tell(raw + "\n")
                     }
-                    if errorFlag {
-                        tell("? FLOAD aborted after error in \(url.lastPathComponent)\n")
-                        break
+                    if !trimmed.isEmpty {
+                        feedLine(raw)
+                        if self.sourceLoadStop {
+                            break
+                        }
+                        if errorFlag {
+                            tell("? FLOAD aborted after error in \(target.lastPathComponent)\n")
+                            errorFlag = false
+                            break
+                        }
                     }
                 }
+                return  // success on this candidate
+            } catch {
+                // try next candidate (literal then auto-.fth for bare FLOAD names)
             }
-        } catch {
-            tell("? FLOAD could not read '\(url.lastPathComponent)': \(error.localizedDescription)\n")
-            errorFlag = true
         }
+        // All candidates failed (or only one).
+        let reportURL = candidates.last ?? url
+        // Use a clean message; avoid embedding Cocoa's localizedDescription which
+        // can contain curly/smart quotes and cause display oddities in the console.
+        tell("? FLOAD could not read '\(reportURL.lastPathComponent)' (not found or unreadable)\n")
+        // Helpful hint for the common sandbox case (no bookmark/scope for the logical dir yet).
+        tell("  (If the file is in your current directory, type bare `fload` and pick any file in that folder once to authorize it. Then named FLOAD and CHDIR will stick across launches.)\n")
+        errorFlag = true
     }
 
     // CHDIR support (used by the CHDIR word)
     private func changeDirectory(spec: String) {
         let fm = FileManager.default
         if spec.isEmpty {
-            tell("Current directory: \(fm.currentDirectoryPath)\n")
+            let toReport = logicalCurrentDirectory.isEmpty ? fm.currentDirectoryPath : logicalCurrentDirectory
+            tell("Current directory: \(toReport)\n")
             return
         }
         let expanded = (spec as NSString).expandingTildeInPath
@@ -725,27 +822,39 @@ public final class LBForth {
         if expanded.hasPrefix("/") {
             newURL = URL(fileURLWithPath: expanded)
         } else {
-            let cwd = fm.currentDirectoryPath
+            let cwd = logicalCurrentDirectory.isEmpty ? fm.currentDirectoryPath : logicalCurrentDirectory
             newURL = URL(fileURLWithPath: cwd).appendingPathComponent(expanded)
         }
         var isDirectory: ObjCBool = false
-        if fm.fileExists(atPath: newURL.path, isDirectory: &isDirectory), isDirectory.boolValue {
-            if fm.changeCurrentDirectoryPath(newURL.path) {
-                tell("Current directory: \(fm.currentDirectoryPath)\n")
-            } else {
-                tell("CHDIR error: could not change to '\(spec)'\n")
-                errorFlag = true
-            }
+        let visibleAsDir = fm.fileExists(atPath: newURL.path, isDirectory: &isDirectory) && isDirectory.boolValue
+        // Always update logical (and fire host callback) so that even before any security
+        // grant, the user can "chdir" to their actual folder (e.g. the project dir containing
+        // Forthing.fth). This makes the default "the right place", bare "chdir" reports it,
+        // and subsequent named "fload Forthing.fth" resolves against the correct logical dir.
+        // The open may still fail until a bare FLOAD dialog has authorized the tree (creating
+        // a bookmark that activate/pending can use for startAccess + Data).
+        logicalCurrentDirectory = newURL.path
+        if fm.changeCurrentDirectoryPath(newURL.path) {
+            tell("Current directory: \(logicalCurrentDirectory)\n")
         } else {
-            tell("CHDIR error: '\(spec)' is not a directory\n")
-            errorFlag = true
+            // Report the logical even if process-level chdir didn't fully stick (sandbox).
+            tell("Current directory: \(logicalCurrentDirectory)\n")
         }
+        if !visibleAsDir {
+            // Soft note (no errorFlag, so REPL stays usable). User can still use full paths
+            // or bare fload to authorize; named relative will attempt the logical path.
+            tell("(note: directory not visible to sandbox yet; bare `fload` to authorize if loads fail)\n")
+        }
+        // Notify host so it can try to create/activate a bookmark for this exact dir
+        // (succeeds if current scope from ancestor or panel covers it).
+        let dirURL = URL(fileURLWithPath: logicalCurrentDirectory)
+        self.onDirectoryChanged?(dirURL)
     }
 
     // DIR support (used by the DIR word). Supports optional <path><filespec> with * ? wildcards.
     private func listDirectory(spec: String) {
         let fm = FileManager.default
-        var basePath = fm.currentDirectoryPath
+        var basePath = logicalCurrentDirectory.isEmpty ? fm.currentDirectoryPath : logicalCurrentDirectory
         var filter = ""
         if !spec.isEmpty {
             let expanded = (spec as NSString).expandingTildeInPath
@@ -808,7 +917,8 @@ public final class LBForth {
             tell("\n \(count) file(s)\n\n")
         } catch {
             tell("DIR error: Cannot read directory '\(dirURL.path)'\n")
-            errorFlag = true
+            tell("  (Use bare `fload` to pick/authorize a folder if you have not yet; CHDIR to it may help too.)\n")
+            // Do not set errorFlag: DIR failure shouldn't leave the REPL in error state.
         }
     }
 
@@ -839,30 +949,30 @@ public final class LBForth {
     // MARK: - Dictionary creation (very close to the original)
 
     private func alignHere() {
-        var h = readCell(HERE)
+        var h = readCell(DP_ADDR)
         while (h & 7) != 0 {
             writeByte(h, 0)
             h += 1
         }
-        writeCell(HERE, h)
+        writeCell(DP_ADDR, h)
     }
 
     // Direct memory versions — these do NOT touch the data stack.
     // Critical during init when building the primitive dictionary.
     private func writeCellHere(_ value: Cell) {
-        let h = readCell(HERE)
+        let h = readCell(DP_ADDR)
         writeCell(h, value)
-        writeCell(HERE, h + 8)
+        writeCell(DP_ADDR, h + 8)
     }
 
     private func writeByteHere(_ value: UInt8) {
-        let h = readCell(HERE)
+        let h = readCell(DP_ADDR)
         writeByte(h, value)
-        writeCell(HERE, h + 1)
+        writeCell(DP_ADDR, h + 1)
     }
 
     private func createWord(name: String, immediate: Bool) {
-        let newLatest = readCell(HERE)
+        let newLatest = readCell(DP_ADDR)
 
         // link field (previous LATEST) — direct write
         let oldLatest = readCell(LATEST)
@@ -1000,13 +1110,14 @@ public final class LBForth {
     private func registerCorePrimitives() {
         // We must define EXIT and DOCOL first because everything else uses them.
 
-        // ID 0 = DOCOL / RUNDOCOL
+        // ID 0 = DOCOL / RUNDOCOL  (marker only; first cell of colon definitions)
         docolID = Cell(primitives.count)
         primitives.append {
-            // On entry, commandAddress points at the DOCOL cell.
-            // We want to push the old IP and start executing the body after DOCOL.
-            self.rpush(self.ip)
-            self.ip = self.commandAddress + 8   // skip the DOCOL cell itself
+            // DOCOL is a marker value stored as the first cell at a colon def's CFA.
+            // Callers (top-level execute or innerThread large-cell path) jump directly to
+            // body (cfa+8) and push any needed return frame themselves. This body is
+            // defensive only (in case of direct dispatch) and must not push extra frames.
+            self.ip = Int(self.currentCodeAddr) + 8
         }
 
         // EXIT
@@ -1020,6 +1131,24 @@ public final class LBForth {
             let value = self.readCell(self.ip)
             self.ip += 8
             self.push(value)
+        }
+
+        // Runtime support for ."  (traditional compact form).
+        // . " (immediate) compiles a call to this + inlines a counted string (len byte + chars, cell-aligned).
+        // When this executes in innerThread, it outputs the string (like TYPE) and advances IP
+        // past the inline data so the next threaded instruction is found correctly.
+        // This replaces the old per-char LIT+EMIT expansion, making dictionary usage for strings
+        // much more compact and SEE decompilations readable (shows ." text " instead of a long
+        // sequence of LIT <n> EMIT for each character).
+        dotQuoteID = register("(.\\\")") {
+            let strAddr = self.ip
+            let len = Int(self.readByte(strAddr))
+            for i in 0..<len {
+                self.putkey(self.readByte(strAddr + 1 + i))
+            }
+            var newIP = self.ip + 1 + len
+            while (newIP & 7) != 0 { newIP += 1 }
+            self.ip = newIP
         }
 
         // Now safe to define the rest
@@ -1041,10 +1170,14 @@ public final class LBForth {
             self.push(a % b); self.push(a / b)
         }
 
-        _ = register(".")     { self.tell(String(self.pop())); self.putkey(32) }
+        _ = register(".")     { 
+            let n = self.pop()
+            let b = self.readCell(self.BASE)
+            self.tell( self.formatNumber(n, base: b, signed: true) ); self.putkey(32) 
+        }
         _ = register("CR")    { self.putkey(10) }
         _ = register("SPACE") { self.putkey(32) }
-        _ = register("EMIT")  { self.putkey(UInt8(self.pop() & 0xff)) }
+        emitID = register("EMIT")  { self.putkey(UInt8(self.pop() & 0xff)) }
 
         // KEY ( -- char )
         // Classic blocking behavior: waits until at least one input character is available,
@@ -1087,10 +1220,13 @@ public final class LBForth {
         _ = register(",")  { self.comma() }
         _ = register("C,") { self.commaByte() }
 
-        _ = register("HERE")  { self.push(self.readCell(self.HERE)) }
-        _ = register("LATEST"){ self.push(self.readCell(self.LATEST)) }
-        _ = register("STATE") { self.push(self.readCell(self.STATE)) }
-        _ = register("BASE")  { self.push(self.readCell(self.BASE)) }
+        _ = register("HERE")  { self.push( Cell( self.DP_ADDR ) ) }  // NOTE: this primitive is shadowed by high-level : HERE DP @ ; so HERE returns the value
+        _ = register("LATEST"){ self.push( Cell( self.LATEST ) ) }
+        _ = register("DP")    { self.push( Cell( self.DP_ADDR ) ) }  // DP ( -- addr )  the dictionary pointer variable; HERE is DP @
+        _ = register("STATE") { self.push( Cell( self.STATE ) ) }
+        _ = register("BASE")  { self.push( Cell( self.BASE ) ) }
+        _ = register("SP")    { self.push( Cell( self.SP ) ) }
+        _ = register("RSP")   { self.push( Cell( self.RSP ) ) }
 
         // >HEADER ( xt -- header )  Given a code field address (xt), return the
         // start of its dictionary header (the link field address).  This is the
@@ -1248,7 +1384,7 @@ public final class LBForth {
                 self.errorFlag = true
                 return
             }
-            let here = self.readCell(self.HERE)
+            let here = self.readCell(self.DP_ADDR)
             self.push(here)   // destination address for backward branches (AGAIN, UNTIL, REPEAT)
         }
 
@@ -1260,7 +1396,7 @@ public final class LBForth {
             }
             let dest = self.pop()
             self.push(self.branchID); self.comma()          // compile the unconditional branch token
-            let here = self.readCell(self.HERE)
+            let here = self.readCell(self.DP_ADDR)
             let offset = dest - (here + 8)                  // offset from after the offset cell
             self.push(offset); self.comma()
         }
@@ -1273,7 +1409,7 @@ public final class LBForth {
             }
             let dest = self.pop()
             self.push(self.zeroBranchID); self.comma()
-            let here = self.readCell(self.HERE)
+            let here = self.readCell(self.DP_ADDR)
             let offset = dest - (here + 8)
             self.push(offset); self.comma()
         }
@@ -1287,7 +1423,7 @@ public final class LBForth {
             // Compile a 0BRANCH with a placeholder offset (0 for now).
             // The offset will be resolved later by REPEAT.
             self.push(self.zeroBranchID); self.comma()
-            let placeholderAddr = self.readCell(self.HERE)  // address of the offset cell we just reserved
+            let placeholderAddr = self.readCell(self.DP_ADDR)  // address of the offset cell we just reserved
             self.push(0); self.comma()                      // placeholder offset (will be patched by REPEAT)
 
             // Leave the address of the placeholder on the compile-time stack
@@ -1307,14 +1443,14 @@ public final class LBForth {
 
             // First, compile unconditional branch back to BEGIN
             self.push(self.branchID); self.comma()
-            let here = self.readCell(self.HERE)
+            let here = self.readCell(self.DP_ADDR)
             let backOffset = dest - (here + 8)
             self.push(backOffset); self.comma()
 
             // Now resolve the forward branch that WHILE left behind.
             // The code after REPEAT (current HERE) is where the 0BRANCH should jump to
             // when its condition was false.
-            let afterRepeat = self.readCell(self.HERE)
+            let afterRepeat = self.readCell(self.DP_ADDR)
             let forwardOffset = afterRepeat - (origPlaceholder + 8)
             self.writeCell(Int(origPlaceholder), forwardOffset)
         }
@@ -1330,7 +1466,7 @@ public final class LBForth {
                 return
             }
             self.push(self.zeroBranchID); self.comma()
-            let placeholderAddr = self.readCell(self.HERE)
+            let placeholderAddr = self.readCell(self.DP_ADDR)
             self.push(0); self.comma()
             self.push(placeholderAddr)
         }
@@ -1343,11 +1479,11 @@ public final class LBForth {
             }
             let ifPlaceholder = self.pop()
             self.push(self.branchID); self.comma()
-            let elsePlaceholder = self.readCell(self.HERE)
+            let elsePlaceholder = self.readCell(self.DP_ADDR)
             self.push(0); self.comma()
             self.push(elsePlaceholder)
 
-            let afterElseBranch = self.readCell(self.HERE)
+            let afterElseBranch = self.readCell(self.DP_ADDR)
             let skipOffset = afterElseBranch - (ifPlaceholder + 8)
             self.writeCell(Int(ifPlaceholder), skipOffset)
         }
@@ -1359,7 +1495,7 @@ public final class LBForth {
                 return
             }
             let placeholder = self.pop()
-            let here = self.readCell(self.HERE)
+            let here = self.readCell(self.DP_ADDR)
             let forwardOffset = here - (placeholder + 8)
             self.writeCell(Int(placeholder), forwardOffset)
         }
@@ -1413,6 +1549,9 @@ public final class LBForth {
         // The skipped region can span multiple lines (works in console REPL and during FLOAD).
         // Text after the '{' on the closing line is processed normally.
         // Immediate so it works while compiling loaded files too. For old code compatibility.
+        // Note: use single \ for a normal single-line comment to end-of-line (like in most Forths).
+        // Accidentally using \\ instead of \ will start a block comment that may swallow the rest
+        // of the file (until a { is seen), preventing \S, definitions, etc. from taking effect.
         _ = register("\\\\", immediate: true) {
             while !self.inputQueue.isEmpty {
                 let c = self.inputQueue.removeFirst()
@@ -1553,14 +1692,14 @@ public final class LBForth {
         _ = register("SPACES") { let n = Int(self.pop()); for _ in 0..<n { self.putkey(32) } }
         _ = register("U.") {
             let v = self.pop()
-            let u = UInt64( bitPattern: Int64(v) )
-            self.tell( String(u) ); self.putkey(32)
+            let b = self.readCell(self.BASE)
+            self.tell( self.formatNumber(v, base: b, signed: false) ); self.putkey(32)
         }
         _ = register("U.R") {
             let wid = Int(self.pop())
             let v = self.pop()
-            let u = UInt64( bitPattern: Int64(v) )
-            var s = String(u)
+            let b = self.readCell(self.BASE)
+            var s = self.formatNumber(v, base: b, signed: false)
             if s.count < wid { s = String(repeating: " ", count: wid - s.count) + s }
             self.tell(s)
         }
@@ -1578,12 +1717,34 @@ public final class LBForth {
             self.push( a % b )
         }
 
-        _ = register("ALLOT") { let n = self.pop(); let h = self.readCell(self.HERE); self.writeCell(self.HERE, h + n) }
+        _ = register("ALLOT") { let n = self.pop(); let h = self.readCell(self.DP_ADDR); self.writeCell(self.DP_ADDR, h + n) }
 
         _ = register("CHAR") {
-            let w = self.parseWord()
-            if w.isEmpty { self.push(0); return }
-            self.push( Int( w.utf8.first ?? 0 ) )
+            let addr = self.parseToWordBuffer(using: 32)
+            // CHAR returns the first character of the parsed "word"
+            let c = self.readByte(Int(addr) + 1)  // after count byte
+            self.push(Cell(c))
+        }
+
+        // WORD ( char -- addr )
+        // Parse the input stream (inputQueue, from keyboard lines or FLOADed file lines)
+        // using the given delimiter char. Skip leading delimiters, collect chars until
+        // the next delimiter (leaving the delimiter in the stream), build a counted string
+        // at the fixed WORD_BUFFER in memory (count byte, chars, trailing blank), return its addr.
+        // This is the general parser needed for strings, names, etc. (e.g. to implement .", S", etc.).
+        _ = register("WORD") {
+            let delim = UInt8(self.pop() & 0xff)
+            let addr = self.parseToWordBuffer(using: delim)
+            self.push(addr)
+        }
+
+        // COUNT ( c-addr -- addr u )
+        // For a counted string (as returned by WORD), return the address of first char and the length.
+        _ = register("COUNT") {
+            let caddr = Int(self.pop())
+            let len = Int( self.readByte(caddr) )
+            self.push( Cell(caddr + 1) )
+            self.push( Cell(len) )
         }
 
         // === Full implementation of counted loops: DO ... LOOP / +LOOP , ?DO, I, UNLOOP, LEAVE ===
@@ -1693,7 +1854,7 @@ public final class LBForth {
             }
             self.push(unloopID); self.comma()  // ensure rstack loop params dropped at runtime before branching out
             self.push(self.branchID); self.comma()
-            let placeholderAddr = self.readCell(self.HERE)
+            let placeholderAddr = self.readCell(self.DP_ADDR)
             self.push(0); self.comma()
             self.loopControlStack.append(placeholderAddr)  // leave for LOOP to resolve to after-loop addr (like a LEAVE ph)
         }
@@ -1706,7 +1867,7 @@ public final class LBForth {
                 return
             }
             self.push(doSetupID); self.comma()
-            let dest = self.readCell(self.HERE)  // body starts right after setup
+            let dest = self.readCell(self.DP_ADDR)  // body starts right after setup
             self.loopControlStack.append(dest)
             self.loopControlStack.append(0)  // sentinel for leave/?DO placeholders (0 means end of list)
         }
@@ -1719,9 +1880,9 @@ public final class LBForth {
                 return
             }
             self.push(qdoSetupID); self.comma()
-            let phAddr = self.readCell(self.HERE)
+            let phAddr = self.readCell(self.DP_ADDR)
             self.push(0); self.comma()
-            let dest = self.readCell(self.HERE)  // body starts after the ph cell for skip branch
+            let dest = self.readCell(self.DP_ADDR)  // body starts after the ph cell for skip branch
             // append so collect gets: ... phs , 0 , dest   (phs after 0 get collected first)
             self.loopControlStack.append(dest)
             self.loopControlStack.append(0)
@@ -1743,10 +1904,10 @@ public final class LBForth {
             }
             let dest = self.loopControlStack.removeLast()
             self.push(loopID); self.comma()
-            let here = self.readCell(self.HERE)
+            let here = self.readCell(self.DP_ADDR)
             let offset = dest - (here + 8)
             self.push(offset); self.comma()
-            let afterLoop = self.readCell(self.HERE)
+            let afterLoop = self.readCell(self.DP_ADDR)
             for ph in leavePhs {
                 let fwdOff = afterLoop - (ph + 8)
                 self.writeCell(Int(ph), fwdOff)
@@ -1768,10 +1929,10 @@ public final class LBForth {
             }
             let dest = self.loopControlStack.removeLast()
             self.push(plusLoopID); self.comma()
-            let here = self.readCell(self.HERE)
+            let here = self.readCell(self.DP_ADDR)
             let offset = dest - (here + 8)
             self.push(offset); self.comma()
-            let afterLoop = self.readCell(self.HERE)
+            let afterLoop = self.readCell(self.DP_ADDR)
             for ph in leavePhs {
                 let fwdOff = afterLoop - (ph + 8)
                 self.writeCell(Int(ph), fwdOff)
@@ -1789,8 +1950,9 @@ public final class LBForth {
         }
 
         // FLOAD <name> — load and interpret/compile a text file as Forth source.
-        // - Adds .fth if no extension.
-        // - Resolves relative names against currentDirectoryPath.
+        // - Adds .fth if no extension (only if basename has no dot).
+        // - Resolves relative names against currentDirectoryPath (or absolute/~ paths).
+        // - For named form: sets pendingLoadURL (host will scope access for sandbox, chdir, then load).
         // - If no name given, sets fileLoadRequested so host can show dialog.
         _ = register("FLOAD") {
             self.validateAndRepairSystemState()
@@ -1807,8 +1969,8 @@ public final class LBForth {
         // - No name: sets fileEditRequested so host shows NSOpenPanel (starting at current dir, like FLOAD).
         //   On pick: host opens the file via NSWorkspace, chdirs to its parent folder (so CHDIR/DIR/relative
         //   FLOAD/EDIT etc. now use that folder), and persists it for next launch.
-        // - With name: resolves (same .fth auto-ext, ~, cwd-relative rules as FLOAD), sets pending so host
-        //   post-processing opens it in editor + updates cwd.
+        // - With name: resolves (same ~, cwd-relative as FLOAD; .fth auto-fallback if no dot and exact missing),
+        //   sets pending so host post-processing opens it in editor + updates cwd.
         // This lets you navigate + pick a bad source file (e.g. one full of old cruft that would crash/hang
         // on FLOAD) and edit it externally first, without ever feeding its contents to the interpreter.
         // After editing/saving the file, you can FLOAD the cleaned version.
@@ -1949,7 +2111,7 @@ public final class LBForth {
                         newLatest = prev
                     }
                     self.writeCell(self.LATEST, newLatest)
-                    self.writeCell(self.HERE, link)   // reclaim memory from this header forward
+                    self.writeCell(self.DP_ADDR, link)   // reclaim memory from this header forward (set the DP value back)
 
                     // Extra defensive repair after modifying critical system variables.
                     self.validateAndRepairSystemState()
@@ -2048,6 +2210,50 @@ public final class LBForth {
             }
         }
 
+        // ."  immediate — print the following " delimited text.
+        // Uses parseToWordBuffer (like WORD) for parsing the delimited content from the input
+        // stream (works for keyboard or during FLOAD).
+        // Skips a leading whitespace separator (standard ." text" usage).
+        //
+        // Interpret: output the text immediately.
+        // Compile: emit a call to the runtime (.") primitive, followed by an *inlined counted
+        // string* (count byte + the characters, then aligned to cell boundary). This is the
+        // classic compact representation. The runtime (.") will output the string (equivalent
+        // to TYPE) and advance the IP past the inline data.
+        //
+        // Benefits: much smaller dictionary footprint for long strings (O(1) cells + string
+        // bytes vs. 3 cells per character), and SEE produces clean output like the source:
+        //   : TESTING ." This is a test of the testing" ;
+        // instead of a huge LIT/EMIT expansion.
+        _ = register(".\"", immediate: true) {
+            let caddr = self.parseToWordBuffer(using: 34)
+            // consume the closing delimiter left by the parser (so outer parser doesn't see stray ")
+            if !self.inputQueue.isEmpty && self.inputQueue.first == 34 {
+                _ = self.inputQueue.removeFirst()
+            }
+            var len = Int( self.readByte( Int(caddr) ) )
+            var saddr = Int(caddr) + 1
+            // skip leading ws separator if present (so ." text" yields "text" not " text")
+            if len > 0 && self.readByte(saddr) <= 32 {
+                saddr += 1
+                len -= 1
+            }
+            if self.readCell(self.STATE) != 0 {
+                // Compile: call the runtime string emitter, then inline the counted string data.
+                self.push(self.dotQuoteID); self.comma()
+                self.writeByteHere(UInt8(len))
+                for i in 0..<len {
+                    self.writeByteHere( self.readByte(saddr + i) )
+                }
+                self.alignHere()
+            } else {
+                // Interpret: just output the text now.
+                for i in 0..<len {
+                    self.putkey( self.readByte( saddr + i ) )
+                }
+            }
+        }
+
         // Simple CONSTANT (enough for education)
         _ = register("CONSTANT") {
             let name = self.parseWord()
@@ -2070,11 +2276,11 @@ public final class LBForth {
             // After docol + LIT we are at the value slot V. The EXIT will live at V+8, so the
             // var's data cell lives at V+16. Store that address as the literal so the var
             // word (when executed) pushes the correct data address.
-            let dataAddr = self.readCell(self.HERE) + 16
+            let dataAddr = self.readCell(self.DP_ADDR) + 16
             self.push(dataAddr); self.comma()
             self.push(self.exitID); self.comma()
             // allocate one cell of data space (advances the dict pointer past the data cell)
-            self.writeCell(self.HERE, self.readCell(self.HERE) + 8)
+            self.writeCell(self.DP_ADDR, self.readCell(self.DP_ADDR) + 8)
         }
 
         // CREATE ( "<spaces>name" -- )  ANS 2012
@@ -2090,10 +2296,10 @@ public final class LBForth {
             //   <createRuntimeID>
             //   <dataAddr value>     (the PFA we will push)
             // Data field starts after these two cells (HERE left there for user , ALLOT).
-            let dataAddr = self.readCell(self.HERE) + 16
+            let dataAddr = self.readCell(self.DP_ADDR) + 16
             self.push(self.createRuntimeID); self.comma()
             self.push(dataAddr); self.comma()
-            // HERE is now at the data field start. No extra ALLOT (unlike VARIABLE).
+            // DP_ADDR is now at the data field start. No extra ALLOT (unlike VARIABLE).
         }
 
         // DOES> ( -- )  ANS 2012  (immediate)
@@ -2111,12 +2317,12 @@ public final class LBForth {
             //   (DOES>)     -- the patch primitive
             // The does code (user's code after DOES>) will be compiled by the normal loop right after this.
             self.push(self.litID); self.comma()
-            let placeholder = self.readCell(self.HERE)
+            let placeholder = self.readCell(self.DP_ADDR)
             self.push(0); self.comma()
             self.push(self.doesPatchID); self.comma()
 
-            // The does code starts at the current HERE.
-            let doesCodeAddr = self.readCell(self.HERE)
+            // The does code starts at the current DP_ADDR (dict ptr value).
+            let doesCodeAddr = self.readCell(self.DP_ADDR)
             self.writeCell(Int(placeholder), doesCodeAddr)
 
             // The user's code after DOES> (e.g. @ or more) continues to be compiled here
@@ -2155,6 +2361,19 @@ public final class LBForth {
         // very start of the header, so >HEADER is effectively >LFA).
         self.feedLine(": >LFA >HEADER ;")
 
+        // >NFA gives address of the name field (the flags+length byte). For words
+        // defined without IMMEDIATE or HIDDEN, the byte value is just the name length,
+        // so COUNT TYPE on it will print the name cleanly. For flagged words the
+        // count will be inflated by the flag bits.
+        self.feedLine(": >NFA >HEADER 8 + ;   ( xt -- nfa )")
+
+        // ID. is a robust "print name from xt" that masks the length out of the
+        // flags+len byte, so it always prints exactly the name chars even for
+        // IMMEDIATE words etc. This avoids the "anomaly" of garbage before/after
+        // the name when inspecting headers with COUNT TYPE directly on >HEADER
+        // (which points at the link field, not the name) or on >NFA for flagged words.
+        self.feedLine(": ID. ( xt -- ) >NFA DUP C@ 31 AND SWAP 1+ SWAP TYPE ;")
+
         // Teaching version: a minimal high-level FORGET that assumes an xt is already
         // on the stack (from a preceding tick). We deliberately give it a different
         // name so it does *not* shadow the user-friendly parsing primitive FORGET
@@ -2164,6 +2383,11 @@ public final class LBForth {
         // The primitive version has the kernelLatest safety guard and good errors.
         // Advanced / teaching usage:  ' TEST FORGET-WORD
         self.feedLine(": FORGET-WORD >LFA @ LATEST ! ;")
+
+        // HERE is the current dictionary pointer value (for allocation, , etc.).
+        // DP is the variable holding it (DP -- addr of the ptr cell).
+        // This matches the classic expectation "HERE is DP @".
+        self.feedLine(": HERE DP @ ;")
 
         // file-echo variable (user can do: file-echo ON   or   file-echo OFF ).
         // Controls whether FLOAD echoes each source line to the console as it loads.
@@ -2184,8 +2408,8 @@ public final class LBForth {
         }
         if self.fileEchoAddr == 0 {
             // Fallback (should never happen): allocate a cell now.
-            self.fileEchoAddr = self.readCell(self.HERE)
-            self.writeCell(self.HERE, self.fileEchoAddr + 8)
+            self.fileEchoAddr = self.readCell(self.DP_ADDR)
+            self.writeCell(self.DP_ADDR, self.fileEchoAddr + 8)
         }
 
         // We can add more high-level words later by feeding source once we have WORD, FIND, etc.
@@ -2235,8 +2459,9 @@ public final class LBForth {
                     }
                 }
             } else {
-                // Try number
-                if let num = Int(name) {
+                // Try number, respecting current BASE (supports 2..36, signs, letters A-Z)
+                let b = self.readCell(self.BASE)
+                if let num = Int(name, radix: Int( max(2, min(36, b)) )) {
                     if readCell(STATE) != 0 {
                         self.push(litID); self.comma()
                         self.push(num); self.comma()
@@ -2254,14 +2479,18 @@ public final class LBForth {
             }
         }
 
-        // Classic Forth behavior: after successfully interpreting a complete line
-        // in interpret mode, print "OK" followed by newline.
+        // Classic Forth behavior: after successfully interpreting a complete *interactive*
+        // (top-level REPL) line in interpret mode, print "OK" followed by newline.
+        // During FLOAD (loadNesting > 0), we never emit these per-line OKs -- only
+        // explicit FILE-ECHO source lines (if enabled) + whatever regular output the
+        // interpreted source actually produces (., TYPE, EMIT, etc.).
+        //
         // (No leading space so that after ".s" or CR it doesn't look indented,
         // and after "." we get the single space that "." already emitted.)
         //
         // Do not print OK if we suspended for a blocking input word like KEY;
         // the OK will be printed when the line is resumed and completed after provideKey.
-        if !errorFlag && readCell(STATE) == 0 && !waitingForKey {
+        if !errorFlag && readCell(STATE) == 0 && !waitingForKey && loadNesting == 0 {
             tell("OK\n")
         }
 
@@ -2283,7 +2512,8 @@ public final class LBForth {
             }
             if self.inSlashSlashComment {
                 // This entire line (and future feeds until {) is comment; stop word parsing for this feed.
-                // (OK will still be emitted at end of this feedLine, consistent with \ and ( comments.)
+                // (For interactive REPL feeds, OK will still be emitted at end of this feedLine,
+                // consistent with \ and ( comments. During FLOAD the OK is suppressed anyway.)
                 return ""
             }
         }
@@ -2314,6 +2544,41 @@ public final class LBForth {
         }
 
         return result
+    }
+
+    // Helper used by WORD and CHAR (and future string parsers). Consumes from inputQueue
+    // (which receives appended lines from feedLine, whether REPL or FLOAD content).
+    // Skips leading exact delims, collects until delim or line-end, builds counted string
+    // (len byte + chars + trailing blank) at fixed WORD_BUFFER in the memory array.
+    // Returns the Forth addr of the count byte. The trailing delim (if any) is left in queue.
+    private func parseToWordBuffer(using delim: UInt8) -> Cell {
+        var collected: [UInt8] = []
+
+        // Skip leading delimiters (exact match)
+        while !self.inputQueue.isEmpty {
+            if self.inputQueue.first == delim {
+                _ = self.inputQueue.removeFirst()
+            } else {
+                break
+            }
+        }
+
+        // Collect non-delim chars; also stop at line ends (10/13) so we don't eat \n etc.
+        while !self.inputQueue.isEmpty {
+            let b = self.inputQueue.first!
+            if b == delim || b == 10 || b == 13 {
+                break
+            }
+            collected.append(self.inputQueue.removeFirst())
+        }
+
+        let len = min(collected.count, self.WORD_BUFFER_SIZE - 2)
+        self.writeByte(self.WORD_BUFFER, UInt8(len))
+        for (i, b) in collected.prefix(len).enumerated() {
+            self.writeByte(self.WORD_BUFFER + 1 + i, b)
+        }
+        self.writeByte(self.WORD_BUFFER + 1 + len, 32)  // trailing blank per classic
+        return Cell(self.WORD_BUFFER)
     }
 
     private func execute(cfa: Cell, firstCell: Cell) {
@@ -2394,9 +2659,11 @@ public final class LBForth {
                 tell("? Invalid executable token \(cell) (not a registered primitive; possible bad branch offset)\n")
                 errorFlag = true
             } else {
-                // Treat as address of another colon definition (threaded call)
+                // Treat as address of another colon definition (threaded call).
+                // Jump directly past the DOCOL marker cell at the target CFA; the
+                // return frame was already pushed above (standard for this marker style).
                 rpush(ip)
-                ip = Int(cell)
+                ip = Int(cell) + 8
                 if ip < 0 || ip + 8 > memory.count {
                     tell("? Bad threaded call target (ip=\(ip))\n")
                     errorFlag = true
@@ -2450,19 +2717,62 @@ public final class LBForth {
                 break
             }
 
-            if let pname = self.primitiveNames[cell] {
-                self.tell(pname + " ")
-                continue
-            }
-
+            // LIT must be handled *before* the generic primitive name check, because LIT
+            // is itself a registered primitive (small ID). If we check primitiveNames first,
+            // we print "LIT " (via name lookup) and continue without consuming the inline
+            // literal operand cell. The next cell (the actual value, e.g. a char code from ."
+            // or a number) would then be misinterpreted as the next opcode — leading to
+            // garbage decompiles that print random word names (whose IDs happen to match
+            // the literal values) instead of the values, and "LIT <name> EMIT" etc. for
+            // string literals. Execution was unaffected because LIT runtime always reads
+            // the inline value.
             if cell == self.litID {
                 if ip + 8 <= self.memory.count {
                     let val = self.readCell(ip)
                     ip += 8
-                    self.tell("\(val) ")
+                    // Print the value. For small printable ASCII (common from .") show a
+                    // hint of the char to make decompiles of string defs more readable.
+                    var shown = "\(val)"
+                    if (32...126).contains(Int(val)),
+                       let scalar = UnicodeScalar(UInt32(val)) {
+                        shown += " ('\(Character(scalar))')"
+                    }
+                    self.tell("LIT \(shown) ")
                 } else {
                     break
                 }
+                continue
+            }
+
+            // Special handling for the runtime string emitter used by ."
+            // This lets SEE produce traditional readable output instead of trying to
+            // decompile the inlined string bytes as instructions.
+            if cell == self.dotQuoteID {
+                self.tell(".\" ")
+                let strAddr = ip
+                let len = Int(self.readByte(strAddr))
+                var content = ""
+                for i in 0..<len {
+                    let b = self.readByte(strAddr + 1 + i)
+                    if b == 34 {
+                        content += "\\\""
+                    } else if b == 92 {
+                        content += "\\\\"
+                    } else if let scalar = UnicodeScalar(UInt32(b)) {
+                        content += String(Character(scalar))
+                    } else {
+                        content += "?"
+                    }
+                }
+                self.tell(content + "\" ")
+                var newIP = ip + 1 + len
+                while (newIP & 7) != 0 { newIP += 1 }
+                ip = newIP
+                continue
+            }
+
+            if let pname = self.primitiveNames[cell] {
+                self.tell(pname + " ")
                 continue
             }
 
@@ -2498,15 +2808,49 @@ public final class LBForth {
     // MARK: - Public helpers for the console / education
 
     /// Force the engine back to a known-good state.
-    /// Stacks are emptied, errorFlag cleared, STATE forced to interpret mode.
+    /// Stacks are emptied, dictionary is truncated to the initial kernel+bootstrap state
+    /// (all user-defined words and their data space are forgotten, like a full FORGET of
+    /// everything after kernel), errorFlag cleared, STATE forced to interpret mode.
     /// Safe to call from the host app (ConsoleView, tests) at any time.
     // Temp for debug
     public func debugFind(_ n: String) -> Bool { return findWord(n) != 0 }
 
-    public func resetToSafeState() {
-        validateAndRepairSystemState()   // extra belt-and-suspenders
+    /// Restore LATEST and HERE to the post-bootstrap kernel state, removing all
+    /// user-defined words (and reclaiming their memory). Also re-captures
+    /// fileEchoAddr from the (still-present) kernel FILE-ECHO word.
+    private func restoreKernelDictionary() {
+        if kernelLatest != 0 {
+            writeCell(LATEST, kernelLatest)
+        }
+        if kernelHere != 0 {
+            writeCell(DP_ADDR, kernelHere)
+        }
+
+        // Re-capture fileEchoAddr (the VARIABLE and its data cell are part of kernel).
+        // Do not allocate in the fallback here — that would advance HERE past kernelHere.
+        fileEchoAddr = 0
+        let hdr = self.findWord("FILE-ECHO")
+        if hdr != 0 {
+            let cfa = self.getCFA(hdr)
+            if self.readCell(Int(cfa)) == self.docolID {
+                if self.readCell(Int(cfa) + 8) == self.litID {
+                    self.fileEchoAddr = self.readCell(Int(cfa) + 16)
+                }
+            }
+        }
+        // If still 0 (shouldn't happen), FLOAD will just treat echo as off; safe.
+    }
+
+    /// Resets only runtime execution state (stacks, IP, flags, queues, debug, KEY/FLOAD
+    /// pending, loop controls, comment state). Does *not* touch the dictionary.
+    /// Useful for test harnesses that want to clean between steps while leaving
+    /// previously loaded/defined words intact. For a user-visible full reset (incl.
+    /// clearing all user words), use resetToSafeState().
+    public func resetRuntimeState() {
         spSet(1)
         rspSet(1)
+        ip = 0
+        commandAddress = 0
         errorFlag = false
         exitReq = false
         writeCell(STATE, 0)
@@ -2517,9 +2861,22 @@ public final class LBForth {
         fileLoadRequested = false
         fileEditRequested = false
         pendingEditURL = nil
+        pendingLoadURL = nil
         loopControlStack.removeAll()
         self.inSlashSlashComment = false
         self.sourceLoadStop = false
+        self.loadNesting = 0
+    }
+
+    public func resetToSafeState() {
+        validateAndRepairSystemState()   // extra belt-and-suspenders
+
+        // Clean runtime state first (stacks, flags, etc.).
+        resetRuntimeState()
+
+        // Full dictionary reset to initial state (user words + their data space gone).
+        restoreKernelDictionary()
+
         // Leave IP wherever it is; the next feedLine will start fresh parsing from
         // whatever input arrives next. Future improvement: point ip at a real QUIT
         // threaded-code sequence once we have one.
@@ -2540,9 +2897,15 @@ public final class LBForth {
         fileLoadRequested = false
         fileEditRequested = false
         pendingEditURL = nil
+        pendingLoadURL = nil
         loopControlStack.removeAll()
         self.inSlashSlashComment = false
         self.sourceLoadStop = false
+
+        let wasLoading = self.loadNesting > 0
+        // Do not zero loadNesting here; the loadFileContents defer (or its error path) will
+        // handle the decrement when the load aborts/ends. Zeroing here could make later \S
+        // in the same file see nesting==0 and fail to stop.
 
         // 2. Error handling during compilation vs interpretation.
         //
@@ -2556,10 +2919,22 @@ public final class LBForth {
         // resetToSafeState / start a fresh definition) does the definition
         // finish or get abandoned.
         if readCell(STATE) != 0 {
-            // Do NOT unhide or force STATE=0 here.
-            // The definition remains open for further lines.
-            tell("? Compile error — definition is still open.\n")
-            tell("? Type more lines to continue it, or `;` alone to finish it.\n")
+            if wasLoading {
+                // Aborting load due to compile error inside the file: clean up the partial
+                // definition (unhide it) and force back to interpret mode so the REPL after
+                // the aborted FLOAD is not left in compiling state.
+                let latest = readCell(LATEST)
+                if latest != 0 {
+                    let fl = readByte(Int(latest) + 8)
+                    writeByte(Int(latest) + 8, fl & ~FLAG_HIDDEN)
+                }
+                writeCell(STATE, 0)
+            } else {
+                // Do NOT unhide or force STATE=0 here for interactive.
+                // The definition remains open for further lines.
+                tell("? Compile error — definition is still open.\n")
+                tell("? Type more lines to continue it, or `;` alone to finish it.\n")
+            }
         } else {
             // Normal interpretation error — nothing special to do beyond
             // the stack reset below.
@@ -2571,14 +2946,26 @@ public final class LBForth {
         spSet(1)
         rspSet(1)
         let initialDict = rstackBase + RSTACK_SIZE * CELL_SIZE
-        let h = readCell(HERE)
-        if h < initialDict || h > MEM_SIZE - 1024 {
-            writeCell(HERE, initialDict)
+        let safeDictStart = (kernelHere != 0 ? kernelHere : initialDict)
+        let h = readCell(DP_ADDR)
+        if h < safeDictStart || h > MEM_SIZE - 1024 {
+            writeCell(DP_ADDR, safeDictStart)
         }
         let b = readCell(BASE)
         if b < 2 || b > 36 { writeCell(BASE, 10) }
 
-        errorFlag = false
+        ip = 0
+        commandAddress = 0
+
+        // For errors during FLOAD (loadNesting > 0 at time of error), leave errorFlag set so that
+        // loadFileContents can observe it after the sub-feedLine returns and abort
+        // further lines in the current file (classic "stop on first error" for include).
+        // The load loop will clear it after reporting. We captured wasLoading before zeroing nesting.
+        if wasLoading {
+            errorFlag = true
+        } else {
+            errorFlag = false
+        }
     }
 
     /// Called proactively at the start of every feedLine / runInterpreter.
@@ -2599,14 +2986,16 @@ public final class LBForth {
         }
 
         let initialDict = rstackBase + RSTACK_SIZE * CELL_SIZE
-        let h = readCell(HERE)
-        if h < initialDict || h >= MEM_SIZE - 1024 {
-            writeCell(HERE, initialDict)
+        let safeDictStart = (kernelHere != 0 ? kernelHere : initialDict)
+        let h = readCell(DP_ADDR)
+        if h < safeDictStart || h >= MEM_SIZE - 1024 {
+            writeCell(DP_ADDR, safeDictStart)
         }
-        // If the dictionary chain looks completely broken, reset LATEST too
+        // If the dictionary chain looks completely broken, reset LATEST to kernel
+        // (never below kernel; preserves core words on corruption recovery).
         let l = readCell(LATEST)
         if l != 0 && !isValidDictionaryLink(l) {
-            writeCell(LATEST, 0)
+            writeCell(LATEST, kernelLatest != 0 ? kernelLatest : 0)
         }
 
         let st = readCell(STATE)
@@ -2622,10 +3011,11 @@ public final class LBForth {
 
     public var stackAsString: String {
         let depth = Int(spGet() - 1)
+        let b = self.readCell(self.BASE)
         var s = ""
         for i in 0..<depth {
             let v = readCell(stackBase + i * 8)
-            s += "\(v) "
+            s += self.formatNumber(v, base: b, signed: true) + " "
         }
         return s
     }

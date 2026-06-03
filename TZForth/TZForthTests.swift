@@ -415,13 +415,29 @@ extension TZForth {
         ansTest("COUNT TYPE via WORD", "32 WORD HELLO COUNT TYPE", "HELLO")
 
         // New batch: >IN >NUMBER ABORT ABORT" ACCEPT ENVIRONMENT? EVALUATE FIND
-        ansTest(">IN", "0 >IN ! >IN @ .", "0")
+        ansTest(">IN", ": t6in 0 >IN ! >IN @ ; t6in .", "0")
         ansTest(">NUMBER", "0 0 S\" 123\" >NUMBER 2DROP DROP .", "123")
         ansTest("EVALUATE", "S\" 3 4 +\" EVALUATE .", "7")
         ansTest("FIND", "32 WORD DUP FIND SWAP DROP 0= 0= .", "-1")
         ansTest("FIND not", "32 WORD NOPE FIND 0= .", "-1")
         ansTest("ACCEPT basic", "HERE 0 ACCEPT .", "0")
         ansTest("ABORT\" no", "0 ABORT\" oops\" 42 .", "42")
+
+        // Sync + new Core (QUIT SOURCE PARSE PAD POSTPONE [COMPILE] + SP!/RSP! helpers + improved ENV)
+        ansTest("HERE (value) DP", "HERE DP @ = .", "-1")
+        ansTest("LATEST", "LATEST @ 0= 0= .", "-1")
+        ansTest("ARSHIFT", "-8 1 ARSHIFT .", "-4")
+        ansTest("CLS (no crash)", "CLS 42 .", "42")
+        ansTest("SPACES (no crash)", "2 SPACES 99 .", "99")
+        ansTest("SOURCE", "SOURCE DROP 0= .", "0")  // addr non-zero, u may be 0 at test point
+        ansTest("PAD", "PAD 0= 0= .", "-1")
+        ansTest("PARSE", "32 PARSE  2DROP 42 .", "42")
+        ansTest("QUIT (no crash)", "42 . QUIT", "42")
+        ansTest("SP! RSP!", "1 2 3  1 SP! DEPTH .", "0")
+        ansTest("ENVIRONMENT?", "S\" CORE\" ENVIRONMENT? .", "-1")
+        ansTest("[COMPILE]", ": t6c [COMPILE] + ; 3 4 t6c .", "7")
+        // POSTPONE test: use an immediate word; with POSTPONE the imm action happens at runtime of tpo, not during its definition
+        ansTest("POSTPONE", "VARIABLE tpv 0 tpv ! : timp 99 tpv ! ; IMMEDIATE : tpo POSTPONE timp 42 ; tpv @ . tpo tpv @ .", "0 99")
 
         results += "TEST6 ANS core summary: \(ansPassed)/\(ansTotal) passed\n"
         if ansPassed != ansTotal {

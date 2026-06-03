@@ -63,6 +63,10 @@ public final class TZForth {
     private let RSTACK_SIZE = 128
     private let WORD_BUFFER_SIZE = 64
     private let WORD_BUFFER: Int = 256  // fixed buffer for WORD, before stacks at 1024
+    private let SOURCE_BUFFER: Int = 320
+    private let SOURCE_BUFFER_SIZE = 256
+    private let PAD_BUFFER: Int = 576
+    private let PAD_BUFFER_SIZE = 128
     private let MAX_BUILTIN_ID = 256    // plenty of room
 
     private let FLAG_IMMEDIATE: UInt8 = 0x80
@@ -129,6 +133,7 @@ public final class TZForth {
     // Input
     private var inputQueue: [UInt8] = []
     private var wordBuffer = [UInt8](repeating: 0, count: 64)
+    private var currentSourceLen: Int = 0  // length of current SOURCE buffer (set on each feedLine / EVALUATE)
 
     // Output
     public var onOutput: ((String) -> Void)?
@@ -287,6 +292,14 @@ public final class TZForth {
         ("SP",      "( -- addr )",        "data stack pointer (SP @ for compatibility)"),
         ("RSP",     "( -- addr )",        "return stack pointer (RSP @ for compatibility)"),
         (">IN",     "( -- addr )",        "current input pointer variable ( >IN @ for offset)"),
+        ("SOURCE",  "( -- c-addr u )",    "current input source buffer and length"),
+        ("PARSE",   "( char -- c-addr u )", "parse text from input up to char (leaves delim, updates >IN)"),
+        ("PAD",     "( -- addr )",        "user scratch buffer (fixed, 128 bytes)"),
+        ("QUIT",    "( -- )",             "empty return stack, set interpret state, return to outer interpreter"),
+        ("SP!",     "( n -- )",           "set data stack pointer (updates both cell and internal)"),
+        ("RSP!",    "( n -- )",           "set return stack pointer (updates both cell and internal)"),
+        ("POSTPONE","( -- ) name",        "append compilation semantics of next word (immediate)"),
+        ("[COMPILE]","( -- ) name",       "force compile of next word even if immediate (immediate)"),
         (">NUMBER", "( ud1 c-addr1 u1 -- ud2 c-addr2 u2 )", "convert string digits to number accumulating in ud"),
         ("ALLOT",   "( n -- )",           "allocate n bytes in dictionary"),
         (",",       "( n -- )",           "compile a cell"),
@@ -439,7 +452,7 @@ public final class TZForth {
         ("TUCK",    "( a b -- b a b )",   "tuck"),
         ("NIP",     "( a b -- b )",       "nip"),
         ("BL",      "( -- 32 )",          "blank (space)"),
-        ("CHAR",    "( -- c )",           "parse next char (stub)"),
+        ("CHAR",    "( -- c )",           "parse next word, return its first char"),
         ("WORD",    "( char -- addr )",   "parse input up to delimiter char, return addr of counted string (trailing blank appended)"),
         ("COUNT",   "( c-addr -- addr u )", "from counted string addr return char-addr and length"),
 
@@ -480,6 +493,7 @@ public final class TZForth {
     private var pnoBufferAddr: Int = 0
     private var pnoPtr: Int = 0
 
+    private var executeID: Cell = 0  // captured ID for EXECUTE so POSTPONE can emit LIT xt EXECUTE for immediates
     private var sQuoteID: Cell = 0   // runtime for (S") used by S" to embed compact string literals that leave c-addr u
     private var abortQuoteID: Cell = 0  // runtime for (ABORT")
 
@@ -717,6 +731,17 @@ public final class TZForth {
         // This guarantees feedLine always returns normally and leaves the engine
         // ready for the next command.
         validateAndRepairSystemState()
+
+        // Prepare the SOURCE buffer and >IN for this line (supports SOURCE, PARSE, >IN tracking).
+        // Each feedLine (REPL or per-line during FLOAD) becomes the "current input source".
+        self.currentSourceLen = 0
+        let lineBytes = Array(line.utf8)
+        let n = min(lineBytes.count, SOURCE_BUFFER_SIZE)
+        for i in 0..<n {
+            self.writeByte(SOURCE_BUFFER + i, lineBytes[i])
+        }
+        self.currentSourceLen = n
+        self.writeCell(self.IN, 0)
 
         for b in line.utf8 { inputQueue.append(b) }
         inputQueue.append(10) // \n
@@ -1425,6 +1450,8 @@ public final class TZForth {
         _ = register("BASE")  { self.push( Cell( self.BASE ) ) }
         _ = register("SP")    { self.push( Cell( self.SP ) ) }
         _ = register("RSP")   { self.push( Cell( self.RSP ) ) }
+        _ = register("SP!")   { let v = self.pop(); self.spSet(v) }
+        _ = register("RSP!")  { let v = self.pop(); self.rspSet(v) }
         _ = register(">IN")   { self.push( Cell( self.IN ) ) }
 
         // >HEADER ( xt -- header )  Given a code field address (xt), return the
@@ -1491,6 +1518,56 @@ public final class TZForth {
             }
             self.push(self.litID); self.comma()
             self.push(xt); self.comma()
+        }
+
+        // [COMPILE] name  (immediate)  Force compilation of the next word's reference even if
+        // the word is immediate. (Older form; POSTPONE is preferred in ANS.)
+        _ = register("[COMPILE]", immediate: true) {
+            if self.readCell(self.STATE) == 0 { self.tell("? [COMPILE] only while compiling\n"); self.errorFlag = true; return }
+            let name = self.parseWord()
+            if name.isEmpty { self.tell("? [COMPILE] needs name\n"); self.errorFlag = true; return }
+            let hdr = self.findWord(name)
+            if hdr == 0 { self.tell("? [COMPILE] ? " + name + "\n"); self.errorFlag = true; return }
+            let cfa = self.getCFA(hdr)
+            let first = self.readCell(Int(cfa))
+            // Always emit a reference (ignore the target's IMMEDIATE flag)
+            if first < Cell(self.MAX_BUILTIN_ID) && first != self.docolID {
+                self.push(first); self.comma()
+            } else {
+                self.push(cfa); self.comma()
+            }
+        }
+
+        // POSTPONE name  (immediate)  Append the compilation semantics of the next word.
+        // If the word is immediate, this means "compile code that will execute it later"
+        // (LIT xt EXECUTE). For non-immediate, same as normal reference emission.
+        // Requires executeID (captured at registration of EXECUTE).
+        _ = register("POSTPONE", immediate: true) {
+            if self.readCell(self.STATE) == 0 { self.tell("? POSTPONE only while compiling\n"); self.errorFlag = true; return }
+            let name = self.parseWord()
+            if name.isEmpty { self.tell("? POSTPONE needs name\n"); self.errorFlag = true; return }
+            let hdr = self.findWord(name)
+            if hdr == 0 { self.tell("? POSTPONE ? " + name + "\n"); self.errorFlag = true; return }
+            let cfa = self.getCFA(hdr)
+            let first = self.readCell(Int(cfa))
+            let isImm = (self.readByte(Int(hdr) + 8) & self.FLAG_IMMEDIATE) != 0
+            if isImm {
+                // Postpone the *execution* semantics: when this def runs, execute the (imm) word.
+                self.push(self.litID); self.comma()
+                if first < Cell(self.MAX_BUILTIN_ID) && first != self.docolID {
+                    self.push(first); self.comma()
+                } else {
+                    self.push(cfa); self.comma()
+                }
+                self.push(self.executeID); self.comma()
+            } else {
+                // Normal compile of reference (compilation semantics for non-imm)
+                if first < Cell(self.MAX_BUILTIN_ID) && first != self.docolID {
+                    self.push(first); self.comma()
+                } else {
+                    self.push(cfa); self.comma()
+                }
+            }
         }
 
         // : and ; are special because they affect STATE and compile DOCOL / EXIT
@@ -1792,7 +1869,7 @@ public final class TZForth {
         // EXECUTE ( xt -- )
         // xt may be a primitive ID (small number from ' on prim) or a CFA address.
         // Delegates to the internal execute() which handles both cases (prim dispatch or threaded).
-        _ = register("EXECUTE") {
+        self.executeID = register("EXECUTE") {
             let xt = self.pop()
             if xt < Cell(self.MAX_BUILTIN_ID) {
                 // primitive ID case (as pushed by ' on primitives)
@@ -1843,21 +1920,48 @@ public final class TZForth {
             let caddr = Int(self.pop())
             let savedQueue = self.inputQueue
             let savedIN = self.readCell(self.IN)
+            let savedSourceLen = self.currentSourceLen
+            var savedSource: [UInt8] = []
+            for i in 0..<savedSourceLen {
+                savedSource.append(self.readByte(self.SOURCE_BUFFER + i))
+            }
             self.inputQueue = []
             for i in 0..<u {
                 self.inputQueue.append( self.readByte(caddr + i) )
             }
             self.inputQueue.append(10) // \n
             self.writeCell(self.IN, 0)
+            // Update SOURCE buffer for the evaluated string so SOURCE/PARSE/>IN work inside EVALUATE
+            self.currentSourceLen = min(u, self.SOURCE_BUFFER_SIZE)
+            for i in 0..<self.currentSourceLen {
+                self.writeByte(self.SOURCE_BUFFER + i, self.readByte(caddr + i))
+            }
             self.runInterpreter()
             // if error during eval, leave errorFlag for outer to see (like in load)
             self.inputQueue = savedQueue
             self.writeCell(self.IN, savedIN)
+            // restore previous source buffer
+            self.currentSourceLen = savedSourceLen
+            for i in 0..<savedSourceLen {
+                self.writeByte(self.SOURCE_BUFFER + i, savedSource[i])
+            }
         }
 
         // ABORT ( -- )  clear stacks and return to interpreter (reset state)
         _ = register("ABORT") {
             self.resetRuntimeState()
+        }
+
+        // QUIT ( -- )  Empty return stack (to top level), set interpret mode, clear current input.
+        // This is the classic "return to outer interpreter" word. Implemented as primitive
+        // so it has no return frame of its own to corrupt when it wipes RSP.
+        _ = register("QUIT") {
+            self.rspSet(1)
+            self.writeCell(self.STATE, 0)
+            self.writeCell(self.IN, 0)
+            self.inputQueue.removeAll(keepingCapacity: true)
+            self.errorFlag = false
+            // Draining queue here will cause runInterpreter's while to exit cleanly after this word.
         }
 
         // >NUMBER ( ud1 c-addr1 u1 -- ud2 c-addr2 u2 )
@@ -1893,7 +1997,7 @@ public final class TZForth {
         _ = register("(", immediate: true) {
             // Eat characters until we see )
             while !self.inputQueue.isEmpty {
-                let c = self.inputQueue.removeFirst()
+                let c = self.consumeInput() ?? 0
                 if c == 41 { break } // ')'
             }
         }
@@ -1902,7 +2006,7 @@ public final class TZForth {
         // line comments. Immediate so it works while compiling too.
         _ = register("\\", immediate: true) {
             while !self.inputQueue.isEmpty {
-                let c = self.inputQueue.removeFirst()
+                let c = self.consumeInput() ?? 0
                 if c == 10 || c == 13 { break }
             }
         }
@@ -1916,7 +2020,7 @@ public final class TZForth {
         // of the file (until a { is seen), preventing \S, definitions, etc. from taking effect.
         _ = register("\\\\", immediate: true) {
             while !self.inputQueue.isEmpty {
-                let c = self.inputQueue.removeFirst()
+                let c = self.consumeInput() ?? 0
                 if c == 123 { // '{'
                     return
                 }
@@ -1935,7 +2039,7 @@ public final class TZForth {
             if self.loadNesting > 0 {
                 // Drain rest of line so anything after \S on the source line is ignored.
                 while !self.inputQueue.isEmpty {
-                    let c = self.inputQueue.removeFirst()
+                    let c = self.consumeInput() ?? 0
                     if c == 10 || c == 13 { break }
                 }
                 self.sourceLoadStop = true
@@ -2195,6 +2299,41 @@ public final class TZForth {
             let caddr = Int(self.pop())
             let len = Int( self.readByte(caddr) )
             self.push( Cell(caddr + 1) )
+            self.push( Cell(len) )
+        }
+
+        // SOURCE ( -- c-addr u )  Current input buffer (the line from last feedLine or EVALUATE).
+        // >IN is the offset (in chars) consumed so far into it. Used by PARSE, WORD etc.
+        _ = register("SOURCE") {
+            self.push( Cell( self.SOURCE_BUFFER ) )
+            self.push( Cell( self.currentSourceLen ) )
+        }
+
+        // PAD ( -- addr )  A transient scratch buffer (for pictured output hold area, user strings etc).
+        // Fixed location so it doesn't move when HERE advances.
+        _ = register("PAD") {
+            self.push( Cell( self.PAD_BUFFER ) )
+        }
+
+        // PARSE ( char -- c-addr u )
+        // Parse from current input source starting at >IN, up to (but not consuming) the delim char
+        // or end of source. Returns address (slice of SOURCE buffer) and length. Updates >IN.
+        // Does not skip leading instances of the delim (unlike WORD).
+        _ = register("PARSE") {
+            let delim = UInt8( self.pop() & 0xff )
+            let startPos = Int( self.readCell(self.IN) )
+            var len = 0
+            while !self.inputQueue.isEmpty {
+                let b = self.inputQueue.first!
+                if self.peekIsDelim(delim) || b == delim || b == 10 || b == 13 {
+                    break
+                }
+                _ = self.consumeInput()
+                len += 1
+            }
+            // Do not consume the delim (standard PARSE leaves it in the input stream)
+            let addr = self.SOURCE_BUFFER + startPos
+            self.push( Cell(addr) )
             self.push( Cell(len) )
         }
 
@@ -2702,7 +2841,7 @@ public final class TZForth {
         // .(  immediate — print characters until )
         _ = register(".(", immediate: true) {
             while !self.inputQueue.isEmpty {
-                let c = self.inputQueue.removeFirst()
+                let c = self.consumeInput() ?? 0
                 if c == 41 { break } // ')'
                 self.putkey(c)
             }
@@ -2787,7 +2926,7 @@ public final class TZForth {
             let caddr = Int(self.pop())
             var count = 0
             while count < n1 && !self.inputQueue.isEmpty {
-                let b = self.inputQueue.removeFirst()
+                let b = self.consumeInput() ?? 0
                 if b == 10 || b == 13 { break }
                 self.writeByte(caddr + count, b)
                 count += 1
@@ -2796,13 +2935,30 @@ public final class TZForth {
         }
 
         // ENVIRONMENT? ( c-addr u -- false | i*x true )
-        // For this minimal impl, always return false (0).
+        // Minimal but useful support for common ANS queries (so that portable code can probe).
         _ = register("ENVIRONMENT?") {
             let u = Int(self.pop())
-            _ = self.pop()  // c-addr unused
-            // consume the query string (we don't support any yet)
-            for _ in 0..<u { /* ignore */ }
-            self.push(0)
+            let caddr = Int(self.pop())
+            // Build query string (assume ASCII for env queries)
+            var q: [UInt8] = []
+            for i in 0..<u {
+                q.append( self.readByte(caddr + i) )
+            }
+            let query = (String(bytes: q, encoding: .utf8) ?? "").uppercased()
+            switch query {
+            case "CORE":
+                self.push(-1) // true
+            case "/COUNTED-STRING", "COUNTED-STRING":
+                self.push(255); self.push(-1)
+            case "ADDRESS-UNIT-BITS":
+                self.push(8); self.push(-1)
+            case "MAX-CHAR":
+                self.push(255); self.push(-1)
+            case "CORE-EXT":
+                self.push(-1) // we have many ext words too
+            default:
+                self.push(0) // false
+            }
         }
 
         // S"  immediate — like ." but leaves ( c-addr u ) on the stack instead of printing.
@@ -2912,12 +3068,8 @@ public final class TZForth {
     private func bootstrapMinimalDictionary() {
         // We already have : ; . CR + - * etc. from registerCorePrimitives.
 
-        // Create a QUIT that just keeps running the outer interpreter.
-        // In this minimal version we don't actually define QUIT as a Forth word;
-        // the Swift driver calls runInterpreter() directly.
-        // We still record where a "QUIT" word would live if someone wants to see it.
-
         // For teaching purposes, let's also define a few classic words by compiling them.
+        // (QUIT is provided as a primitive so RSP wipe is safe; it appears in WORDS/SEE/HELP.)
 
         // TRUE FALSE
         defineConstant("TRUE", -1)
@@ -3080,7 +3232,7 @@ public final class TZForth {
         // Flag set by the \\ word (when it sees no '{' on its line); cleared when '{' found.
         if self.inSlashSlashComment {
             while !self.inputQueue.isEmpty {
-                let c = self.inputQueue.removeFirst()
+                let c = self.consumeInput() ?? 0
                 if c == 123 { // '{'
                     self.inSlashSlashComment = false
                     break
@@ -3096,13 +3248,13 @@ public final class TZForth {
 
         // Skip whitespace
         while let b = inputQueue.first, b <= 32 {
-            _ = inputQueue.removeFirst()
+            _ = consumeInput()
         }
         if inputQueue.isEmpty { return "" }
 
         var word: [UInt8] = []
         while let b = inputQueue.first, b > 32 {
-            word.append(inputQueue.removeFirst())
+            word.append(consumeInput()!)
         }
 
         var result = String(bytes: word, encoding: .utf8) ?? ""
@@ -3154,6 +3306,7 @@ public final class TZForth {
         let b0 = inputQueue.first!
         if b0 == delim {
             _ = inputQueue.removeFirst()
+            let pos = readCell(IN); writeCell(IN, pos + 1)
             return true
         }
         if delim != 34 { return false }
@@ -3163,10 +3316,12 @@ public final class TZForth {
             let b2 = inputQueue[2]
             if b0 == 0xe2 && b1 == 0x80 && [0x9c, 0x9d, 0x9e, 0x9f, 0xb3, 0xb6].contains(b2) {
                 for _ in 0..<3 { _ = inputQueue.removeFirst() }
+                let pos = readCell(IN); writeCell(IN, pos + 3)
                 return true
             }
             if b0 == 0xef && b1 == 0xbc && b2 == 0x82 {
                 for _ in 0..<3 { _ = inputQueue.removeFirst() }
+                let pos = readCell(IN); writeCell(IN, pos + 3)
                 return true
             }
         }
@@ -3175,10 +3330,21 @@ public final class TZForth {
             if b0 == 0xc2 && [0xab, 0xbb].contains(b1) {
                 _ = inputQueue.removeFirst()
                 _ = inputQueue.removeFirst()
+                let pos = readCell(IN); writeCell(IN, pos + 2)
                 return true
             }
         }
         return false
+    }
+
+    /// Consume one byte from the input source (queue), advancing >IN by 1.
+    /// Used by all parsers (WORD, PARSE, comments, ACCEPT, etc.) so that SOURCE + >IN stay in sync.
+    private func consumeInput() -> UInt8? {
+        if inputQueue.isEmpty { return nil }
+        let b = inputQueue.removeFirst()
+        let pos = readCell(IN)
+        writeCell(IN, pos + 1)
+        return b
     }
 
     // Helper used by WORD and CHAR (and future string parsers). Consumes from inputQueue
@@ -3202,7 +3368,7 @@ public final class TZForth {
             if self.peekIsDelim(delim) || b == delim || b == 10 || b == 13 {
                 break
             }
-            collected.append(self.inputQueue.removeFirst())
+            collected.append(self.consumeInput()!)
         }
 
         // Consume a closing delim if present (supports smart doubles for ")
@@ -3557,6 +3723,7 @@ public final class TZForth {
         // pictured state
         self.pnoPtr = self.pnoBufferAddr + self.PNO_BUFFER_SIZE
         writeCell(IN, 0)
+        self.currentSourceLen = 0
     }
 
     public func resetToSafeState() {
@@ -3569,8 +3736,7 @@ public final class TZForth {
         restoreKernelDictionary()
 
         // Leave IP wherever it is; the next feedLine will start fresh parsing from
-        // whatever input arrives next. Future improvement: point ip at a real QUIT
-        // threaded-code sequence once we have one.
+        // whatever input arrives next. (A real high-level QUIT now exists via bootstrap.)
     }
 
     /// Called after any error (unknown word, bad branch, compile error, etc.).
@@ -3593,6 +3759,7 @@ public final class TZForth {
         self.inSlashSlashComment = false
         self.sourceLoadStop = false
         self.pnoPtr = self.pnoBufferAddr + self.PNO_BUFFER_SIZE
+        self.currentSourceLen = 0
 
         let wasLoading = self.loadNesting > 0
         // Do not zero loadNesting here; the loadFileContents defer (or its error path) will

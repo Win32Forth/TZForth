@@ -14,29 +14,19 @@ The engine implements a substantial and practical subset of the standard, focuse
 See `TZForth/TZForth.swift` (register calls + primitiveHelpData + bootstrap high-level defs; originally LBForth.swift) and `TestTZForth.swift` for details. `WORDS` in the REPL shows current dictionary.
 
 ## Missing from Core Word Set (6.1 - required for conformance)
-(Compiled via comparison of standard list vs. current `primitiveHelpData` + live WORDS + registrations. Reduced; many Core words now implemented with tests: double stack, arith, memory, compile/immed, pictured, S", EXECUTE/J/RECURSE, >IN/>NUMBER/ABORT etc, EVALUATE/FIND etc.)
+Core is now substantially complete. Recent batches added (with tests in both FTEST and ANS-VALIDATE): doubles, extra arith, memory ops, compile/immed ([CHAR] ['] LITERAL etc), pictured + S", EXECUTE/J/RECURSE, >IN/>NUMBER/ABORT/ABORT"/ACCEPT/ENV/EVALUATE/FIND, and final: QUIT, SOURCE, PARSE, PAD, POSTPONE, [COMPILE], plus supporting SP! RSP! (to enable clean high-level QUIT etc). 101/101 in expanded harness.
 
-*/
-<#
->BODY
-HOLD
-POSTPONE
-QUIT
-S"
-S>D
-SIGN
-SOURCE
-[']
-[CHAR]
+Some Core words are implemented as Swift primitives (necessary for early bootstrap / input model / RSP wipe safety in QUIT); high-level Forth defs are used where it makes sense for SEE decompile (e.g. HERE, >NFA, ID., and future complex like debuggers per user guidance). Vocabularies planned post-Core to hide internals.
 
-Notes on some:
-- Pictured numeric output (<# # #S #> HOLD SIGN) + S" + EXECUTE/J/RECURSE + >IN >NUMBER ABORT ABORT" ACCEPT ENVIRONMENT? EVALUATE FIND now implemented (with tests).
-- Still missing: >IN >NUMBER ABORT ABORT" ACCEPT ENVIRONMENT? EVALUATE FIND POSTPONE QUIT S>D SOURCE etc. (recent batches implemented many).
-- ABORT/ABORT", QUIT, RECURSE, full FIND/EVALUATE etc. for complete control and meta-programming.
-- The added words (double stack, extra arith, memory ops, LITERAL etc. + pictured/S" + meta/input batch) have tests and pass in the harness.
+(Full list of implemented is in primitiveHelpData + WORDS.)
+
+Notes:
+- QUIT is primitive (safe RSP empty); SOURCE/PARSE track >IN into per-line SOURCE_BUFFER (EVALUATE and FLOAD lines supported).
+- POSTPONE/[COMPILE] use captured executeID + emit LIT/EXECUTE for imm case.
+- ENVIRONMENT? now returns values for "CORE", "/COUNTED-STRING", "ADDRESS-UNIT-BITS", "MAX-CHAR" etc.
 
 ## Missing from Core Extensions Word Set (6.2)
-(~29 items.)
+(~25 items after recent moves.)
 
 .R
 0<>
@@ -57,8 +47,6 @@ HOLDS
 IS
 MARKER
 OF
-PAD
-PARSE
 PARSE-NAME
 RESTORE-INPUT
 SAVE-INPUT
@@ -66,21 +54,21 @@ SOURCE-ID
 U>
 UNUSED
 VALUE
-[COMPILE]
 
 Notes:
 - The engine has good coverage of practical extensions (PICK/ROLL/TUCK/NIP/U.R/WITHIN/?DO etc.).
-- Missing many for full "programming tools" like DEFER, CASE, VALUE, PARSE family, etc.
+- Core Ext items like PAD, PARSE, [COMPILE] were Core or moved as they are now present.
+- Missing many for full "programming tools" like DEFER, CASE, VALUE, etc. (planned post-Core; some will be high-level Forth for SEE).
 - Some like AGAIN, 2>R etc. *are* present.
 
 ## Recommendations / Status
 - The system is **highly functional** for the user's needs (loading classic sources, REPL, FLOAD/EDIT/CHDIR in sandbox, FILE-ECHO, \S, ." , WORD, etc.).
-- Recent work (FLOAD reliability, compact .", DP/HERE, header tools, expanded ANS tests in FTEST) has made it much closer to usable classic Forth.
-- Full ANS conformance would require implementing the above missing items + tests + documentation.
-- Current tests (TestTZForth.swift FTEST, originally TestLBForth.swift) cover a lot of the *implemented* core words per standard + special behaviors.
-- To continue under credit limits: prioritize user-requested words from Forthing.fth or specific missing ones that block porting.
+- Core word set now substantially complete (101/101 tests clean). Recent work added final Core words QUIT/SOURCE/PARSE/PAD/POSTPONE/[COMPILE] + ENV improvements + input >IN integration.
+- Per user direction: refactoring more to high-level Forth (for smaller Swift kernel + better SEE decompile) is deferred until after Core; future Core Ext and complex (debugger, assembler, VOCABULARYs) are good candidates for : defs.
+- Current tests (TestTZForth.swift FTEST + embedded ANS-VALIDATE) cover the implemented words per standard + special behaviors (smart quotes, load semantics, etc.).
+- To continue: next would be remaining Core Ext per explicit plan, then vocabularies to hide internals.
 
-Generated from codebase inspection (TZForth.swift / originally LBForth.swift, TestTZForth.swift / originally TestLBForth.swift, live runs).
-Last update: after ANS test expansion commit.
+Generated from codebase inspection (TZForth.swift, TZForthTests.swift, TestTZForth.swift, live runs).
+Last update: after final Core batch (QUIT/SOURCE/PARSE/POSTPONE etc).
 
 For full standard details, refer to the official 2012 ANS Forth document (sections 6.1 and 6.2).

@@ -13,10 +13,23 @@
 /* Begin PBXFileSystemSynchronizedRootGroup section */
 		29A09F0A2FCB95CE00778693 /* TZForth */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				29A09F162FCB95CE00778693 /* Exceptions for "TZForth" folder in "TZForth" target */,
+			);
 			path = TZForth;
 			sourceTree = "<group>";
 		};
 /* End PBXFileSystemSynchronizedRootGroup section */
+
+/* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
+		29A09F162FCB95CE00778693 /* Exceptions for "TZForth" folder in "TZForth" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				TestLBForth.swift,
+			);
+			target = 29A09F072FCB95CE00778693 /* TZForth */;
+		};
+/* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
 
 /* Begin PBXFrameworksBuildPhase section */
 		29A09F052FCB95CE00778693 /* Frameworks */ = {

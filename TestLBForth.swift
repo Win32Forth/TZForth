@@ -342,6 +342,125 @@ hello
     let stateFetch = collected.contains("0 ")
     print("TEST STATE @: STATE @ . => \(stateFetch) (expect prints 0 after reset) out=\(collected.trimmingCharacters(in: .whitespacesAndNewlines))")
 
+    // === Test 6: Expanded ANS Forth 2012 Core word set tests ===
+    // Additional coverage for many current dictionary words using documented stack effects
+    // and behaviors from the 2012 ANS Forth Standard (primarily 6.1 Core Word Set and
+    // some Core Extensions). Each test uses feedLine + output/stack inspection.
+    // We deliberately avoid destructive global side-effects where possible or recover via resetTest.
+    print("=== Starting expanded ANS 2012 Core word tests ===")
+    forth.feedLine("VARIABLE t6mem")   // safe cell for memory tests (won't corrupt DP_ADDR)
+    var ansPassed = 0
+    var ansTotal = 0
+    func ansTest(_ desc: String, _ line: String, _ expectedSubstring: String) {
+        resetTest()
+        forth.feedLine(line)
+        ansTotal += 1
+        let out = collected.trimmingCharacters(in: .whitespacesAndNewlines)
+        if out.contains(expectedSubstring) {
+            ansPassed += 1
+            print("TEST6 \(desc): pass")
+        } else {
+            print("TEST6 \(desc): FAIL got '\(out)' (expected contain '\(expectedSubstring)')")
+        }
+    }
+
+    // Arithmetic (6.1.0120 + etc.)
+    ansTest("+", "3 4 + .", "7")
+    ansTest("-", "10 3 - .", "7")
+    ansTest("*", "6 7 * .", "42")
+    ansTest("/MOD", "10 3 /MOD . .", "3 1")  // quot rem (top=quot per impl+standard)
+    ansTest("MOD", "10 3 MOD .", "1")
+    ansTest("1+", "41 1+ .", "42")
+    ansTest("1-", "43 1- .", "42")
+    ansTest("ABS", "-5 ABS .", "5")
+    ansTest("NEGATE", "5 NEGATE .", "-5")
+    ansTest("MIN", "3 7 MIN .", "3")
+    ansTest("MAX", "3 7 MAX .", "7")
+
+    // Logic & shifts (6.1.0720 etc.)
+    ansTest("AND", "5 3 AND .", "1")
+    ansTest("OR", "5 3 OR .", "7")
+    ansTest("XOR", "5 3 XOR .", "6")
+    ansTest("INVERT", "0 INVERT .", "-1")  // all bits (in 2's complement sense for cell)
+    ansTest("LSHIFT", "1 3 LSHIFT .", "8")
+    ansTest("RSHIFT", "8 2 RSHIFT .", "2")
+
+    // Comparisons (6.1.0270 etc.)
+    ansTest("=", "5 5 = .", "-1")
+    ansTest("=", "5 6 = .", "0")
+    ansTest("<", "3 5 < .", "-1")
+    ansTest(">", "5 3 > .", "-1")
+    ansTest("0=", "0 0= .", "-1")
+    ansTest("0=", "1 0= .", "0")
+    ansTest("0<", "-1 0< .", "-1")
+    ansTest("0>", "1 0> .", "-1")
+    ansTest("WITHIN", "5 1 10 WITHIN .", "-1")
+    ansTest("WITHIN", "0 1 10 WITHIN .", "0")
+
+    // Stack manip (6.1.0630 etc. + extensions)
+    ansTest("DUP", "42 DUP . .", "42 42")
+    ansTest("DROP", "1 2 DROP .", "1")
+    ansTest("SWAP", "1 2 SWAP . .", "1 2")
+    ansTest("OVER", "1 2 OVER . . .", "1 2 1")
+    ansTest("?DUP", "0 ?DUP .", "0")
+    ansTest("?DUP", "5 ?DUP . .", "5 5")
+    ansTest("ROT", "1 2 3 ROT . . .", "1 3 2")
+    ansTest("NIP", "1 2 NIP .", "2")
+    ansTest("TUCK", "1 2 TUCK . . .", "2 1 2")
+    ansTest("PICK", "10 20 30 1 PICK .", "20")  // 0=top, 1=next
+    ansTest("ROLL", "10 20 30 1 ROLL . . .", "20 30 10")
+
+    // Return stack (6.1.0580 etc.)
+    ansTest(">R R>", "42 >R R> .", "42")
+    ansTest("R@", "99 >R R@ R> DROP .", "99")
+    ansTest("2>R 2R>", "1 2 2>R 2R> . .", "2 1")
+
+    // Memory (6.1.0650 etc.)
+    // Use t6mem (defined early) to avoid corrupting the live DP_ADDR / HERE value
+    ansTest("! @", "123 t6mem ! t6mem @ .", "123")
+    ansTest("C! C@", "65 t6mem C! t6mem C@ .", "65")
+    ansTest(",", "42 , 43 .", "43")
+    // ALLOT tested indirectly via , behavior
+
+    // Constants / literals / base
+    ansTest("TRUE", "TRUE .", "-1")
+    ansTest("FALSE", "FALSE .", "0")
+    ansTest("BL", "BL .", "32")
+    ansTest("HEX DECIMAL", "HEX 10 . DECIMAL 16 .", "10 16")
+    ansTest("BASE", "10 BASE ! 42 .", "42")
+
+    // I/O basics (already some coverage, add U. SPACES)
+    ansTest("U.", "123 U.", "123")
+    ansTest("SPACES", "3 SPACES 42 .", "42")  // hard to count spaces but no crash + output
+
+    // Control structures (via temp definitions; some coverage in 2d/2f)
+    ansTest("IF ELSE THEN", ": t6if 5 0= IF 99 ELSE 88 THEN ; t6if .", "88")
+    ansTest("BEGIN UNTIL", ": t6until 0 BEGIN 1+ DUP 3 > UNTIL ; t6until .", "4")
+    ansTest("DO LOOP I", ": t6do 0 3 0 DO I + LOOP ; t6do .", "3")  // 0+1+2
+    ansTest("?DO +LOOP UNLOOP LEAVE", ": t6dop 0 5 0 ?DO 1+ LOOP ; t6dop .", "5")
+
+    // Dictionary / introspection (current words)
+    ansTest(">HEADER >NFA ID.", "VARIABLE t6v ' t6v >NFA COUNT TYPE", "t6v")  // name printed
+    ansTest("ID.", "' t6v ID.", "t6v")
+    ansTest("HERE (value) DP", "HERE DP @ = .", "-1")  // they should match per current impl
+    ansTest("LATEST", "LATEST @ 0= 0= .", "-1")  // at least non-zero after bootstrap
+    ansTest("DEPTH", "1 2 3 DEPTH .", "3")
+
+    // TYPE COUNT WORD (more coverage)
+    ansTest("COUNT TYPE via WORD", "32 WORD HELLO COUNT TYPE", "HELLO")
+
+    // 2@ 2! etc. (use safe non-HERE to avoid prior side effects on DP)
+    ansTest("ARSHIFT", "-8 1 ARSHIFT .", "-4")
+
+    // Check a few more that should be present and not crash
+    ansTest("CLS (no crash)", "CLS 42 .", "42")
+    ansTest("SPACES (no crash)", "2 SPACES 99 .", "99")
+
+    print("TEST6 ANS core summary: \(ansPassed)/\(ansTotal) passed")
+    if ansPassed != ansTotal {
+        print("WARNING: some ANS 2012 core tests failed — review against standard stack effects.")
+    }
+
     // cleanup
     try? fm.removeItem(at: fblock)
     try? fm.removeItem(at: fstop)

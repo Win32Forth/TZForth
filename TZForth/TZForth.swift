@@ -188,6 +188,16 @@ public final class TZForth {
     /// so that named FLOAD/EDIT continue to work after chdir without re-picking).
     public var onDirectoryChanged: ((URL) -> Void)? = nil
 
+    /// Host callback for sandboxed directory reads (DIR). Activates security-scoped access
+    /// and returns a listable URL (canonical path), or nil when the folder is not authorized.
+    public var ensureDirectoryAccess: ((URL) -> URL?)? = nil
+
+    /// Set by bare CHDIR (no path). Host shows a folder picker starting at logical cwd.
+    public var directoryPickRequested = false
+
+    /// Optional callback when bare CHDIR requests the folder picker (non-ConsoleView hosts).
+    public var onDirectoryPickRequested: (() -> Void)? = nil
+
     // Support for \\ (block comment to '{', can span lines in console or during FLOAD)
     // and \S (stop loading current file; no-op from console).
     private var inSlashSlashComment = false
@@ -498,7 +508,7 @@ public final class TZForth {
         ("FILE-ECHO","( -- addr )",       "variable controlling FLOAD source echo (use with ON/OFF)"),
         ("ON",      "( addr -- )",        "store 1 at addr (e.g. file-echo ON)"),
         ("OFF",     "( addr -- )",        "store 0 at addr (e.g. file-echo OFF)"),
-        ("CHDIR",   "( -- ) path",        "change dir (no arg: show current); supports ~ and relative"),
+        ("CHDIR",   "( -- ) path",        "change dir (no arg: folder picker at current); supports ~ and relative"),
         ("DIR",     "( -- ) filespec",    "list dir (no arg: current; <path><filespec> with *? wildcards)"),
         ("(DO)",    "( limit start -- )", "internal runtime for DO (setup rstack)"),
         ("(?DO)",   "( limit start -- )", "internal runtime for ?DO"),
@@ -975,8 +985,8 @@ public final class TZForth {
     private func changeDirectory(spec: String) {
         let fm = FileManager.default
         if spec.isEmpty {
-            let toReport = logicalCurrentDirectory.isEmpty ? fm.currentDirectoryPath : logicalCurrentDirectory
-            tell("Current directory: \(toReport)\n")
+            directoryPickRequested = true
+            onDirectoryPickRequested?()
             return
         }
         let expanded = (spec as NSString).expandingTildeInPath
@@ -1053,9 +1063,16 @@ public final class TZForth {
             }
         }
         let dirURL = URL(fileURLWithPath: basePath)
+        let listURL: URL
+        if let ensured = ensureDirectoryAccess?(dirURL) {
+            listURL = ensured
+            logicalCurrentDirectory = ensured.path
+        } else {
+            listURL = dirURL
+        }
         do {
-            let contents = try fm.contentsOfDirectory(at: dirURL, includingPropertiesForKeys: [.isDirectoryKey, .fileSizeKey])
-            tell("\nDirectory of \(dirURL.path)\n\n")
+            let contents = try fm.contentsOfDirectory(at: listURL, includingPropertiesForKeys: [.isDirectoryKey, .fileSizeKey])
+            tell("\nDirectory of \(listURL.path)\n\n")
             var count = 0
             for fileURL in contents.sorted(by: { $0.lastPathComponent.lowercased() < $1.lastPathComponent.lowercased() }) {
                 let name = fileURL.lastPathComponent
@@ -1078,7 +1095,7 @@ public final class TZForth {
             }
             tell("\n \(count) file(s)\n\n")
         } catch {
-            tell("DIR error: Cannot read directory '\(dirURL.path)'\n")
+            tell("DIR error: Cannot read directory '\(listURL.path)'\n")
             tell("  (Use bare `fload` to pick/authorize a folder if you have not yet; CHDIR to it may help too.)\n")
             // Do not set errorFlag: DIR failure shouldn't leave the REPL in error state.
         }
@@ -2825,7 +2842,7 @@ public final class TZForth {
             self.resolveAndEditFile(spec: spec)
         }
 
-        // CHDIR — with no arg: display current directory. With <path>: change to it (supports ~, relative).
+        // CHDIR — with no arg: host folder picker at current logical dir. With <path>: change (~/relative).
         _ = register("CHDIR") {
             self.validateAndRepairSystemState()
             let spec = self.parseWord()

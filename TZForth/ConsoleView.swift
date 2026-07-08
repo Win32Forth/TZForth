@@ -171,24 +171,15 @@ struct ConsoleView: View {
                 }
 
                 // Hook CHDIR so we can persist a security bookmark for the new dir (if the
-                // current scope covers it) and activate it. This makes named FLOAD after
+                // current scope covers it) and activate it. This makes named FLOAD/DIR after
                 // a CHDIR to a subdir (or the current dir) succeed without "not found".
                 forth.onDirectoryChanged = { [self] dirURL in
-                    DispatchQueue.main.async {
-                        do {
-                            let bookmark = try dirURL.bookmarkData(options: [.withSecurityScope],
-                                                                   includingResourceValuesForKeys: nil,
-                                                                   relativeTo: nil)
-                            UserDefaults.standard.set(bookmark, forKey: "LastFLOADDirectoryBookmark")
-                            UserDefaults.standard.set(dirURL.path, forKey: "LastFLOADDirectory")
-                            self.activateLastDirectoryScope(parent: dirURL)
-                        } catch {
-                            // No covering scope for this chdir target (e.g. chdir before any dialog);
-                            // still remember the path for logicalCurrentDirectory and future resolves.
-                            UserDefaults.standard.set(dirURL.path, forKey: "LastFLOADDirectory")
-                            self.activateLastDirectoryScope(parent: dirURL)
-                        }
-                    }
+                    self.applyDirectoryChange(dirURL)
+                }
+
+                forth.ensureDirectoryAccess = { [self] url in
+                    self.activateLastDirectoryScope(parent: url)
+                    return self.directoryURLWithActiveScope(for: url)
                 }
 
                 // Initially everything (the banner) is "protected" output
@@ -523,10 +514,49 @@ struct ConsoleView: View {
         }
     }
 
+    private func showDirectoryPickDialog() {
+        let requested = forth.directoryPickRequested
+        forth.directoryPickRequested = false
+        forth.fileLoadRequested = false
+        forth.fileEditRequested = false
+        forth.pendingEditURL = nil
+        forth.pendingLoadURL = nil
+        guard requested else { return }
+
+        let startDirPath = forth.logicalCurrentDirectory.isEmpty
+            ? FileManager.default.currentDirectoryPath
+            : forth.logicalCurrentDirectory
+        let startDir = URL(fileURLWithPath: startDirPath)
+        activateLastDirectoryScope(parent: startDir)
+
+        let panel = NSOpenPanel()
+        panel.title = "CHDIR — Choose Directory"
+        panel.message = "Select a folder for the current working directory. This authorizes TZForth to list (DIR) and access files there."
+        panel.prompt = "Choose"
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.directoryURL = startDir
+
+        panel.begin { result in
+            if result == .OK, let url = panel.url {
+                let accessing = url.startAccessingSecurityScopedResource()
+                DispatchQueue.main.async {
+                    self.applyDirectoryChange(url)
+                    self.forth.onOutput?("Current directory: \(self.forth.logicalCurrentDirectory)\n")
+                    if accessing {
+                        url.stopAccessingSecurityScopedResource()
+                    }
+                }
+            }
+        }
+    }
+
     private func showFileLoadDialog() {
         let requested = forth.fileLoadRequested
         forth.fileLoadRequested = false
         forth.fileEditRequested = false
+        forth.directoryPickRequested = false
         forth.pendingEditURL = nil
         forth.pendingLoadURL = nil
         guard requested else { return }
@@ -595,11 +625,14 @@ struct ConsoleView: View {
     }
 
     private func handlePostFeedActions() {
-        // Unified handling after a feedLine (or empty) so that FLOAD/EDIT (dialog or named forms)
+        // Unified handling after a feedLine (or empty) so that FLOAD/EDIT/CHDIR (dialog or named forms)
         // that were executed during interpretation get serviced promptly. This covers:
-        // - bare "fload" / "edit" (set *Requested flag -> show dialog)
+        // - bare "fload" / "edit" / "chdir" (set *Requested flag -> show dialog)
         // - "fload foo" / "edit foo" (named; sets pendingLoadURL / pendingEditURL)
         // - same when executed from inside colon defs or loaded source.
+        if forth.directoryPickRequested {
+            showDirectoryPickDialog()
+        }
         if forth.fileLoadRequested {
             showFileLoadDialog()
         }
@@ -822,9 +855,12 @@ struct ConsoleView: View {
             } catch {}
         }
 
-        // Always set logical to the requested target (do not rely on fm.currentDirectoryPath
-        // which can remain the container or previous even when scope allows access to requested).
-        forth.logicalCurrentDirectory = requested.path
+        // Prefer a canonical listable path when security scope covers this directory.
+        if let accessible = directoryURLWithActiveScope(for: requested) {
+            forth.logicalCurrentDirectory = accessible.path
+        } else {
+            forth.logicalCurrentDirectory = requested.path
+        }
 
         // If we had no bookmark originally and no direct start succeeded, try a last-chance
         // bookmark create (may still fail without any grant).
@@ -842,6 +878,59 @@ struct ConsoleView: View {
                 // No grant yet; named FLOAD from here will need a bare dialog first.
             }
         }
+    }
+
+    /// Apply host-side effects after a Forth CHDIR: activate sandbox scope, persist bookmark,
+    /// and normalize logicalCurrentDirectory to a path that is actually listable.
+    private func applyDirectoryChange(_ dirURL: URL) {
+        activateLastDirectoryScope(parent: dirURL)
+        if let accessible = directoryURLWithActiveScope(for: dirURL) {
+            forth.logicalCurrentDirectory = accessible.path
+            UserDefaults.standard.set(accessible.path, forKey: "LastFLOADDirectory")
+            if currentScopedDirectory != nil {
+                do {
+                    let bookmark = try accessible.bookmarkData(options: [.withSecurityScope],
+                                                               includingResourceValuesForKeys: nil,
+                                                               relativeTo: nil)
+                    UserDefaults.standard.set(bookmark, forKey: "LastFLOADDirectoryBookmark")
+                } catch {}
+            }
+        } else {
+            UserDefaults.standard.set(dirURL.path, forKey: "LastFLOADDirectory")
+        }
+    }
+
+    /// Returns a directory URL that can be listed with the current security scope active.
+    private func directoryURLWithActiveScope(for requested: URL) -> URL? {
+        let fm = FileManager.default
+        let reqLower = requested.path.lowercased()
+
+        if let scoped = currentScopedDirectory {
+            let scopedLower = scoped.path.lowercased()
+            if reqLower == scopedLower {
+                return scoped
+            }
+            if reqLower.hasPrefix(scopedLower + "/") {
+                let relative = String(requested.path.dropFirst(scoped.path.count))
+                    .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+                let candidate = scoped.appendingPathComponent(relative)
+                if canListDirectory(at: candidate) {
+                    return candidate
+                }
+            }
+        }
+
+        if canListDirectory(at: requested) {
+            return requested
+        }
+
+        return nil
+    }
+
+    private func canListDirectory(at url: URL) -> Bool {
+        (try? FileManager.default.contentsOfDirectory(at: url,
+                                                    includingPropertiesForKeys: nil,
+                                                    options: [.skipsHiddenFiles])) != nil
     }
 
     /// Case-insensitive lookup for a file by leaf name in the given directory.
@@ -869,6 +958,7 @@ struct ConsoleView: View {
         let requested = forth.fileEditRequested
         forth.fileEditRequested = false
         forth.fileLoadRequested = false
+        forth.directoryPickRequested = false
         forth.pendingEditURL = nil
         forth.pendingLoadURL = nil
         guard requested else { return }

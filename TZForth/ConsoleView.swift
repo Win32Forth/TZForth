@@ -63,12 +63,13 @@ struct ConsoleView: View {
     /// write access. Stopped on disappear or when switching dirs.
     @State private var currentScopedDirectory: URL? = nil
 
+    /// Underlying AppKit text view used to keep the insertion point scrolled into view.
+    @State private var consoleTextView: NSTextView? = nil
+
     var body: some View {
-        TextEditor(text: $consoleText)
-            .font(.system(size: 16, design: .monospaced))
-            .foregroundColor(.black)
-            .background(Color.white)
-            .scrollContentBackground(.hidden)
+        ConsoleTextView(text: $consoleText, isFocused: $isFocused) { textView in
+            consoleTextView = textView
+        }
             .focused($isFocused)
             .onDisappear {
                 if let scoped = currentScopedDirectory {
@@ -88,6 +89,7 @@ struct ConsoleView: View {
                     return
                 }
                 checkForCommandExecution(newValue)
+                keepCursorVisible()
             }
             .onKeyPress(.upArrow) {
                 recallHistory(up: true)
@@ -143,12 +145,14 @@ struct ConsoleView: View {
                 consoleText = consoleMessage
                 markProtectedThroughEndOfText()
                 forth.clearScreenRequested = false
+                keepCursorVisible(followPrompt: true)
             }
             .onReceive(NotificationCenter.default.publisher(for: .resetForth)) { _ in
                 forth.resetToSafeState()
                 consoleText = consoleMessage
                 markProtectedThroughEndOfText()
                 forth.clearScreenRequested = false
+                keepCursorVisible(followPrompt: true)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .padding(8)
@@ -174,6 +178,7 @@ struct ConsoleView: View {
                     DispatchQueue.main.async {
                         consoleText += text
                         markProtectedThroughEndOfText()
+                        keepCursorVisible(followPrompt: true)
                         handlePostFeedActions()
                     }
                 }
@@ -209,6 +214,7 @@ struct ConsoleView: View {
                 // Initially everything (the banner) is "protected" output
                 markProtectedThroughEndOfText()
                 lastKeyConsumedUserLength = 0
+                keepCursorVisible(followPrompt: true)
             }
     }
     
@@ -220,6 +226,19 @@ struct ConsoleView: View {
     private func markProtected(through length: Int) {
         protectedLength = length
         protectedSnapshot = String(consoleText.prefix(length))
+    }
+
+    /// Scrolls the NSTextView so the insertion point stays visible after text grows.
+    /// When followPrompt is true, move the caret to end-of-document first (engine output / prompt).
+    private func keepCursorVisible(followPrompt: Bool = false) {
+        guard let textView = consoleTextView else { return }
+        DispatchQueue.main.async {
+            if followPrompt {
+                let end = (textView.string as NSString).length
+                textView.setSelectedRange(NSRange(location: end, length: 0))
+            }
+            textView.scrollRangeToVisible(textView.selectedRange())
+        }
     }
 
     private func checkForCommandExecution(_ fullText: String) {
@@ -345,6 +364,7 @@ struct ConsoleView: View {
                             consoleText += "\n"
                             markProtectedThroughEndOfText()
                         }
+                        keepCursorVisible(followPrompt: true)
                     }
                 }
             } else {
@@ -370,6 +390,7 @@ struct ConsoleView: View {
                             consoleText += "\n"
                             markProtectedThroughEndOfText()
                         }
+                        keepCursorVisible(followPrompt: true)
                     }
                 }
             }
@@ -927,6 +948,7 @@ struct ConsoleView: View {
         
         guard historyIndex >= 0 else {
             clearCurrentInputLine()
+            keepCursorVisible(followPrompt: true)
             return
         }
         
@@ -947,6 +969,7 @@ struct ConsoleView: View {
             }
             await MainActor.run {
                 isRecallingHistory = false
+                keepCursorVisible(followPrompt: true)
             }
         }
     }
@@ -959,6 +982,106 @@ struct ConsoleView: View {
         // visual line, especially after FLOAD (which can add many echoed lines + OKs).
         if consoleText.count > protectedLength {
             consoleText = String(consoleText.prefix(protectedLength))
+        }
+    }
+}
+
+/// AppKit-backed console editor. SwiftUI TextEditor does not reliably scroll to the
+/// insertion point when text is appended programmatically (engine output, OK lines, etc.).
+private struct ConsoleTextView: NSViewRepresentable {
+    @Binding var text: String
+    @FocusState.Binding var isFocused: Bool
+    var onTextViewReady: (NSTextView) -> Void
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(parent: self)
+    }
+
+    func makeNSView(context: Context) -> NSScrollView {
+        let scrollView = NSTextView.scrollableTextView()
+        guard let textView = scrollView.documentView as? NSTextView else {
+            return scrollView
+        }
+
+        textView.delegate = context.coordinator
+        textView.isRichText = false
+        textView.isEditable = true
+        textView.isSelectable = true
+        textView.allowsUndo = true
+        textView.isAutomaticQuoteSubstitutionEnabled = false
+        textView.isAutomaticDashSubstitutionEnabled = false
+        textView.isAutomaticTextReplacementEnabled = false
+        textView.isAutomaticSpellingCorrectionEnabled = false
+        textView.font = NSFont.monospacedSystemFont(ofSize: 16, weight: .regular)
+        textView.textColor = .black
+        textView.backgroundColor = .white
+        textView.drawsBackground = true
+        textView.isVerticallyResizable = true
+        textView.isHorizontallyResizable = false
+        textView.textContainer?.widthTracksTextView = true
+        textView.textContainer?.containerSize = NSSize(
+            width: scrollView.contentSize.width,
+            height: .greatestFiniteMagnitude
+        )
+        textView.string = text
+        let end = (text as NSString).length
+        textView.setSelectedRange(NSRange(location: end, length: 0))
+
+        scrollView.drawsBackground = true
+        scrollView.backgroundColor = .white
+        scrollView.hasVerticalScroller = true
+        scrollView.hasHorizontalScroller = false
+        scrollView.autohidesScrollers = true
+
+        context.coordinator.textView = textView
+        onTextViewReady(textView)
+        return scrollView
+    }
+
+    func updateNSView(_ scrollView: NSScrollView, context: Context) {
+        guard let textView = scrollView.documentView as? NSTextView else { return }
+        context.coordinator.parent = self
+
+        if textView.string != text {
+            let oldString = textView.string
+            let selected = textView.selectedRange()
+            context.coordinator.isProgrammaticUpdate = true
+            textView.string = text
+            context.coordinator.isProgrammaticUpdate = false
+
+            let end = (text as NSString).length
+            let oldEnd = (oldString as NSString).length
+
+            // Suffix appends (engine OK lines, WORDS output, startup directory line) must
+            // move the caret to the new end. Preserving the old index leaves the cursor on
+            // the directory line or above freshly appended output.
+            if text.hasPrefix(oldString), end > oldEnd, selected.location >= oldEnd {
+                textView.setSelectedRange(NSRange(location: end, length: 0))
+            } else if selected.location <= end {
+                textView.setSelectedRange(selected)
+            } else {
+                textView.setSelectedRange(NSRange(location: end, length: 0))
+            }
+            textView.scrollRangeToVisible(textView.selectedRange())
+        }
+
+        if isFocused, let window = scrollView.window, window.firstResponder !== textView {
+            window.makeFirstResponder(textView)
+        }
+    }
+
+    final class Coordinator: NSObject, NSTextViewDelegate {
+        var parent: ConsoleTextView
+        weak var textView: NSTextView?
+        var isProgrammaticUpdate = false
+
+        init(parent: ConsoleTextView) {
+            self.parent = parent
+        }
+
+        func textDidChange(_ notification: Notification) {
+            guard !isProgrammaticUpdate, let textView else { return }
+            parent.text = textView.string
         }
     }
 }

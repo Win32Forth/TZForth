@@ -66,8 +66,19 @@ struct ConsoleView: View {
     /// Underlying AppKit text view used to keep the insertion point scrolled into view.
     @State private var consoleTextView: NSTextView? = nil
 
+    /// Prevents duplicate Return handling when both AppKit and SwiftUI key paths fire.
+    @State private var isHandlingReturn = false
+
+    /// When true, the next NSTextView sync moves the caret to end-of-document (after commit/output).
+    @State private var pinCaretToEnd = false
+
     var body: some View {
-        ConsoleTextView(text: $consoleText, isFocused: $isFocused) { textView in
+        ConsoleTextView(
+            text: $consoleText,
+            isFocused: $isFocused,
+            pinCaretToEnd: $pinCaretToEnd,
+            onReturnPressed: { handleReturnKey() }
+        ) { textView in
             consoleTextView = textView
         }
             .focused($isFocused)
@@ -106,39 +117,7 @@ struct ConsoleView: View {
                 return .ignored
             }
             .onKeyPress(.return) {
-                if forth.waitingForKey {
-                    // Supply the newline character (10) directly to KEY.
-                    // .handled attempts to prevent the TextEditor from inserting a visible newline/line commit,
-                    // so the user can use Return itself as the key value for KEY (e.g. key . <return> <return>).
-                    forth.provideKey(10)
-                    lastKeyConsumedUserLength = 0
-                    // As belt-and-suspenders, if a \n was still inserted, eat it immediately so it
-                    // doesn't create a committed empty line that would later be fed as a command.
-                    if consoleText.last == "\n" {
-                        isConsumingKeyChar = true
-                        consoleText.removeLast()
-                        markProtectedThroughEndOfText()
-                        lastKeyConsumedUserLength = 0
-                    }
-                    return .handled
-                }
-
-                // Normal (non-KEY) case: if we're at an "empty prompt" (no new user-typed content
-                // since the last protected output), treat this Return as an empty-line commit.
-                // Suppress the newline insertion (.handled) to avoid adding arbitrary blank lines
-                // to the console text. Manually feed an empty line so the engine prints "OK".
-                // The onOutput from the engine will append "OK\n", giving the acknowledgment
-                // without an extra user-inserted blank line.
-                let userPortion = String(consoleText.dropFirst(protectedLength))
-                let lastLine = userPortion.components(separatedBy: .newlines).last ?? ""
-                let trimmed = lastLine.trimmingCharacters(in: .whitespacesAndNewlines)
-                if trimmed.isEmpty {
-                    forth.feedLine("")
-                    lastKeyConsumedUserLength = 0
-                    return .handled
-                }
-
-                return .ignored
+                handleReturnKey() ? .handled : .ignored
             }
             // Listen for menu commands from the Tools menu (defined at App level)
             .onReceive(NotificationCenter.default.publisher(for: .clearConsole)) { _ in
@@ -176,6 +155,7 @@ struct ConsoleView: View {
                 // Hook the Forth output callback
                 forth.onOutput = { text in
                     DispatchQueue.main.async {
+                        pinCaretToEnd = true
                         consoleText += text
                         markProtectedThroughEndOfText()
                         keepCursorVisible(followPrompt: true)
@@ -241,6 +221,148 @@ struct ConsoleView: View {
         }
     }
 
+    /// REPL Return: always submit the full current input, never split the line at the caret.
+    @discardableResult
+    private func handleReturnKey() -> Bool {
+        guard !isHandlingReturn else { return true }
+        isHandlingReturn = true
+        defer {
+            DispatchQueue.main.async {
+                isHandlingReturn = false
+            }
+        }
+
+        if forth.waitingForKey {
+            forth.provideKey(10)
+            lastKeyConsumedUserLength = 0
+            if consoleText.last == "\n" {
+                isConsumingKeyChar = true
+                consoleText.removeLast()
+                markProtectedThroughEndOfText()
+                lastKeyConsumedUserLength = 0
+            }
+            return true
+        }
+
+        commitUserInput()
+        return true
+    }
+
+    private func filteredCommandLines(from userPortion: String, dropTrailingEmpty: Bool) -> [String] {
+        var lines = userPortion.components(separatedBy: .newlines)
+        if dropTrailingEmpty,
+           let last = lines.last,
+           last.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            lines.removeLast()
+        }
+        return lines
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { raw in
+                let t = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !t.isEmpty && !t.hasPrefix("===") else { return false }
+                if t == "OK" || t.hasSuffix(" OK") { return false }
+                return true
+            }
+    }
+
+    /// Submit all pending user input (single line or multi-line paste). Never splits at caret.
+    private func commitUserInput() {
+        guard !isRecallingHistory else { return }
+
+        lastKeyConsumedUserLength = 0
+        let userPortion = String(consoleText.dropFirst(protectedLength))
+
+        if userPortion.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            commitEmptyLine()
+            return
+        }
+
+        let candidateLines = filteredCommandLines(from: userPortion, dropTrailingEmpty: false)
+        if candidateLines.isEmpty {
+            commitEmptyLine()
+            return
+        }
+
+        finalizeCommittedInputLine()
+        dispatchCandidateLines(candidateLines)
+    }
+
+    /// End the committed command line before engine output so responses start on the next line.
+    private func finalizeCommittedInputLine() {
+        pinCaretToEnd = true
+        if !consoleText.hasSuffix("\n") {
+            consoleText += "\n"
+        }
+        markProtectedThroughEndOfText()
+    }
+
+    private func commitEmptyLine() {
+        markProtected(through: consoleText.count)
+        pinCaretToEnd = true
+        DispatchQueue.main.async {
+            forth.feedLine("")
+            handlePostFeedActions()
+
+            if forth.clearScreenRequested {
+                consoleText = consoleMessage
+                markProtectedThroughEndOfText()
+                lastKeyConsumedUserLength = 0
+                forth.clearScreenRequested = false
+            }
+
+            DispatchQueue.main.async {
+                if !consoleText.hasSuffix("\n") {
+                    consoleText += "\n"
+                    markProtectedThroughEndOfText()
+                }
+                keepCursorVisible(followPrompt: true)
+            }
+        }
+    }
+
+    private func dispatchCandidateLines(_ candidateLines: [String]) {
+        for lineToSend in candidateLines {
+            if !forth.waitingForKey {
+                commandHistory.append(lineToSend)
+                if commandHistory.count > 30 {
+                    commandHistory.removeFirst()
+                }
+            }
+        }
+        historyIndex = -1
+
+        DispatchQueue.main.async {
+            for lineToSend in candidateLines {
+                if forth.waitingForKey {
+                    if lineToSend == candidateLines.last, let first = lineToSend.first {
+                        let scalar = first.unicodeScalars.first?.value ?? 0
+                        forth.provideKey(Int(scalar))
+                    }
+                    markProtectedThroughEndOfText()
+                } else {
+                    forth.feedLine(lineToSend)
+                    markProtectedThroughEndOfText()
+                    handlePostFeedActions()
+                }
+
+                if forth.clearScreenRequested {
+                    consoleText = consoleMessage
+                    markProtectedThroughEndOfText()
+                    lastKeyConsumedUserLength = 0
+                    forth.clearScreenRequested = false
+                }
+            }
+
+            DispatchQueue.main.async {
+                if !consoleText.hasSuffix("\n") {
+                    consoleText += "\n"
+                    markProtectedThroughEndOfText()
+                }
+                keepCursorVisible(followPrompt: true)
+            }
+        }
+    }
+
     private func checkForCommandExecution(_ fullText: String) {
         guard !isRecallingHistory else { return }
         
@@ -278,121 +400,21 @@ struct ConsoleView: View {
             return
         }
         
-        // Reset for normal command mode
-        lastKeyConsumedUserLength = 0
-        
+        // Multi-line paste ending with a newline: commit without requiring Return.
         let lines = userPortion.components(separatedBy: .newlines)
         guard let lastLine = lines.last else { return }
-        
         let trimmedLast = lastLine.trimmingCharacters(in: .whitespacesAndNewlines)
-        
+
         if trimmedLast.isEmpty && lines.count >= 2 {
-            // Collect all non-empty logical lines the user has typed since the last
-            // engine output. This makes pasting a multi-line definition (or any
-            // multi-line text) feed each line individually, so the new per-line
-            // [DEBUG] state+stack output appears after every logical line.
-            let candidateLines = lines.dropLast()   // drop the current empty line
-                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-                .filter { raw in
-                    let t = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-                    guard !t.isEmpty && !t.hasPrefix("===") else { return false }
-                    if t == "OK" || t.hasSuffix(" OK") { return false }
-                    // Do not skip pure-numeric lines here: user commands like "1 2 3" or "123"
-                    // are valid (push numbers), and would be incorrectly filtered.
-                    // Numeric *outputs* from "." are typically "N OK" or "3 2 1 OK" which are
-                    // already caught by the hasSuffix(" OK") rule above.
-                    return true
-                }
-
-            // Always advance protected synchronously for this return commit.
-            // This ensures the (possibly empty) line is marked as processed before async
-            // dispatch/output, preventing re-collection races.
+            lastKeyConsumedUserLength = 0
             markProtected(through: fullText.count)
+            finalizeCommittedInputLine()
 
-            if !candidateLines.isEmpty {
-                for lineToSend in candidateLines {
-                    // Do not pollute command history with single-char responses supplied to a waiting KEY.
-                    if !forth.waitingForKey {
-                        commandHistory.append(lineToSend)
-                        if commandHistory.count > 30 {
-                            commandHistory.removeFirst()
-                        }
-                    }
-                }
-
-                historyIndex = -1
-
-                DispatchQueue.main.async {
-                    for lineToSend in candidateLines {
-                        if forth.waitingForKey {
-                            // Only treat the *last* line in this batch as the key supplier.
-                            // Earlier lines in the list may be stale previous command lines that were
-                            // included due to async protected lag; we must not re-provide from them.
-                            if lineToSend == candidateLines.last {
-                                // KEY is blocked waiting for a character. Use the first character
-                                // of what the user just typed as the key value. This makes KEY
-                                // behave in a classic blocking way from the user's perspective.
-                                if let first = lineToSend.first {
-                                    // Use unicode scalar for proper support of non-ASCII keys (e.g. curly quotes for testing)
-                                    let scalar = first.unicodeScalars.first?.value ?? 0
-                                    forth.provideKey(Int(scalar))
-                                }
-                            }
-                            // Mark this supply line as consumed immediately so it doesn't get re-collected
-                            // and re-fed as a command in later onChanges (due to async protected updates).
-                            markProtectedThroughEndOfText()
-                        } else {
-                            forth.feedLine(lineToSend)
-                            // Advance protected to cover the command line sync. This helps with suspended
-                            // commands (like KEY) so that subsequent onChanges for key supply don't re-include
-                            // previous command lines in candidates.
-                            markProtectedThroughEndOfText()
-                            handlePostFeedActions()
-                        }
-
-                        if forth.clearScreenRequested {
-                            consoleText = consoleMessage
-                            markProtectedThroughEndOfText()
-                            lastKeyConsumedUserLength = 0
-                            forth.clearScreenRequested = false
-                        }
-                    }
-
-                    // Ensure the cursor ends up on a fresh line after the whole paste/block.
-                    DispatchQueue.main.async {
-                        if !consoleText.hasSuffix("\n") {
-                            consoleText += "\n"
-                            markProtectedThroughEndOfText()
-                        }
-                        keepCursorVisible(followPrompt: true)
-                    }
-                }
+            let candidateLines = filteredCommandLines(from: userPortion, dropTrailingEmpty: true)
+            if candidateLines.isEmpty {
+                commitEmptyLine()
             } else {
-                // Empty return on the prompt (nothing new to execute since last output).
-                // Feed an empty line so the engine prints "OK" (interpreting empty input
-                // as "nothing to do" in interpret mode). This gives the user the expected
-                // acknowledgment instead of a silent extra newline.
-                DispatchQueue.main.async {
-                    forth.feedLine("")
-
-                    handlePostFeedActions()
-
-                    if forth.clearScreenRequested {
-                        consoleText = consoleMessage
-                        markProtectedThroughEndOfText()
-                        lastKeyConsumedUserLength = 0
-                        forth.clearScreenRequested = false
-                    }
-
-                    // Ensure the cursor ends up on a fresh line.
-                    DispatchQueue.main.async {
-                        if !consoleText.hasSuffix("\n") {
-                            consoleText += "\n"
-                            markProtectedThroughEndOfText()
-                        }
-                        keepCursorVisible(followPrompt: true)
-                    }
-                }
+                dispatchCandidateLines(candidateLines)
             }
         }
 
@@ -991,6 +1013,8 @@ struct ConsoleView: View {
 private struct ConsoleTextView: NSViewRepresentable {
     @Binding var text: String
     @FocusState.Binding var isFocused: Bool
+    @Binding var pinCaretToEnd: Bool
+    var onReturnPressed: () -> Bool
     var onTextViewReady: (NSTextView) -> Void
 
     func makeCoordinator() -> Coordinator {
@@ -1052,16 +1076,22 @@ private struct ConsoleTextView: NSViewRepresentable {
             let end = (text as NSString).length
             let oldEnd = (oldString as NSString).length
 
-            // Suffix appends (engine OK lines, WORDS output, startup directory line) must
-            // move the caret to the new end. Preserving the old index leaves the cursor on
-            // the directory line or above freshly appended output.
-            if text.hasPrefix(oldString), end > oldEnd, selected.location >= oldEnd {
+            if pinCaretToEnd {
+                textView.setSelectedRange(NSRange(location: end, length: 0))
+                pinCaretToEnd = false
+            } else if text.hasPrefix(oldString), end > oldEnd, selected.location >= oldEnd {
+                // Suffix appends while caret was at end: follow new output.
                 textView.setSelectedRange(NSRange(location: end, length: 0))
             } else if selected.location <= end {
                 textView.setSelectedRange(selected)
             } else {
                 textView.setSelectedRange(NSRange(location: end, length: 0))
             }
+            textView.scrollRangeToVisible(textView.selectedRange())
+        } else if pinCaretToEnd {
+            let end = (text as NSString).length
+            textView.setSelectedRange(NSRange(location: end, length: 0))
+            pinCaretToEnd = false
             textView.scrollRangeToVisible(textView.selectedRange())
         }
 
@@ -1082,6 +1112,13 @@ private struct ConsoleTextView: NSViewRepresentable {
         func textDidChange(_ notification: Notification) {
             guard !isProgrammaticUpdate, let textView else { return }
             parent.text = textView.string
+        }
+
+        func textView(_ textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
+            if commandSelector == #selector(NSResponder.insertNewline(_:)) {
+                return parent.onReturnPressed()
+            }
+            return false
         }
     }
 }

@@ -42,6 +42,12 @@ struct ConsoleView: View {
     /// command detector to re-interpret previous output or old lines.
     @State private var protectedLength = 0
 
+    /// Snapshot of consoleText through protectedLength. User edits must not alter this prefix.
+    @State private var protectedSnapshot = ""
+
+    /// Suppresses re-entrancy when reverting a delete that crossed the protected boundary.
+    @State private var isRevertingProtectedEdit = false
+
     /// Tracks how much of the current user input (relative to protectedLength) has already
     /// been consumed as key data while waitingForKey. Used to compute delta new keystrokes
     /// on each onChange so we can feed them immediately to KEY without requiring a line commit.
@@ -70,7 +76,17 @@ struct ConsoleView: View {
                     currentScopedDirectory = nil
                 }
             }
-            .onChange(of: consoleText) { _, newValue in
+            .onChange(of: consoleText) { oldValue, newValue in
+                if isRevertingProtectedEdit {
+                    isRevertingProtectedEdit = false
+                    return
+                }
+                if newValue.count < protectedLength
+                    || (!protectedSnapshot.isEmpty && !newValue.hasPrefix(protectedSnapshot)) {
+                    isRevertingProtectedEdit = true
+                    consoleText = oldValue
+                    return
+                }
                 checkForCommandExecution(newValue)
             }
             .onKeyPress(.upArrow) {
@@ -82,7 +98,9 @@ struct ConsoleView: View {
                 return .handled
             }
             .onKeyPress(.delete) {
-                handleDelete()
+                if handleDelete() {
+                    return .handled
+                }
                 return .ignored
             }
             .onKeyPress(.return) {
@@ -97,7 +115,7 @@ struct ConsoleView: View {
                     if consoleText.last == "\n" {
                         isConsumingKeyChar = true
                         consoleText.removeLast()
-                        protectedLength = consoleText.count
+                        markProtectedThroughEndOfText()
                         lastKeyConsumedUserLength = 0
                     }
                     return .handled
@@ -123,13 +141,13 @@ struct ConsoleView: View {
             // Listen for menu commands from the Tools menu (defined at App level)
             .onReceive(NotificationCenter.default.publisher(for: .clearConsole)) { _ in
                 consoleText = consoleMessage
-                protectedLength = consoleText.count
+                markProtectedThroughEndOfText()
                 forth.clearScreenRequested = false
             }
             .onReceive(NotificationCenter.default.publisher(for: .resetForth)) { _ in
                 forth.resetToSafeState()
                 consoleText = consoleMessage
-                protectedLength = consoleText.count
+                markProtectedThroughEndOfText()
                 forth.clearScreenRequested = false
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -148,14 +166,14 @@ struct ConsoleView: View {
                 let initDir = forth.logicalCurrentDirectory
                 if !initDir.isEmpty {
                     consoleText += "Current directory: \(initDir)\n"
-                    protectedLength = consoleText.count
+                    markProtectedThroughEndOfText()
                 }
 
                 // Hook the Forth output callback
                 forth.onOutput = { text in
                     DispatchQueue.main.async {
                         consoleText += text
-                        protectedLength = consoleText.count
+                        markProtectedThroughEndOfText()
                         handlePostFeedActions()
                     }
                 }
@@ -189,11 +207,21 @@ struct ConsoleView: View {
                 }
 
                 // Initially everything (the banner) is "protected" output
-                protectedLength = consoleText.count
+                markProtectedThroughEndOfText()
                 lastKeyConsumedUserLength = 0
             }
     }
     
+    private func markProtectedThroughEndOfText() {
+        protectedLength = consoleText.count
+        protectedSnapshot = consoleText
+    }
+
+    private func markProtected(through length: Int) {
+        protectedLength = length
+        protectedSnapshot = String(consoleText.prefix(length))
+    }
+
     private func checkForCommandExecution(_ fullText: String) {
         guard !isRecallingHistory else { return }
         
@@ -222,7 +250,7 @@ struct ConsoleView: View {
                     if consoleText.count >= newPart.count {
                         isConsumingKeyChar = true
                         consoleText.removeLast(newPart.count)
-                        protectedLength = consoleText.count
+                        markProtectedThroughEndOfText()
                         lastKeyConsumedUserLength = 0
                     }
                 }
@@ -260,7 +288,7 @@ struct ConsoleView: View {
             // Always advance protected synchronously for this return commit.
             // This ensures the (possibly empty) line is marked as processed before async
             // dispatch/output, preventing re-collection races.
-            protectedLength = fullText.count
+            markProtected(through: fullText.count)
 
             if !candidateLines.isEmpty {
                 for lineToSend in candidateLines {
@@ -293,19 +321,19 @@ struct ConsoleView: View {
                             }
                             // Mark this supply line as consumed immediately so it doesn't get re-collected
                             // and re-fed as a command in later onChanges (due to async protected updates).
-                            protectedLength = consoleText.count
+                            markProtectedThroughEndOfText()
                         } else {
                             forth.feedLine(lineToSend)
                             // Advance protected to cover the command line sync. This helps with suspended
                             // commands (like KEY) so that subsequent onChanges for key supply don't re-include
                             // previous command lines in candidates.
-                            protectedLength = consoleText.count
+                            markProtectedThroughEndOfText()
                             handlePostFeedActions()
                         }
 
                         if forth.clearScreenRequested {
                             consoleText = consoleMessage
-                            protectedLength = consoleText.count
+                            markProtectedThroughEndOfText()
                             lastKeyConsumedUserLength = 0
                             forth.clearScreenRequested = false
                         }
@@ -315,7 +343,7 @@ struct ConsoleView: View {
                     DispatchQueue.main.async {
                         if !consoleText.hasSuffix("\n") {
                             consoleText += "\n"
-                            protectedLength = consoleText.count
+                            markProtectedThroughEndOfText()
                         }
                     }
                 }
@@ -331,7 +359,7 @@ struct ConsoleView: View {
 
                     if forth.clearScreenRequested {
                         consoleText = consoleMessage
-                        protectedLength = consoleText.count
+                        markProtectedThroughEndOfText()
                         lastKeyConsumedUserLength = 0
                         forth.clearScreenRequested = false
                     }
@@ -340,7 +368,7 @@ struct ConsoleView: View {
                     DispatchQueue.main.async {
                         if !consoleText.hasSuffix("\n") {
                             consoleText += "\n"
-                            protectedLength = consoleText.count
+                            markProtectedThroughEndOfText()
                         }
                     }
                 }
@@ -883,20 +911,9 @@ struct ConsoleView: View {
         }
     }
     
-    private func handleDelete() {
-        let lines = consoleText.components(separatedBy: .newlines)
-        guard !lines.isEmpty else { return }
-        
-        let lastIndex = lines.count - 1
-        let currentLine = lines[lastIndex]
-        
-        // Prevent deleting into previous output when on a fresh empty prompt line
-        if currentLine.isEmpty && lastIndex > 0 {
-            let prevLine = lines[lastIndex - 1].trimmingCharacters(in: .whitespacesAndNewlines)
-            if prevLine.hasPrefix("===") || prevLine.isEmpty {
-                return  // Block delete to protect output
-            }
-        }
+    private func handleDelete() -> Bool {
+        // No user-editable content remains; backspace must not eat protected output.
+        consoleText.count <= protectedLength
     }
     
     private func recallHistory(up: Bool) {

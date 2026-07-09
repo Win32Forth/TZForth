@@ -61,19 +61,25 @@ public final class TZForth {
     private let MEM_SIZE = 1024 * 1024   // 1 MB dictionary / heap region
     private let STACK_SIZE = 256         // data stack depth (cells)
     private let RSTACK_SIZE = 256        // return stack depth (cells)
-    /// Fixed low-memory layout: SOURCE line buffer, PAD (also WORD/S" parse scratch), then stacks.
+    /// Fixed low-memory layout: SOURCE, STRING_BUFFER (parse scratch ring), PAD (user only), then stacks.
     private enum MemLayout {
         static let sourceBuffer = 128
         static let sourceBufferSize = 256
-        static let padBuffer = sourceBuffer + sourceBufferSize
-        static let padBufferSize = 257  // count + 255 chars + trailing NUL
+        static let stringBuffer = sourceBuffer + sourceBufferSize
+        static let stringBufferSize = 4096
+        static let stringBufferSlotSize = 512
+        static let padBuffer = stringBuffer + stringBufferSize
+        static let padBufferSize = 1024
     }
     private let SOURCE_BUFFER: Int = MemLayout.sourceBuffer
     private let SOURCE_BUFFER_SIZE = MemLayout.sourceBufferSize
+    private let STRING_BUFFER: Int = MemLayout.stringBuffer
+    private let STRING_BUFFER_SIZE = MemLayout.stringBufferSize
+    private let STRING_BUFFER_SLOT_SIZE = MemLayout.stringBufferSlotSize
     private let PAD_BUFFER: Int = MemLayout.padBuffer
     private let PAD_BUFFER_SIZE = MemLayout.padBufferSize
-    /// Max chars for counted strings built in PAD (length byte + trailing NUL reserve 2 bytes).
-    private let PAD_MAX_COUNTED_CHARS = MemLayout.padBufferSize - 2
+    /// Max chars for counted strings in STRING_BUFFER slots (ANS /COUNTED-STRING = 255).
+    private let STRING_BUFFER_MAX_COUNTED_CHARS = 255
     private let MAX_BUILTIN_ID = 256    // plenty of room
 
     private let FLAG_IMMEDIATE: UInt8 = 0x80
@@ -386,7 +392,7 @@ public final class TZForth {
         ("PREVIOUS","( -- )",             "remove first word list from search order"),
         ("SOURCE",  "( -- c-addr u )",    "current input source buffer and length"),
         ("PARSE",   "( char -- c-addr u )", "parse text from input up to char (leaves delim, updates >IN)"),
-        ("PAD",     "( -- addr )",        "transient scratch (257 bytes); also used by WORD, S\", C\", .\""),
+        ("PAD",     "( -- addr )",        "transient user scratch (1024 bytes); not used by system parsers"),
         ("QUIT",    "( -- )",             "empty return stack, set interpret state, return to outer interpreter"),
         ("SP!",     "( n -- )",           "set data stack pointer (updates both cell and internal)"),
         ("RSP!",    "( n -- )",           "set return stack pointer (updates both cell and internal)"),
@@ -653,13 +659,15 @@ public final class TZForth {
     private var fetchID: Cell = 0    // ID for @
     private var sQuoteID: Cell = 0   // runtime for (S") used by S" to embed compact string literals that leave c-addr u
     private var abortQuoteID: Cell = 0  // runtime for (ABORT")
+    /// Next offset within STRING_BUFFER for ring allocation (512-byte slots, wraps at 4 KB).
+    private var stringBufferAllocOffset: Int = 0
 
     // MARK: - Init
 
     public init() {
         memory = Array(repeating: 0, count: MEM_SIZE)
 
-        // Layout fixed buffers (WORD, SOURCE, PAD) then data/return stacks above PAD.
+        // Layout fixed buffers (SOURCE, STRING_BUFFER, PAD) then data/return stacks above PAD.
         stackBase = (PAD_BUFFER + PAD_BUFFER_SIZE + 7) & ~7
         rstackBase = stackBase + STACK_SIZE * CELL_SIZE
 
@@ -2986,7 +2994,7 @@ public final class TZForth {
         // Parse the input stream (inputQueue, from keyboard lines or FLOADed file lines)
         // using the given delimiter char. Skip leading delimiters, collect chars until
         // the next delimiter (leaving the delimiter in the stream), build a counted string
-        // at PAD in memory (count byte, chars, trailing NUL), return its addr.
+        // at STRING_BUFFER in memory (count byte, chars, trailing NUL), return its addr.
         // This is the general parser needed for strings, names, etc. (e.g. to implement .", S", etc.).
         _ = register("WORD") {
             let delim = UInt8(self.pop() & 0xff)
@@ -3070,7 +3078,7 @@ public final class TZForth {
             }
         }
 
-        // PAD ( -- addr )  Transient scratch (WORD/S"/C"/." parse, user strings, etc.).
+        // PAD ( -- addr )  Transient user scratch (1024 bytes). System parsers use STRING_BUFFER.
         // Fixed location so it doesn't move when HERE advances.
         _ = register("PAD") {
             self.push( Cell( self.PAD_BUFFER ) )
@@ -3840,8 +3848,8 @@ public final class TZForth {
                 }
                 self.alignHere()
             } else {
-                // Interpret: counted string already in PAD from parseToWordBuffer.
-                // Normalize leading separator (same rule as S") in place, then leave PAD.
+                // Interpret: counted string already in STRING_BUFFER from parseToWordBuffer.
+                // Normalize leading separator (same rule as S") in place, then leave c-addr.
                 if len > 0 && self.readByte(saddr) <= 32 {
                     saddr += 1
                     len -= 1
@@ -4324,10 +4332,11 @@ public final class TZForth {
             let name = self.parseWord()
             if name.isEmpty { self.tell("? INCLUDE needs a name\n"); self.errorFlag = true; return }
             let bytes = Array(name.utf8)
+            let slot = self.allocateStringBufferSlot()
             for (i, b) in bytes.enumerated() {
-                self.writeByte(self.PAD_BUFFER + 1 + i, b)
+                self.writeByte(slot + i, b)
             }
-            self.includedFromSpec(self.PAD_BUFFER + 1, bytes.count)
+            self.includedFromSpec(slot, bytes.count)
         }
     }
 
@@ -4635,11 +4644,21 @@ public final class TZForth {
         return b
     }
 
-    // Helper used by WORD and CHAR (and future string parsers). Consumes from inputQueue
+    /// Allocate the next 512-byte slot in the STRING_BUFFER ring (wraps at 4 KB).
+    private func allocateStringBufferSlot() -> Int {
+        let base = self.STRING_BUFFER + self.stringBufferAllocOffset
+        self.stringBufferAllocOffset += self.STRING_BUFFER_SLOT_SIZE
+        if self.stringBufferAllocOffset >= self.STRING_BUFFER_SIZE {
+            self.stringBufferAllocOffset = 0
+        }
+        return base
+    }
+
+    // Helper used by WORD and CHAR (and string parsers). Consumes from inputQueue
     // (which receives appended lines from feedLine, whether REPL or FLOAD content).
     // Skips leading exact delims, collects until delim or line-end, builds counted string
-    // (len byte + chars + trailing NUL) at PAD. Returns counted-string c-addr (PAD).
-    // The trailing delim (if any) is left in queue. Transient — next WORD/S"/etc. overwrites.
+    // (len byte + chars + trailing NUL) in the next STRING_BUFFER slot. Returns c-addr.
+    // The trailing delim (if any) is left in queue. Transient — ring may reuse slots.
     private func parseToWordBuffer(using delim: UInt8) -> Cell {
         var collected: [UInt8] = []
 
@@ -4662,16 +4681,17 @@ public final class TZForth {
         // Consume a closing delim if present (supports smart doubles for ")
         _ = self.consumeDelim(delim)
 
-        let len = min(collected.count, self.PAD_MAX_COUNTED_CHARS)
-        self.writeByte(self.PAD_BUFFER, UInt8(len))
+        let slot = self.allocateStringBufferSlot()
+        let len = min(collected.count, self.STRING_BUFFER_MAX_COUNTED_CHARS)
+        self.writeByte(slot, UInt8(len))
         for (i, b) in collected.prefix(len).enumerated() {
-            self.writeByte(self.PAD_BUFFER + 1 + i, b)
+            self.writeByte(slot + 1 + i, b)
         }
-        self.writeByte(self.PAD_BUFFER + 1 + len, 0)
-        return Cell(self.PAD_BUFFER)
+        self.writeByte(slot + 1 + len, 0)
+        return Cell(slot)
     }
 
-    /// Parse an ANS S\" escaped string into PAD. Returns (char-addr, length).
+    /// Parse an ANS S\" escaped string into STRING_BUFFER. Returns (char-addr, length).
     private func parseEscapedStringToBuffer() -> (Cell, Int) {
         // Skip opening double-quote (ascii or smart)
         while !self.inputQueue.isEmpty {
@@ -4720,13 +4740,14 @@ public final class TZForth {
             }
         }
 
-        let len = min(collected.count, self.PAD_MAX_COUNTED_CHARS)
-        self.writeByte(self.PAD_BUFFER, UInt8(len))
+        let slot = self.allocateStringBufferSlot()
+        let len = min(collected.count, self.STRING_BUFFER_MAX_COUNTED_CHARS)
+        self.writeByte(slot, UInt8(len))
         for (i, b) in collected.prefix(len).enumerated() {
-            self.writeByte(self.PAD_BUFFER + 1 + i, b)
+            self.writeByte(slot + 1 + i, b)
         }
-        self.writeByte(self.PAD_BUFFER + 1 + len, 0)
-        return (Cell(self.PAD_BUFFER + 1), len)
+        self.writeByte(slot + 1 + len, 0)
+        return (Cell(slot + 1), len)
     }
 
     /// Restore dictionary and search order from a MARKER storage block.

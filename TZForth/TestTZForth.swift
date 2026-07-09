@@ -627,6 +627,28 @@ hello
         }
     }
 
+    // Double-Number (8): D+ D. 2CONSTANT 2VALUE trailing-dot literals
+    ansTest("double literal", "1234. DROP .", "1234")
+    ansTest("double literal hi", "1234. .", "0")
+    ansTest("S>D D.", "42 S>D D.", "42")
+    ansTest("D+", "1. 2. D+ D.", "3")
+    ansTest("D-", "5. 2. D- D.", "3")
+    ansTest("DNEGATE", "7. DNEGATE D.", "-7")
+    ansTest("DABS", "-9. DABS D.", "9")
+    ansTest("D=", "100. 100. D= .", "-1")
+    ansTest("D0=", "0. D0= .", "-1")
+    ansTest("M+", "1. 5 M+ D.", "6")
+    ansTest("M*/", "10 10 5 M*/ D.", "20")
+    ansTest("D>S", "1234. D>S .", "1234")
+    forth.feedLine("1000. 2CONSTANT t8big")
+    ansTest("2CONSTANT", "t8big D.", "1000")
+    forth.feedLine("50. 2VALUE t8dv")
+    forth.feedLine(": t8put 200. ;")
+    ansTest("2VALUE TO", "t8put TO t8dv t8dv D.", "200")
+    ansTest("DU<", "1. 2. DU< .", "-1")
+    ansTest("2ROT", "1. 2. 3. 2ROT 2DROP D.", "3")
+    ansTest("ENVIRONMENT? DOUBLE", "S\" DOUBLE\" ENVIRONMENT? .", "-1")
+
     // Core Ext Tier 2: :NONAME ACTION-OF MARKER SAVE-INPUT RESTORE-INPUT SOURCE-ID S\" REFILL
     ansTest(":NONAME", "VARIABLE t7n1 :NONAME 1234 ; t7n1 ! t7n1 @ EXECUTE .", "1234")
     ansTest("ACTION-OF", "DEFER t7d : t7a1 42 ; ' t7a1 IS t7d ' t7d ACTION-OF EXECUTE .", "42")

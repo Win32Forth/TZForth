@@ -2,7 +2,7 @@
 
 This document tracks implementation status of the 2012 ANS Forth Standard word sets in TZForth (Swift port of the lbForth model). Generated from codebase inspection (`TZForth/TZForth.swift`, `TestTZForth.swift`, `TZForthTests.swift`).
 
-Last update: Memory-Allocation word set (14) complete — `ALLOCATE`, `FREE`, `RESIZE`; TZForth extension `GROWMEMORYMB`.
+Last update: Double-Number word set (8) complete — all 8.6.1 words plus 8.6.2 extensions (`2ROT`, `2VALUE`, `DU<`).
 
 ## Summary
 
@@ -16,7 +16,8 @@ Last update: Memory-Allocation word set (14) complete — `ALLOCATE`, `FREE`, `R
 | **Exception (9)** | Complete — `CATCH`, `THROW`; Core `ABORT`/`ABORT"` delegate to `THROW -1`/`-2` |
 | **String (17)** | Complete — 17.6.1 (`COMPARE`, `SEARCH`, `SLITERAL`, `/STRING`, `-TRAILING`, `BLANK`, `CMOVE`, `CMOVE>`) |
 | **Memory-Allocation (14)** | Complete — 14.6.1 (`ALLOCATE`, `FREE`, `RESIZE`); extension `GROWMEMORYMB` |
-| **Other optional sets** | Mostly absent — Double, Float, Facility, Block, Locals, Extended-Character, etc. |
+| **Double-Number (8)** | Complete — 8.6.1 + 8.6.2 (`2ROT`, `2VALUE`, `DU<`); trailing `.` literals |
+| **Other optional sets** | Mostly absent — Float, Facility, Block, Locals, Extended-Character, etc. |
 
 FTEST harness: run with `FTEST=1 swift /tmp/combined.swift` (concatenate `TZForth.swift`, `TZForthTests.swift`, `TestTZForth.swift`).
 
@@ -30,7 +31,7 @@ All Core words required for conformance are implemented. Notable details:
 - **PARSE** / **PARSE-NAME** return slices of **SOURCE**, not `STRING_BUFFER` or `PAD`.
 - Pictured numeric (`<#` … `#>`) uses a separate high-memory buffer, not `PAD`.
 - **POSTPONE** / **[COMPILE]** use captured `executeID` + emit `LIT`/`EXECUTE` for immediate words.
-- **ENVIRONMENT?** returns values for `CORE`, `CORE-EXT`, `/COUNTED-STRING` (255), `ADDRESS-UNIT-BITS`, `MAX-CHAR`, `SEARCH-ORDER`, `WORDLISTS` (8), `FILE`, `FILE-ACCESS`, `FILE-EXT`, `EXCEPTION`, `STRING`, `MEMORY-ALLOCATION`. **`.ENVIRONMENT`** lists all supported queries.
+- **ENVIRONMENT?** returns values for `CORE`, `CORE-EXT`, `/COUNTED-STRING` (255), `ADDRESS-UNIT-BITS`, `MAX-CHAR`, `SEARCH-ORDER`, `WORDLISTS` (8), `FILE`, `FILE-ACCESS`, `FILE-EXT`, `EXCEPTION`, `STRING`, `MEMORY-ALLOCATION`, `DOUBLE`. **`.ENVIRONMENT`** lists all supported queries.
 - Memory: **1 MB** default linear region (growable via **`GROWMEMORYMB`**); low fixed layout `SOURCE` (1024) → `STRING_BUFFER` (4096) → `PAD` (1024) → data/return stacks; **UNUSED** / **.FREE** report free dictionary bytes up to the PNO buffer anchor.
 
 ### Low-memory map (implementation-defined)
@@ -180,6 +181,26 @@ ANS word set 14.6.1 (heap allocate / free / resize). Heap grows **downward** fro
 
 Default memory at startup: **1 MB**.
 
+## Double-Number (8) — Complete
+
+ANS word set 8.6.1 and extensions 8.6.2. Double-cell layout matches existing Core words (`M*`, `UM/MOD`, pictured numeric): lower cell on stack first, upper cell on top; 64-bit value in two cells (low 32 / high 32).
+
+| Word | Stack / notes |
+|------|----------------|
+| `D+` `D-` `DNEGATE` `DABS` `D2*` `D2/` | arithmetic |
+| `D.` `D.R` | display signed double in `BASE` |
+| `D<` `D=` `D0<` `D0=` `DU<` | comparisons |
+| `D>S` | drop high cell |
+| `DMIN` `DMAX` | extrema |
+| `M+` `M*/` | mixed single/double arithmetic |
+| `2CONSTANT` `2VARIABLE` `2LITERAL` `2VALUE` | defining / compile |
+| `2ROT` | rotate third pair to top |
+| `S>D` | sign-extend single to double (Core Ext) |
+
+**Text interpreter (8.3.1):** a number token ending in `.` (and not a definition name) is compiled or pushed as a double-cell literal (e.g. `1234.` → `1234` `0`).
+
+`TO` accepts a double on the stack for words created by `2VALUE`. `ENVIRONMENT?` answers `DOUBLE`.
+
 ## TZForth-specific extensions (non-ANS)
 
 `FLOAD`, `EDIT`, `CHDIR`, `DIR`, `FILE-ECHO`, `DEBUG-ON`/`DEBUG-OFF`, `RESET`, `CLS`, `BYE`, `ANS-VALIDATE`, `.ENVIRONMENT`, `FORGET-WORD`, `>LFA`, `>HEADER`, `>NFA`, `ID.`, `\\` (block comment to `{`), `\\S`, `DP`, high-level `HERE` (`DP @`), `ERASE` (`0 FILL`), `GROWMEMORYMB`, etc.
@@ -188,7 +209,6 @@ Default memory at startup: **1 MB**.
 
 Not implemented (no current plan unless requested):
 
-- **Double** (`D+`, `D.`, `2CONSTANT`, …)
 - **Float**
 - **Facility** (`AT-XY`, `TIME&DATE`, …)
 - **Block**
@@ -199,6 +219,6 @@ Not implemented (no current plan unless requested):
 ## Recommendations
 
 - TZForth is highly functional for classic Forth sources, REPL, sandboxed `FLOAD`/`EDIT`/`CHDIR`, ANS Core + Core Ext conformance testing, and ANS File-Access file I/O / `INCLUDED`.
-- Next logical steps (if desired): Double-Number, Float, Facility, or map remaining `errorFlag` paths to standard `THROW` codes.
+- Next logical steps (if desired): Float, Facility, or map remaining `errorFlag` paths to standard `THROW` codes.
 
 For full standard details, see the official 2012 ANS Forth document (sections 6.1, 6.2, and optional word sets in chapters 7–18).

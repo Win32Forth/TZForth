@@ -82,7 +82,7 @@ public final class TZForth {
     private let PAD_BUFFER_SIZE = MemLayout.padBufferSize
     /// Max chars for counted strings in STRING_BUFFER slots (ANS /COUNTED-STRING = 255).
     private let STRING_BUFFER_MAX_COUNTED_CHARS = 255
-    private let MAX_BUILTIN_ID = 256    // plenty of room
+    private let MAX_BUILTIN_ID = 512    // primitive dispatch table size (IDs 0 ..< 512)
 
     private let FLAG_IMMEDIATE: UInt8 = 0x80
     private let FLAG_HIDDEN: UInt8 = 0x40
@@ -582,6 +582,29 @@ public final class TZForth {
         ("2OVER",   "( n1 n2 n3 n4 -- n1 n2 n3 n4 n1 n2 )", "copy second pair"),
         ("2SWAP",   "( n1 n2 n3 n4 -- n3 n4 n1 n2 )", "swap pairs"),
         ("S>D",     "( n -- d )",         "sign extend single to double"),
+        ("D+",      "( d1 d2 -- d3 )",    "add double-cell numbers"),
+        ("D-",      "( d1 d2 -- d3 )",    "subtract double-cell numbers"),
+        ("D.",      "( d -- )",           "print signed double in current BASE"),
+        ("D.R",     "( d n -- )",         "print signed double right-aligned in width n"),
+        ("D<",      "( d1 d2 -- flag )",  "true if d1 < d2 (signed)"),
+        ("D=",      "( d1 d2 -- flag )",  "true if d1 = d2"),
+        ("D0<",     "( d -- flag )",      "true if d is negative"),
+        ("D0=",     "( d -- flag )",      "true if d is zero"),
+        ("DU<",     "( ud1 ud2 -- flag )","true if ud1 < ud2 (unsigned)"),
+        ("D>S",     "( d -- n )",         "drop high cell of double"),
+        ("DABS",    "( d -- d )",         "absolute value of double"),
+        ("DNEGATE", "( d -- d )",         "negate double"),
+        ("D2*",     "( d -- d )",         "double arithmetic left shift"),
+        ("D2/",     "( d -- d )",         "double arithmetic right shift"),
+        ("DMIN",    "( d1 d2 -- d )",     "signed double minimum"),
+        ("DMAX",    "( d1 d2 -- d )",     "signed double maximum"),
+        ("M+",      "( d n -- d )",       "add single n to double d"),
+        ("M*/",     "( u1 u2 u3 -- ud )", "u1*u2/u3 as unsigned double"),
+        ("2CONSTANT","( d -- ) name",     "create double constant"),
+        ("2VARIABLE","( -- ) name",        "create 2-cell variable"),
+        ("2LITERAL","( d -- )",           "compile double literal (immediate)"),
+        ("2VALUE",  "( d -- ) name",      "create modifiable double value (TO)"),
+        ("2ROT",    "( d1 d2 d3 -- d2 d3 d1 )", "rotate third double pair to top"),
         ("U.",      "( u -- )",           "print unsigned"),
         ("EMIT",    "( c -- )",           "emit character"),
         ("TYPE",    "( addr len -- )",    "type string"),
@@ -707,6 +730,8 @@ public final class TZForth {
 
     private var executeID: Cell = 0  // captured ID for EXECUTE so POSTPONE can emit LIT xt EXECUTE for immediates
     private var fetchID: Cell = 0    // ID for @
+    private var twoFetchID: Cell = 0 // ID for 2@ (2VALUE / TO detection)
+    private var twoStoreID: Cell = 0 // ID for 2!
     private var sQuoteID: Cell = 0   // runtime for (S") used by S" to embed compact string literals that leave c-addr u
     private var abortQuoteID: Cell = 0  // runtime for (ABORT")
     /// Next offset within STRING_BUFFER for ring allocation (512-byte slots, wraps at 4 KB).
@@ -1178,6 +1203,85 @@ public final class TZForth {
         let high = UInt64(bitPattern: Int64(pop()))
         let low = UInt64(bitPattern: Int64(pop()))
         return (high << 32) | low
+    }
+
+    /// Low 32 bits of a double-cell's lower stack item (TZForth double layout).
+    private func doubleLowMask(_ lo: Cell) -> UInt64 {
+        UInt64(bitPattern: Int64(lo)) & 0xffff_ffff
+    }
+
+    private func popSignedDouble() -> Int64 {
+        let hi = pop()
+        let lo = pop()
+        return (Int64(hi) << 32) | Int64(self.doubleLowMask(lo))
+    }
+
+    private func popUnsignedDouble() -> UInt64 {
+        let hi = UInt64(bitPattern: Int64(pop()))
+        let lo = self.doubleLowMask(pop())
+        return (hi << 32) | lo
+    }
+
+    private func pushSignedDouble(_ d: Int64) {
+        self.push(Cell(Int(d & 0xffff_ffff)))
+        self.push(Cell(Int((d >> 32) & 0xffff_ffff)))
+    }
+
+    private func pushUnsignedDouble(_ ud: UInt64) {
+        self.push(Cell(Int(ud & 0xffff_ffff)))
+        self.push(Cell(Int((ud >> 32) & 0xffff_ffff)))
+    }
+
+    private func digitValue(_ ch: Character, base: Int) -> Int? {
+        if ch >= "0" && ch <= "9" {
+            let d = Int(ch.asciiValue! - 48)
+            return d < base ? d : nil
+        }
+        let u = String(ch).uppercased()
+        guard let scalar = u.unicodeScalars.first else { return nil }
+        let c = scalar.value
+        if c >= 65 && c <= 90 {
+            let d = 10 + Int(c - 65)
+            return d < base ? d : nil
+        }
+        return nil
+    }
+
+    /// ANS 8.3.1: a token ending in '.' (and not a definition) is a double-cell literal.
+    private func parseTextDouble(_ name: String, base: Int) -> (lo: Cell, hi: Cell)? {
+        guard name.hasSuffix(".") else { return nil }
+        var stem = String(name.dropLast())
+        if stem.isEmpty { return nil }
+        var negative = false
+        if stem.hasPrefix("-") {
+            negative = true
+            stem = String(stem.dropFirst())
+        } else if stem.hasPrefix("+") {
+            stem = String(stem.dropFirst())
+        }
+        if stem.isEmpty { return nil }
+        let b = max(2, min(36, base))
+        var ud: UInt64 = 0
+        for ch in stem {
+            guard let d = self.digitValue(ch, base: b) else { return nil }
+            ud = ud * UInt64(b) + UInt64(d)
+        }
+        var sd = Int64(bitPattern: ud)
+        if negative { sd = -sd }
+        return (Cell(Int(sd & 0xffff_ffff)), Cell(Int((sd >> 32) & 0xffff_ffff)))
+    }
+
+    private func formatSignedDouble(lo: Cell, hi: Cell, base: Cell) -> String {
+        let d = (Int64(hi) << 32) | Int64(self.doubleLowMask(lo))
+        let b = Int(max(2, min(36, base)))
+        return String(d, radix: b).uppercased()
+    }
+
+    private func compileDoubleLiteral(_ lo: Cell, _ hi: Cell) {
+        self.push(self.litID); self.comma()
+        self.push(lo); self.comma()
+        self.push(self.litID); self.comma()
+        self.push(hi); self.comma()
     }
 
     private func allocFileId() -> Int {
@@ -1659,6 +1763,7 @@ public final class TZForth {
         "FILE-EXT",
         "STRING",
         "MEMORY-ALLOCATION",
+        "DOUBLE",
     ]
 
     /// ANS ENVIRONMENT? values for a query string, or nil if unsupported.
@@ -1674,7 +1779,7 @@ public final class TZForth {
             return [255, -1]
         case "WORDLISTS":
             return [Cell(MAX_VOCABS), -1]
-        case "FILE", "FILE-ACCESS", "FILE-EXT", "EXCEPTION", "STRING", "MEMORY-ALLOCATION":
+        case "FILE", "FILE-ACCESS", "FILE-EXT", "EXCEPTION", "STRING", "MEMORY-ALLOCATION", "DOUBLE":
             return [-1]
         default:
             return nil
@@ -3129,6 +3234,105 @@ public final class TZForth {
 
         _ = register("S>D") { let n = self.pop(); self.push(n); self.push( n < 0 ? -1 : 0 ) }
 
+        // === ANS Forth 2012 Double-Number word set (Section 8) ===
+
+        _ = register("D+") {
+            let d2 = self.popSignedDouble()
+            let d1 = self.popSignedDouble()
+            self.pushSignedDouble(d1 &+ d2)
+        }
+        _ = register("D-") {
+            let d2 = self.popSignedDouble()
+            let d1 = self.popSignedDouble()
+            self.pushSignedDouble(d1 &- d2)
+        }
+        _ = register("DNEGATE") {
+            self.pushSignedDouble(-self.popSignedDouble())
+        }
+        _ = register("DABS") {
+            self.pushSignedDouble(abs(self.popSignedDouble()))
+        }
+        _ = register("D2*") {
+            self.pushSignedDouble(self.popSignedDouble() << 1)
+        }
+        _ = register("D2/") {
+            self.pushSignedDouble(self.popSignedDouble() >> 1)
+        }
+        _ = register("D<") {
+            let d2 = self.popSignedDouble()
+            let d1 = self.popSignedDouble()
+            self.push(d1 < d2 ? -1 : 0)
+        }
+        _ = register("D=") {
+            let d2 = self.popSignedDouble()
+            let d1 = self.popSignedDouble()
+            self.push(d1 == d2 ? -1 : 0)
+        }
+        _ = register("D0<") {
+            self.push(self.popSignedDouble() < 0 ? -1 : 0)
+        }
+        _ = register("D0=") {
+            self.push(self.popSignedDouble() == 0 ? -1 : 0)
+        }
+        _ = register("DU<") {
+            let d2 = self.popUnsignedDouble()
+            let d1 = self.popUnsignedDouble()
+            self.push(d1 < d2 ? -1 : 0)
+        }
+        _ = register("DMIN") {
+            let d2 = self.popSignedDouble()
+            let d1 = self.popSignedDouble()
+            self.pushSignedDouble(min(d1, d2))
+        }
+        _ = register("DMAX") {
+            let d2 = self.popSignedDouble()
+            let d1 = self.popSignedDouble()
+            self.pushSignedDouble(max(d1, d2))
+        }
+        _ = register("D>S") {
+            _ = self.pop()
+            // low cell remains as single-cell n (ANS: drop most significant cell)
+        }
+        _ = register("D.") {
+            let hi = self.pop()
+            let lo = self.pop()
+            let b = self.readCell(self.BASE)
+            self.tell(self.formatSignedDouble(lo: lo, hi: hi, base: b))
+            self.putkey(32)
+        }
+        _ = register("D.R") {
+            let width = Int(self.pop())
+            let hi = self.pop()
+            let lo = self.pop()
+            let b = self.readCell(self.BASE)
+            var s = self.formatSignedDouble(lo: lo, hi: hi, base: b)
+            if s.count < width { s = String(repeating: " ", count: width - s.count) + s }
+            self.tell(s)
+        }
+        _ = register("M+") {
+            let n = Int64(self.pop())
+            let d = self.popSignedDouble()
+            self.pushSignedDouble(d &+ n)
+        }
+        _ = register("M*/") {
+            let u3 = UInt64(bitPattern: Int64(self.pop()))
+            let u2 = UInt64(bitPattern: Int64(self.pop()))
+            let u1 = UInt64(bitPattern: Int64(self.pop()))
+            if u3 == 0 {
+                self.tell("? Division by zero\n")
+                self.errorFlag = true
+                self.pushUnsignedDouble(0)
+                return
+            }
+            let prod = u1 &* u2
+            self.pushUnsignedDouble(prod / u3)
+        }
+        _ = register("2ROT") {
+            let f = self.pop(); let e = self.pop(); let d = self.pop()
+            let c = self.pop(); let b = self.pop(); let a = self.pop()
+            self.push(c); self.push(d); self.push(e); self.push(f); self.push(a); self.push(b)
+        }
+
         _ = register("PICK") {
             let n = Int(self.pop())
             if n < 0 { self.push(0); return }
@@ -3150,13 +3354,13 @@ public final class TZForth {
         _ = register("TUCK") { let b = self.pop(); let a = self.pop(); self.push(b); self.push(a); self.push(b) }
         _ = register("NIP") { let b = self.pop(); _ = self.pop(); self.push(b) }  // ( x1 x2 -- x2 )
 
-        _ = register("2@") {
+        self.twoFetchID = register("2@") {
             let a = Int(self.pop())
             let x2 = self.readCell(a)
             let x1 = self.readCell(a + 8)
             self.push(x1); self.push(x2)
         }
-        _ = register("2!") {
+        self.twoStoreID = register("2!") {
             let a = Int(self.pop())
             let x2 = self.pop()
             let x1 = self.pop()
@@ -4322,6 +4526,31 @@ public final class TZForth {
             self.push(self.exitID); self.comma()
         }
 
+        _ = register("2CONSTANT") {
+            let name = self.parseWord()
+            if name.isEmpty { self.tell("? 2CONSTANT needs a name\n"); self.errorFlag = true; return }
+            let dhi = self.pop()
+            let dlo = self.pop()
+            self.createWord(name: name, immediate: false)
+            self.push(self.docolID); self.comma()
+            self.push(self.litID); self.comma()
+            self.push(dlo); self.comma()
+            self.push(self.litID); self.comma()
+            self.push(dhi); self.comma()
+            self.push(self.exitID); self.comma()
+        }
+
+        _ = register("2LITERAL", immediate: true) {
+            if self.readCell(self.STATE) == 0 {
+                self.tell("? 2LITERAL only while compiling\n")
+                self.errorFlag = true
+                return
+            }
+            let dhi = self.pop()
+            let dlo = self.pop()
+            self.compileDoubleLiteral(dlo, dhi)
+        }
+
         // VARIABLE (very simple)
         _ = register("VARIABLE") {
             let name = self.parseWord()
@@ -4337,6 +4566,18 @@ public final class TZForth {
             self.push(self.exitID); self.comma()
             // allocate one cell of data space (advances the dict pointer past the data cell)
             self.writeCell(self.DP_ADDR, self.readCell(self.DP_ADDR) + 8)
+        }
+
+        _ = register("2VARIABLE") {
+            let name = self.parseWord()
+            if name.isEmpty { self.tell("? 2VARIABLE needs a name\n"); self.errorFlag = true; return }
+            self.createWord(name: name, immediate: false)
+            self.push(self.docolID); self.comma()
+            self.push(self.litID); self.comma()
+            let dataAddr = self.readCell(self.DP_ADDR) + 16
+            self.push(dataAddr); self.comma()
+            self.push(self.exitID); self.comma()
+            self.writeCell(self.DP_ADDR, self.readCell(self.DP_ADDR) + 16)
         }
 
         // DEFER ( "<spaces>name" -- )  Core Ext
@@ -4373,6 +4614,23 @@ public final class TZForth {
             self.push(self.exitID); self.comma()
             self.writeCell(self.DP_ADDR, self.readCell(self.DP_ADDR) + 8)
             self.writeCell(Int(valCellAddr), n)
+        }
+
+        _ = register("2VALUE") {
+            let name = self.parseWord()
+            if name.isEmpty { self.tell("? 2VALUE needs a name\n"); self.errorFlag = true; return }
+            let dhi = self.pop()
+            let dlo = self.pop()
+            self.createWord(name: name, immediate: false)
+            self.push(self.docolID); self.comma()
+            self.push(self.litID); self.comma()
+            let valCellAddr = self.readCell(self.DP_ADDR) + 24
+            self.push(valCellAddr); self.comma()
+            self.push(self.twoFetchID); self.comma()
+            self.push(self.exitID); self.comma()
+            self.writeCell(self.DP_ADDR, self.readCell(self.DP_ADDR) + 16)
+            self.writeCell(Int(valCellAddr), dlo)
+            self.writeCell(Int(valCellAddr) + 8, dhi)
         }
 
         // DEFER! ( xt2 xt1 -- )  Core Ext
@@ -4471,26 +4729,32 @@ public final class TZForth {
             self.writeCell(storageAddr, newXt)
         }
 
-        // TO ( n "<name>" -- )  Core Ext — parsing assignment for VALUE (stores n, not an xt).
+        // TO ( n "<name>" -- ) / ( d "<name>" -- )  Core Ext + Double ext for 2VALUE
         _ = register("TO", immediate: false) {
-            let n = self.pop()
             let name = self.parseWord()
             if name.isEmpty { self.tell("? TO needs a name\n"); self.errorFlag = true; return }
             let hdr = self.findWord(name)
             if hdr == 0 { self.tell("? TO ? " + name + "\n"); self.errorFlag = true; return }
             let cfa = self.getCFA(hdr)
             let first = self.readCell(Int(cfa))
-            var storageAddr: Int = 0
-            if first == self.docolID {
-                let second = self.readCell(Int(cfa) + 8)
-                if second != self.litID {
-                    self.tell("? TO target does not look like a VALUE\n"); self.errorFlag = true; return
-                }
-                storageAddr = Int(self.readCell(Int(cfa) + 16))
-            } else {
+            guard first == self.docolID else {
                 self.tell("? TO target is not a VALUE\n"); self.errorFlag = true; return
             }
-            self.writeCell(storageAddr, n)
+            let second = self.readCell(Int(cfa) + 8)
+            guard second == self.litID else {
+                self.tell("? TO target does not look like a VALUE\n"); self.errorFlag = true; return
+            }
+            let storageAddr = Int(self.readCell(Int(cfa) + 16))
+            let fourth = self.readCell(Int(cfa) + 24)
+            if fourth == self.twoFetchID {
+                let dhi = self.pop()
+                let dlo = self.pop()
+                self.writeCell(storageAddr, dlo)
+                self.writeCell(storageAddr + 8, dhi)
+            } else {
+                let n = self.pop()
+                self.writeCell(storageAddr, n)
+            }
         }
 
         // CREATE ( "<spaces>name" -- )  ANS 2012
@@ -4922,9 +5186,17 @@ public final class TZForth {
                     }
                 }
             } else {
-                // Try number, respecting current BASE (supports 2..36, signs, letters A-Z)
-                let b = self.readCell(self.BASE)
-                if let num = Int(name, radix: Int( max(2, min(36, b)) )) {
+                // Try number, respecting current BASE (supports 2..36, signs, letters A-Z).
+                // ANS Double-Number 8.3.1: a token ending in '.' becomes a double-cell literal.
+                let b = Int(max(2, min(36, self.readCell(self.BASE))))
+                if let d = self.parseTextDouble(name, base: b) {
+                    if self.readCell(self.STATE) != 0 {
+                        self.compileDoubleLiteral(d.lo, d.hi)
+                    } else {
+                        self.push(d.lo)
+                        self.push(d.hi)
+                    }
+                } else if let num = Int(name, radix: b) {
                     if readCell(STATE) != 0 {
                         self.push(litID); self.comma()
                         self.push(num); self.comma()

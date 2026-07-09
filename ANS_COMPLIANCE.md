@@ -1,62 +1,75 @@
-# ANS Forth 2012 Compliance Status for TZForth (based on Leif Bruder's lbForth / LBForth model)
+# ANS Forth 2012 Compliance Status for TZForth
 
-This document summarizes the implementation status of the Core and Core Extensions word sets from the 2012 ANS Forth Standard in the current codebase (as of the latest commits).
+This document tracks implementation status of the 2012 ANS Forth Standard word sets in TZForth (Swift port of the lbForth model). Generated from codebase inspection (`TZForth/TZForth.swift`, `TestTZForth.swift`, `TZForthTests.swift`).
 
-## Implemented Words (Core + Extensions, non-exhaustive)
-The engine implements a substantial and practical subset of the standard, focused on usability for classic Forth sources (e.g., F-PC style, Forthing.fth). This includes:
+Last update: after Core Ext Tier 2 batch (`:NONAME`, `ACTION-OF`, `MARKER`, `SAVE-INPUT`, `RESTORE-INPUT`, `SOURCE-ID`, `S\"`, `REFILL`) and prior Tier 1 words.
 
-- Core arithmetic (incl. new / +! */MOD etc), double-cell stack ops, memory (FILL etc), literals/immediate, pictured numeric (<# etc), S", etc. (see added list in missing section notes).
-- Many Core Ext: 2>R 2R@ 2R>, NIP, PICK, ROLL, TUCK, U.R, WITHIN, ?DO, etc.
-- App-specific but useful extensions: FLOAD, EDIT, CHDIR, DIR, FILE-ECHO, DEBUG-ON/OFF, >HEADER, >NFA, ID., FORGET-WORD, etc.
-- High-level conveniences: HERE as DP @, >LFA, >NFA, ID., etc.
-- Full test coverage expanded in TestTZForth.swift (FTEST; originally TestLBForth.swift) for many words per standard stack effects.
+## Summary
 
-See `TZForth/TZForth.swift` (register calls + primitiveHelpData + bootstrap high-level defs; originally LBForth.swift) and `TestTZForth.swift` for details. `WORDS` in the REPL shows current dictionary.
+| Word set | Status |
+|----------|--------|
+| **Core (6.1)** | Complete — all required words implemented with FTEST coverage |
+| **Core Ext (6.2)** | Complete — all standard Core Ext words implemented |
+| **Search-Order (16)** | Substantial — `WORDLIST`, `GET/SET-ORDER`, `GET/SET-CURRENT`, `FORTH-WORDLIST`, plus `VOCABULARY`, `FORTH`, `DEFINITIONS`, `ALSO`, `ONLY`, `ORDER` |
+| **Programming-Tools** | Partial — `SEE`, `HELP`, `WORDS`, `FORGET`, `>HEADER`, `>NFA`, `ID.`, `ANS-VALIDATE`; no `LOCATE`, `COMPILE`, `NEEDS`, `REQUIRED` |
+| **Optional sets** | Mostly absent — Double, Float, File-Access, Exception, String, Block, Locals, Memory-Allocation, etc. |
 
-## Missing from Core Word Set (6.1 - required for conformance)
-Core is now substantially complete. Recent batches added (with tests in both FTEST and ANS-VALIDATE): doubles, extra arith, memory ops, compile/immed ([CHAR] ['] LITERAL etc), pictured + S", EXECUTE/J/RECURSE, >IN/>NUMBER/ABORT/ABORT"/ACCEPT/ENV/EVALUATE/FIND, and final: QUIT, SOURCE, PARSE, PAD, POSTPONE, [COMPILE], plus supporting SP! RSP! (to enable clean high-level QUIT etc). 101/101 in expanded harness.
+FTEST harness: run with `FTEST=1 swift /tmp/combined.swift` (concatenate `TZForth.swift`, `TZForthTests.swift`, `TestTZForth.swift`).
 
-Some Core words are implemented as Swift primitives (necessary for early bootstrap / input model / RSP wipe safety in QUIT); high-level Forth defs are used where it makes sense for SEE decompile (e.g. HERE, >NFA, ID., and future complex like debuggers per user guidance). Vocabularies planned post-Core to hide internals.
+## Core (6.1) — Complete
 
-(Full list of implemented is in primitiveHelpData + WORDS.)
+All Core words required for conformance are implemented. Notable details:
 
-Notes:
-- QUIT is primitive (safe RSP empty); SOURCE/PARSE track >IN into per-line SOURCE_BUFFER (EVALUATE and FLOAD lines supported).
-- POSTPONE/[COMPILE] use captured executeID + emit LIT/EXECUTE for imm case.
-- ENVIRONMENT? now returns values for "CORE", "/COUNTED-STRING", "ADDRESS-UNIT-BITS", "MAX-CHAR" etc.
+- **QUIT** is a primitive (safe RSP wipe); **SOURCE** / **PARSE** / **>IN** track the per-line `SOURCE` buffer (128 @, 256 bytes).
+- **PAD** at 384, 257 bytes (count + 255 chars + NUL); shared by `WORD`, `S"`, `C"`, `. "`, `ABORT"`, etc.
+- **POSTPONE** / **[COMPILE]** use captured `executeID` + emit `LIT`/`EXECUTE` for immediate words.
+- **ENVIRONMENT?** returns values for `CORE`, `CORE-EXT`, `/COUNTED-STRING`, `ADDRESS-UNIT-BITS`, `MAX-CHAR`.
+- Memory: 1 MB dictionary region; data/return stacks 256 cells each; **UNUSED** / **.FREE** report free dictionary bytes.
 
-## Missing from Core Extensions Word Set (6.2)
-(~8 items.)
+## Core Extensions (6.2) — Complete
 
-.R
-:NONAME
-ACTION-OF
-BUFFER:
-C"
-HOLDS
-MARKER
-PARSE-NAME
-RESTORE-INPUT
-SAVE-INPUT
-SOURCE-ID
-UNUSED
+### Recently added (Tier 2)
 
-Notes:
-- Added: <> U> (Core Ext relational). Plus prior: VOCABULARY, FORTH, DEFINITIONS, ALSO, ONLY, VOCABULARIES (full search-order stack support using ALSO/ONLY; VOCABULARIES lists the order + current defs), plus prior WORDS filter. All kernel words in FORTH; new vocabs start empty. Lookup searches the order (top first).
-- CONTEXT / CURRENT exposed.
-- WORDS filter and per-vocab listing implemented; lookup falls back to FORTH for system words.
-- Previous batch notes still apply.
-- Some like AGAIN, 2>R etc. *are* present.
+| Word | Stack / notes |
+|------|----------------|
+| `:NONAME` | `( C: -- colon-sys ) ( -- xt )` — anonymous colon definition; `;` leaves xt on stack |
+| `ACTION-OF` | `( xt1 -- xt2 )` — current deferred execution token (same as `DEFER@`) |
+| `MARKER` | `( "name" -- )` — saves dict/search-order state; execution restores and removes marker + subsequent defs |
+| `SAVE-INPUT` | `( -- x1 ... xn n )` — saves input source state (implementation-defined tuple on stack) |
+| `RESTORE-INPUT` | `( x1 ... xn n -- flag )` — restores state; flag true if restore failed |
+| `SOURCE-ID` | `( -- id )` — `-1` terminal, `0` evaluate string, `1` file (`FLOAD`) |
+| `S\"` | compile: parse escaped `"`-string, compile `(S")` + literal; interpret undefined per ANS |
+| `REFILL` | `( -- flag )` — refill input buffer; false when no further line available (line-oriented REPL) |
 
-## Recommendations / Status
-- The system is **highly functional** for the user's needs (loading classic sources, REPL, FLOAD/EDIT/CHDIR in sandbox, FILE-ECHO, \S, ." , WORD, etc.).
-- Core complete. Core Ext: <> U> + previous + VOCABULARY/FORTH/DEFINITIONS + enhanced WORDS (optional filter, current-vocab only).
-- Basic vocab: FORTH is default; new vocabs empty; lookup falls back to FORTH so system words always available; WORDS respects current + optional contains filter (ci).
-- Per prior: high-level for complex where sensible.
-- Current tests (TestTZForth.swift FTEST + embedded ANS-VALIDATE) cover the implemented words per standard + special behaviors (smart quotes, load semantics, etc.).
-- To continue: next would be remaining Core Ext per explicit plan, then vocabularies to hide internals.
+### Previously added (Tier 1 and earlier)
 
-Generated from codebase inspection (TZForth.swift, TZForthTests.swift, TestTZForth.swift, live runs).
-Last update: after adding <> and U> (Core Ext) + prior vocab words.
+`.R`, `C"`, `PARSE-NAME`, `UNUSED`, `.FREE`, `HOLDS`, `BUFFER:`, `<>`, `U>`, `0<>`, `VALUE`, `IS`, `TO`, `DEFER`, `DEFER!`, `DEFER@`, `CASE`/`OF`/`ENDOF`/`ENDCASE`, `COMPILE,`, `ERASE`, pictured numeric (`<#` `#` `#S` `#>` `HOLD` `SIGN`), `S"`, loops/control (`?DO` `+LOOP` `UNLOOP` `LEAVE`, `2>R` `2R@` `2R>`, `NIP` `PICK` `ROLL` `TUCK`, `U.R`, `WITHIN`, `AGAIN`, etc.).
 
-For full standard details, refer to the official 2012 ANS Forth document (sections 6.1 and 6.2).
+### Search-order / vocab (Core Ext + word set 16)
+
+`VOCABULARY`, `FORTH`, `DEFINITIONS`, `ALSO`, `ONLY`, `ORDER`, `WORDS` (optional filter). `FORTH` is default; new vocabs start empty; lookup falls back to `FORTH` for system words.
+
+## TZForth-specific extensions (non-ANS)
+
+`FLOAD`, `EDIT`, `CHDIR`, `DIR`, `FILE-ECHO`, `DEBUG-ON`/`DEBUG-OFF`, `RESET`, `CLS`, `BYE`, `ANS-VALIDATE`, `FORGET-WORD`, `>LFA`, `>HEADER`, `>NFA`, `ID.`, `\\` (block comment to `{`), `\\S`, `DP`, high-level `HERE` (`DP @`), `ERASE` (`0 FILL`), etc.
+
+## Missing optional / future word sets
+
+Not implemented (no current plan unless requested):
+
+- **Double** (`D+`, `D.`, `2CONSTANT`, …)
+- **Float**
+- **File-Access** (`INCLUDE-FILE`, `READ-LINE`, `OPEN-FILE`, …) — `FLOAD` is a host extension, not ANS File-Access
+- **Exception** (`CATCH`, `THROW`)
+- **String** (`COMPARE`, `SEARCH`, …)
+- **Block**
+- **Locals**
+- **Memory-Allocation**
+- Full **Programming-Tools** (`LOCATE`, `COMPILE`, …)
+
+## Recommendations
+
+- TZForth is highly functional for classic Forth sources, REPL, sandboxed `FLOAD`/`EDIT`/`CHDIR`, and ANS Core + Core Ext conformance testing.
+- Next logical steps (if desired): File-Access words atop existing `FLOAD`, Exception (`CATCH`/`THROW`), or vocabulary polish to hide kernel internals.
+
+For full standard details, see the official 2012 ANS Forth document (sections 6.1, 6.2, and optional word sets in chapters 7–18).

@@ -91,8 +91,7 @@ public final class TZForth {
     private var SP:      Int { 32 }   // address for future "SP @" compatibility (the live pointer is in the Swift var below)
     private var RSP:     Int { 40 }
     internal var IN:       Int { 48 }   // >IN ( -- addr )  current offset in input source; internal for tests
-    internal var CONTEXT: Int { 56 } // holds the addr of the head-cell for the current search vocabulary (e.g. 0 for FORTH); internal for test harness snapshots
-    internal var CURRENT: Int { 64 } // holds the addr of the head-cell for the current definitions vocabulary; internal for test harness snapshots
+    internal var CURRENT: Int { 64 } // compilation wordlist head-cell (GET-CURRENT / SET-CURRENT); internal for test harness snapshots
 
     private let MAX_VOCABS = 8
     internal var searchOrder: [Cell] = []  // array of wl head-cell-addrs; [0] is top (first searched)
@@ -308,8 +307,15 @@ public final class TZForth {
         ("SP",      "( -- addr )",        "data stack pointer (SP @ for compatibility)"),
         ("RSP",     "( -- addr )",        "return stack pointer (RSP @ for compatibility)"),
         (">IN",     "( -- addr )",        "current input pointer variable ( >IN @ for offset)"),
-        ("CONTEXT", "( -- addr )",        "current search vocabulary (addr of its head-cell)"),
-        ("CURRENT", "( -- addr )",        "current definitions vocabulary (addr of its head-cell)"),
+        ("CURRENT", "( -- addr )",        "compilation wordlist variable address (use GET-CURRENT)"),
+        ("WORDLIST", "( -- wid )",         "create a new empty word list"),
+        ("FORTH-WORDLIST", "( -- wid )",   "the standard FORTH word list"),
+        ("GET-ORDER", "( -- wid1 ... widn n )", "copy the search order"),
+        ("SET-ORDER", "( wid1 ... widn n -- )", "set the search order"),
+        ("GET-CURRENT", "( -- wid )",      "fetch the compilation word list"),
+        ("SET-CURRENT", "( wid -- )",      "set the compilation word list"),
+        ("ORDER",   "( -- )",             "display search order and compilation word list"),
+        ("PREVIOUS","( -- )",             "remove first word list from search order"),
         ("SOURCE",  "( -- c-addr u )",    "current input source buffer and length"),
         ("PARSE",   "( char -- c-addr u )", "parse text from input up to char (leaves delim, updates >IN)"),
         ("PAD",     "( -- addr )",        "user scratch buffer (fixed, 128 bytes)"),
@@ -318,12 +324,11 @@ public final class TZForth {
         ("RSP!",    "( n -- )",           "set return stack pointer (updates both cell and internal)"),
         ("POSTPONE","( -- ) name",        "append compilation semantics of next word (immediate)"),
         ("[COMPILE]","( -- ) name",       "force compile of next word even if immediate (immediate)"),
-        ("VOCABULARY","( -- ) name",      "create a new vocabulary"),
-        ("FORTH",   "( -- )",             "select the FORTH vocabulary (sets top of search order)"),
-        ("ALSO",    "( -- )",             "duplicate top of search order"),
-        ("ONLY",    "( -- )",             "reset search order to only FORTH"),
-        ("VOCABULARIES","( -- )",         "display current search order and current definitions vocab"),
-        ("DEFINITIONS","( -- )",          "set CURRENT to CONTEXT (new words go to current vocab)"),
+        ("VOCABULARY","( -- ) name",      "ANS compatibility: named word list (thin layer over WORDLIST)"),
+        ("FORTH",   "( -- )",             "replace first search-order entry with FORTH-WORDLIST"),
+        ("ALSO",    "( -- )",             "duplicate first entry in search order"),
+        ("ONLY",    "( -- )",             "set search order to FORTH-WORDLIST only"),
+        ("DEFINITIONS","( -- )",          "set compilation word list to first in search order"),
         (">NUMBER", "( ud1 c-addr1 u1 -- ud2 c-addr2 u2 )", "convert string digits to number accumulating in ud"),
         ("ALLOT",   "( n -- )",           "allocate n bytes in dictionary"),
         (",",       "( n -- )",           "compile a cell"),
@@ -557,9 +562,7 @@ public final class TZForth {
         writeCell(BASE, 10)
         writeCell(IN, 0)
         searchOrder = [LATEST]
-        setContext(LATEST)
         writeCell(CURRENT, LATEST)
-        searchOrder = [LATEST]
 
         // Live stack depths live in Swift vars (corruption-proof).
         // We still write the old fixed locations for any future raw memory inspection or "SP @" compatibility.
@@ -1190,16 +1193,7 @@ public final class TZForth {
         writeCellHere(value)
     }
 
-    private func setContext(_ wlID: Cell) {
-        writeCell(CONTEXT, wlID)
-        if searchOrder.isEmpty {
-            searchOrder.append(wlID)
-        } else {
-            searchOrder[0] = wlID
-        }
-    }
-
-    private func nameForVocab(_ wlID: Cell) -> String {
+    private func nameForWordlist(_ wlID: Cell) -> String {
         if wlID == self.LATEST { return "FORTH" }
         var link = readCell(self.LATEST)
         var safety = 0
@@ -1231,18 +1225,7 @@ public final class TZForth {
 
     private func findWord(_ name: String) -> Cell {
         let upper = name.uppercased()
-        var searched: Set<Cell> = []
-        var order: [Cell] = searchOrder
-        let contextHead = readCell(CONTEXT)
-        if contextHead != 0 && !order.contains(contextHead) {
-            order.append(contextHead)
-        }
-        if !order.contains(LATEST) {
-            order.append(LATEST)
-        }
-        for wlID in order {
-            if searched.contains(wlID) { continue }
-            searched.insert(wlID)
+        for wlID in searchOrder {
             var link = readCell(wlID)
             var safety = 0
             while link != 0 && safety < 10000 {
@@ -1555,12 +1538,80 @@ public final class TZForth {
         _ = register("SP!")   { let v = self.pop(); self.spSet(v) }
         _ = register("RSP!")  { let v = self.pop(); self.rspSet(v) }
         _ = register(">IN")   { self.push( Cell( self.IN ) ) }
-        _ = register("CONTEXT") { self.push( Cell( self.CONTEXT ) ) }
         _ = register("CURRENT") { self.push( Cell( self.CURRENT ) ) }
 
-        _ = register("SET-CONTEXT") {
-            let wlID = self.pop()
-            self.writeCell(self.CONTEXT, wlID)
+        // === ANS Forth 2012 Search-Order word set (Section 16) ===
+
+        _ = register("WORDLIST") {
+            self.alignHere()
+            let head = self.readCell(self.DP_ADDR)
+            self.writeCellHere(0)
+            self.alignHere()
+            self.push(head)
+        }
+
+        _ = register("FORTH-WORDLIST") {
+            self.push(Cell(self.LATEST))
+        }
+
+        _ = register("GET-ORDER") {
+            for wl in self.searchOrder.reversed() {
+                self.push(wl)
+            }
+            self.push(Cell(self.searchOrder.count))
+        }
+
+        _ = register("SET-ORDER") {
+            let n = Int(self.pop())
+            if n < 0 || n > self.MAX_VOCABS {
+                self.tell("? Invalid search order count\n")
+                self.errorFlag = true
+                return
+            }
+            var order: [Cell] = []
+            for _ in 0..<n {
+                order.insert(self.pop(), at: 0)
+            }
+            self.searchOrder = order
+        }
+
+        // Internal: prepend a word list to the search order (used by VOCABULARY DOES>).
+        _ = register("PUSH-ORDER") {
+            if self.searchOrder.count >= self.MAX_VOCABS {
+                self.tell("? Search order full\n")
+                self.errorFlag = true
+                return
+            }
+            let wid = self.pop()
+            self.searchOrder.insert(wid, at: 0)
+        }
+
+        _ = register("GET-CURRENT") {
+            self.push(self.readCell(self.CURRENT))
+        }
+
+        _ = register("SET-CURRENT") {
+            let wid = self.pop()
+            self.writeCell(self.CURRENT, wid)
+        }
+
+        _ = register("DEFINITIONS") {
+            if self.searchOrder.isEmpty {
+                self.searchOrder = [self.LATEST]
+            }
+            self.writeCell(self.CURRENT, self.searchOrder[0])
+        }
+
+        _ = register("ONLY") {
+            self.searchOrder = [self.LATEST]
+        }
+
+        _ = register("FORTH") {
+            if self.searchOrder.isEmpty {
+                self.searchOrder = [self.LATEST]
+            } else {
+                self.searchOrder[0] = self.LATEST
+            }
         }
 
         _ = register("ALSO") {
@@ -1574,24 +1625,27 @@ public final class TZForth {
             }
             let top = self.searchOrder[0]
             self.searchOrder.insert(top, at: 0)
-            self.setContext(top)
         }
 
-        _ = register("ONLY") {
-            self.searchOrder = [self.LATEST]
-            self.setContext(self.LATEST)
+        _ = register("PREVIOUS") {
+            if self.searchOrder.isEmpty {
+                self.tell("? Search order empty\n")
+                self.errorFlag = true
+                return
+            }
+            self.searchOrder.removeFirst()
         }
 
-        _ = register("VOCABULARIES") {
+        _ = register("ORDER") {
             self.validateAndRepairSystemState()
-            self.tell("Context: ")
+            self.tell("Search order: ")
             for wlID in self.searchOrder {
-                let nm = self.nameForVocab(wlID)
+                let nm = self.nameForWordlist(wlID)
                 self.tell(nm + " ")
             }
-            self.tell("\nCurrent: ")
+            self.tell("\nCompilation wordlist: ")
             let cur = self.readCell(self.CURRENT)
-            let cnm = self.nameForVocab(cur)
+            let cnm = self.nameForWordlist(cur)
             self.tell(cnm + "\n")
         }
 
@@ -2886,8 +2940,8 @@ public final class TZForth {
             var kernelWords: [(name: String, header: Cell)] = []
             var userWords:   [(name: String, header: Cell)] = []
 
-            let searchHeadCell = self.searchOrder.isEmpty ? self.LATEST : self.searchOrder[0]
-            var link = self.readCell(searchHeadCell)
+            let listHead = self.readCell(self.CURRENT)
+            var link = self.readCell(listHead)
             var safety = 0
             while link != 0 && safety < 10000 {
                 safety += 1
@@ -2952,8 +3006,8 @@ public final class TZForth {
                 return
             }
 
-            let searchHeadCell = self.searchOrder.isEmpty ? self.LATEST : self.searchOrder[0]
-            var link = self.readCell(searchHeadCell)
+            let listHead = self.readCell(self.CURRENT)
+            var link = self.readCell(listHead)
             var prev: Cell = 0
             var safety = 0
             while link != 0 && safety < 10000 {
@@ -2990,7 +3044,7 @@ public final class TZForth {
                     } else {
                         newLatest = prev
                     }
-                    self.writeCell(searchHeadCell, newLatest)
+                    self.writeCell(listHead, newLatest)
                     self.writeCell(self.DP_ADDR, link)   // reclaim memory from this header forward (set the DP value back)
 
                     // Extra defensive repair after modifying critical system variables.
@@ -3504,10 +3558,10 @@ public final class TZForth {
         // This matches the classic expectation "HERE is DP @".
         self.feedLine(": HERE DP @ ;")
 
-        // Vocabulary support (high-level for nice SEE decompile)
-        self.feedLine(": VOCABULARY CREATE 0 , DOES> SET-CONTEXT ;")
-        self.feedLine(": FORTH 0 SET-CONTEXT ;")
-        self.feedLine(": DEFINITIONS CONTEXT @ CURRENT ! ;")
+        // Search-Order compatibility: VOCABULARY is a thin layer over WORDLIST (ANS 2012).
+        // Executing a vocab prepends its word list to the search order.
+        // WORDLIST uses the CREATE data field as the list head; DROP discards the duplicate wid.
+        self.feedLine(": VOCABULARY CREATE WORDLIST DROP DOES> PUSH-ORDER ;")
 
         // file-echo variable (user can do: file-echo ON   or   file-echo OFF ).
         // Controls whether FLOAD echoes each source line to the console as it loads.
@@ -4090,7 +4144,6 @@ public final class TZForth {
 
         // Reset to FORTH vocabulary
         searchOrder = [LATEST]
-        setContext(LATEST)
         writeCell(CURRENT, LATEST)
     }
 
@@ -4123,7 +4176,6 @@ public final class TZForth {
         self.pnoPtr = self.pnoBufferAddr + self.PNO_BUFFER_SIZE
         writeCell(IN, 0)
         searchOrder = [LATEST]
-        setContext(LATEST)
         writeCell(CURRENT, LATEST)
         self.currentSourceLen = 0
     }
@@ -4163,7 +4215,6 @@ public final class TZForth {
         self.pnoPtr = self.pnoBufferAddr + self.PNO_BUFFER_SIZE
         self.currentSourceLen = 0
         searchOrder = [LATEST]
-        setContext(LATEST)
         writeCell(CURRENT, LATEST)
 
         let wasLoading = self.loadNesting > 0
@@ -4263,12 +4314,9 @@ public final class TZForth {
         if l != 0 && !isValidDictionaryLink(l) {
             writeCell(LATEST, kernelLatest != 0 ? kernelLatest : 0)
         }
-        // Ensure CONTEXT/CURRENT point to a valid head cell (default to FORTH)
-        let cctx = readCell(CONTEXT)
-        if cctx != LATEST && cctx != 0 { /* leave, or could validate */ }
-        if readCell(CONTEXT) == 0 || readCell(CURRENT) == 0 || searchOrder.isEmpty {
+        // CURRENT may legitimately hold FORTH-WORDLIST (0); only repair an empty search order.
+        if searchOrder.isEmpty {
             searchOrder = [LATEST]
-            setContext(LATEST)
             writeCell(CURRENT, LATEST)
         }
 
@@ -4298,8 +4346,8 @@ public final class TZForth {
 
     public var dictionarySnapshot: [(name: String, xt: Cell)] {
         var result: [(String, Cell)] = []
-        let searchHeadCell = readCell(CONTEXT)
-        var link = readCell(searchHeadCell)
+        let listHead = readCell(CURRENT)
+        var link = readCell(listHead)
         var safety = 0
         while link != 0 && safety < 10000 {
             safety += 1

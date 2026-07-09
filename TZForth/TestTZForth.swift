@@ -540,9 +540,9 @@ hello
     ansTest("VOCAB isolate FORTH", "VOCABULARY FOO FOO DEFINITIONS 123 CONSTANT baz FORTH DEFINITIONS baz .", "? baz")
     ansTest("VOCAB define FORTH", "VOCABULARY FOO FOO DEFINITIONS 123 CONSTANT baz FORTH DEFINITIONS 456 .", "456")
     ansTest("VOCAB lookup FOO", "VOCABULARY FOO FOO DEFINITIONS 123 CONSTANT baz FORTH DEFINITIONS FOO baz .", "123")
-    ansTest("VOCABULARIES name", "VOCABULARY FOO FOO DEFINITIONS VOCABULARIES", "Current: FOO")
+    ansTest("ORDER compilation", "VOCABULARY FOO FOO DEFINITIONS ORDER", "Compilation wordlist: FOO")
     ansTest("WORDS filter", "WORDS CONSTANT", "CONSTANT")
-    ansTest("ALSO ONLY VOCABULARIES", "ONLY ALSO FORTH VOCABULARIES", "FORTH")
+    ansTest("ALSO ONLY ORDER", "ONLY ALSO FORTH ORDER", "Search order: FORTH FORTH")
     ansTest("ALSO search", "ONLY ALSO FORTH 1 2 + .", "3")
 
     print("TEST6 ANS core summary: \(ansPassed)/\(ansTotal) passed")

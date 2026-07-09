@@ -424,6 +424,9 @@ extension TZForth {
         // Dictionary / introspection
         ansTest(">HEADER >NFA ID.", "VARIABLE t6v ' t6v >NFA COUNT TYPE", "t6v")
         ansTest("ID.", "' t6v ID.", "t6v")
+        ansTest("' CFA >HEADER", "' DUP >HEADER 0<> .", "-1")
+        ansTest(">XID DUP", "' DUP >XID .", "8")
+        ansTest("['] CFA", ": t6xt ['] DUP ; ' DUP t6xt = .", "-1")
         ansTest("HERE (value) DP", "HERE DP @ = .", "-1")
         ansTest("LATEST", "LATEST @ 0= 0= .", "-1")
         ansTest("DEPTH", "1 2 3 DEPTH .", "3")

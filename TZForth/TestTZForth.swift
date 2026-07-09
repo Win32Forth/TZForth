@@ -506,7 +506,10 @@ hello
     ansTest("EXECUTE", "3 4 ' + EXECUTE .", "7")
 
     // Dictionary / introspection (current words)
-    ansTest(">HEADER >NFA ID.", "VARIABLE t6v ' t6v >NFA COUNT TYPE", "t6v")  // name printed
+    ansTest(">HEADER >NFA ID.", "VARIABLE t6v ' t6v >NFA COUNT TYPE", "t6v")
+    ansTest("' CFA >HEADER", "' DUP >HEADER 0<> .", "-1")
+    ansTest(">XID DUP", "' DUP >XID .", "8")
+    ansTest("['] CFA", ": t6xt ['] DUP ; ' DUP t6xt = .", "-1")
     ansTest("ID.", "' t6v ID.", "t6v")
     ansTest("HERE (value) DP", "HERE DP @ = .", "-1")  // they should match per current impl
     ansTest("LATEST", "LATEST @ 0= 0= .", "-1")  // at least non-zero after bootstrap

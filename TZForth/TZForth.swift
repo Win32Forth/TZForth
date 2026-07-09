@@ -513,7 +513,8 @@ public final class TZForth {
         (">HEADER", "( cfa -- header )",  "find header for word with this code-field address"),
         (">LFA",    "( cfa -- lfa )",     "convert cfa to link field (alias for >HEADER)"),
         (">NFA",    "( cfa -- nfa )",     "convert cfa to name field (flags+len byte at header+8)"),
-        ("ID.",     "( xt -- )",          "print the name of the word given its xt (robust, masks flags from count)"),
+        (">XID",    "( cfa -- xid | 0 )", "kernel primitive dispatch ID from cfa, or 0 if not a primitive"),
+        ("ID.",     "( cfa -- )",         "print the name of the word given its cfa (robust, masks flags from count)"),
         ("VARIABLE","( -- ) name",        "create a variable"),
         ("CONSTANT","( n -- ) name",      "create a constant"),
         ("CREATE",  "( -- ) name",        "create a word that pushes its data field address (for use with DOES>)"),
@@ -1835,16 +1836,18 @@ public final class TZForth {
 
     private func xtAndFindFlag(fromHeader hdr: Cell) -> (xt: Cell, flag: Cell) {
         let cfa = getCFA(hdr)
-        let firstCell = readCell(Int(cfa))
-        let xt: Cell
-        if firstCell < Cell(MAX_BUILTIN_ID) && firstCell != docolID {
-            xt = firstCell
-        } else {
-            xt = cfa
-        }
         let flagsLen = readByte(Int(hdr) + 8)
         let isImmediate = (flagsLen & FLAG_IMMEDIATE) != 0
-        return (xt, isImmediate ? 1 : -1)
+        return (cfa, isImmediate ? 1 : -1)
+    }
+
+    /// First cell at a CFA when it is a kernel primitive dispatch ID; nil for colon/CREATE words.
+    private func primitiveID(atCFA cfa: Cell) -> Cell? {
+        let first = readCell(Int(cfa))
+        if first < Cell(MAX_BUILTIN_ID) && first != docolID && first != createRuntimeID && first != dodoesID {
+            return first
+        }
+        return nil
     }
 
     private static let environmentQueryCatalog: [String] = [
@@ -2530,6 +2533,16 @@ public final class TZForth {
             self.push(0)   // not found
         }
 
+        // >XID ( cfa -- xid | 0 )  kernel primitive dispatch ID stored at cfa, else 0.
+        _ = register(">XID") {
+            let cfa = self.pop()
+            if let id = self.primitiveID(atCFA: cfa) {
+                self.push(id)
+            } else {
+                self.push(0)
+            }
+        }
+
         _ = register("]", immediate: false) { self.writeCell(self.STATE, 1) }
         _ = register("[", immediate: true)  {
             self.bracketCompileDepth += 1
@@ -2567,15 +2580,8 @@ public final class TZForth {
             let hdr = self.findWord(name)
             if hdr == 0 { self.tell("? ['] ? " + name + "\n"); self.errorFlag = true; return }
             let cfa = self.getCFA(hdr)
-            let firstCell = self.readCell(Int(cfa))
-            let xt: Cell
-            if firstCell < Cell(self.MAX_BUILTIN_ID) && firstCell != self.docolID {
-                xt = firstCell
-            } else {
-                xt = cfa
-            }
             self.push(self.litID); self.comma()
-            self.push(xt); self.comma()
+            self.push(cfa); self.comma()
         }
 
         // [COMPILE] name  (immediate)  Force compilation of the next word's reference even if
@@ -2596,8 +2602,7 @@ public final class TZForth {
             }
         }
 
-        // COMPILE, ( xt -- )  Core Ext. Compile the given xt as if it had been found while compiling.
-        // Useful with ' and ['] .
+        // COMPILE, ( xt -- )  Core Ext. Compile the given xt (cfa from ') as if found while compiling.
         _ = register("COMPILE,") {
             if self.readCell(self.STATE) == 0 {
                 self.tell("? COMPILE, only while compiling\n")
@@ -2605,7 +2610,9 @@ public final class TZForth {
                 return
             }
             let xt = self.pop()
-            if xt < Cell(self.MAX_BUILTIN_ID) && xt != self.docolID {
+            if let id = self.primitiveID(atCFA: xt) {
+                self.push(id); self.comma()
+            } else if xt < Cell(self.MAX_BUILTIN_ID) && xt != self.docolID {
                 self.push(xt); self.comma()
             } else {
                 self.push(xt); self.comma()
@@ -3047,21 +3054,11 @@ public final class TZForth {
                 self.tell("? \(name) ?\n"); self.errorFlag = true; return
             }
             let cfa = self.getCFA(hdr)
-            // Match the exact distinction used by the interpreter and SEE:
-            // - Real primitives (first cell is a small ID that is *not* DOCOL) → push the ID
-            // - Colon definitions (start with DOCOL) and anything else → push the CFA
-            // This is why ' TEST was returning 0 (DOCOL id) instead of the real execution token.
-            let firstCell = self.readCell(Int(cfa))
-            if firstCell < Cell(self.MAX_BUILTIN_ID) && firstCell != self.docolID && firstCell != self.createRuntimeID && firstCell != self.dodoesID {
-                self.push(firstCell)
-            } else {
-                self.push(cfa)
-            }
+            self.push(cfa)
         }
 
         // EXECUTE ( xt -- )
-        // xt may be a primitive ID (small number from ' on prim) or a CFA address.
-        // Delegates to the internal execute() which handles both cases (prim dispatch or threaded).
+        // xt is normally the cfa from ' / FIND; legacy primitive IDs (< MAX_BUILTIN_ID) still work.
         self.executeID = register("EXECUTE") {
             let xt = self.pop()
             if xt < Cell(self.MAX_BUILTIN_ID) {
@@ -5330,10 +5327,6 @@ public final class TZForth {
         // very start of the header, so >HEADER is effectively >LFA).
         self.feedLine(": >LFA >HEADER ;")
 
-        // NFA / CFA convert a *header* address (from >HEADER, LATEST, etc.).
-        // >NFA / >HEADER take a *code-field address* (cfa).
-        self.feedLine(": NFA ( hdr -- nfa ) 8 + ;")
-        self.feedLine(": CFA ( hdr -- cfa ) DUP 8 + C@ 31 AND 1+ BEGIN DUP 7 AND WHILE 1+ REPEAT SWAP 8 + + ;")
         self.feedLine(": >NFA >HEADER 8 + ;   ( cfa -- nfa )")
 
         // ID. is a robust "print name from xt" that masks the length out of the

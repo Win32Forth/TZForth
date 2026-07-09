@@ -573,6 +573,9 @@ hello
     ansTest("SOURCE-ID terminal", "SOURCE-ID .", "-1")
     ansTest("REFILL", "REFILL 0= .", "-1")
     ansTest("SAVE-INPUT RESTORE-INPUT", "SAVE-INPUT S\" 222 .\" EVALUATE RESTORE-INPUT 0= . 333 .", "0 333")
+    ansTest("RESTORE-INPUT fail", "SAVE-INPUT 2DROP 0 RESTORE-INPUT .", "-1")
+    ansTest("SAVE-INPUT nested", "SAVE-INPUT S\" 11 .\" EVALUATE RESTORE-INPUT 0= . 22 .", "0 22")
+    ansTest("FILE-ECHO default", "FILE-ECHO @ .", "0")
     ansTest("S\\\"", ": t7sq S\\\" hello\" TYPE ; t7sq", "hello")
     ansTest("S\\\" escapes", ": t7sq2 S\\\" a\\\\b\" TYPE ; t7sq2", "a\\b")
 
@@ -580,17 +583,25 @@ hello
     let flinePath = fline.path
     let fincPath = finc.path
     let fwrPath = fwr.path
+    let frenamedPath = tmp.appendingPathComponent("testren_\(suffix).txt").path
     ansTest("R/O OPEN-FILE", "S\" \(flinePath)\" R/O OPEN-FILE 0= .", "-1")
     ansTest("FILE-SIZE", "S\" \(flinePath)\" R/O OPEN-FILE DROP FILE-SIZE DROP DROP .", "11")
+    ansTest("FILE-POSITION", "S\" \(flinePath)\" R/O OPEN-FILE DROP DUP FILE-POSITION DROP DROP .", "0")
     ansTest("READ-LINE", "S\" \(flinePath)\" R/O OPEN-FILE DROP PAD 1+ SWAP 80 SWAP READ-LINE DROP DROP PAD 1+ SWAP TYPE CLOSE-FILE DROP", "alpha")
+    ansTest("FILE-STATUS", "S\" \(flinePath)\" R/O OPEN-FILE DROP DUP FILE-STATUS NIP 0= SWAP CLOSE-FILE DROP .", "-1")
     ansTest("INCLUDED", "S\" \(fincPath)\" INCLUDED fincw .", "42")
     ansTest("ENVIRONMENT? FILE", "S\" FILE\" ENVIRONMENT? .", "-1")
     ansTest("CREATE-FILE", "S\" \(fwrPath)\" W/O CREATE-FILE 0= SWAP CLOSE-FILE DROP .", "-1")
-    forth.feedLine("VARIABLE t8wf")
-    forth.feedLine(": t8wv S\" \(fwrPath)\" W/O CREATE-FILE DROP t8wf ! S\" hi\" t8wf @ WRITE-LINE DROP t8wf @ CLOSE-FILE DROP 1 ;")
-    ansTest("WRITE-LINE", "t8wv .", "1")
+    forth.feedLine("VARIABLE t8hfid")
+    ansTest("REPOSITION-FILE", "S\" \(flinePath)\" R/O OPEN-FILE DROP t8hfid ! 6 0 t8hfid @ REPOSITION-FILE DROP t8hfid @ PAD 1+ SWAP 80 SWAP READ-LINE DROP DROP PAD 1+ SWAP TYPE t8hfid @ CLOSE-FILE DROP", "beta")
+    ansTest("WRITE-LINE", "S\" \(fwrPath)\" W/O CREATE-FILE DROP t8hfid ! S\" hi\" t8hfid @ WRITE-LINE DROP t8hfid @ CLOSE-FILE DROP 1 .", "1")
     ansTest("WRITE-LINE size", "S\" \(fwrPath)\" R/O OPEN-FILE DROP FILE-SIZE DROP DROP .", "3")
     ansTest("READ written file", "S\" \(fwrPath)\" R/O OPEN-FILE DROP PAD 1+ SWAP 80 SWAP READ-LINE DROP DROP PAD 1+ SWAP TYPE CLOSE-FILE DROP", "hi")
+    ansTest("RESIZE-FILE", "S\" \(fwrPath)\" R/W OPEN-FILE DROP t8hfid ! 5 0 t8hfid @ RESIZE-FILE DROP t8hfid @ FILE-SIZE DROP DROP . t8hfid @ CLOSE-FILE DROP", "5")
+    ansTest("FLUSH-FILE", "S\" \(fwrPath)\" R/W OPEN-FILE DROP DUP FLUSH-FILE 0= SWAP CLOSE-FILE DROP .", "-1")
+    forth.feedLine(": t8ren S\" \(fwrPath)\" S\" \(frenamedPath)\" RENAME-FILE 0= ;")
+    ansTest("RENAME-FILE", "t8ren .", "-1")
+    ansTest("READ renamed file", "S\" \(frenamedPath)\" R/O OPEN-FILE DROP FILE-SIZE DROP DROP .", "5")
 
     print("TEST6 ANS core summary: \(ansPassed)/\(ansTotal) passed")
     if ansPassed != ansTotal {
@@ -603,6 +614,7 @@ hello
     try? fm.removeItem(at: fline)
     try? fm.removeItem(at: finc)
     try? fm.removeItem(at: fwr)
+    try? fm.removeItem(atPath: frenamedPath)
 
     print("=== FTEST complete ===")
     exit(0)

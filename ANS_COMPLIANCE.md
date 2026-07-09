@@ -2,7 +2,7 @@
 
 This document tracks implementation status of the 2012 ANS Forth Standard word sets in TZForth (Swift port of the lbForth model). Generated from codebase inspection (`TZForth/TZForth.swift`, `TestTZForth.swift`, `TZForthTests.swift`).
 
-Last update: Locals word set (13) complete — `(LOCAL)`, `LOCALS|`, `{:`.
+Last update: dictionary introspection (`'`/`FIND` → CFA, `>HEADER`, `>NFA`, `>XID`, `ID.`), ANS `DUMP` (hex bytes), extension `H.`.
 
 ## Summary
 
@@ -11,7 +11,7 @@ Last update: Locals word set (13) complete — `(LOCAL)`, `LOCALS|`, `{:`.
 | **Core (6.1)** | Complete — all required words implemented with FTEST coverage |
 | **Core Ext (6.2)** | Complete — all standard Core Ext words implemented |
 | **Search-Order (16)** | Complete — 16.6.1 + 16.6.2; `SEARCH-WORDLIST`, `ENVIRONMENT?` `WORDLISTS` (8) |
-| **Programming-Tools** | Partial — `SEE`, `HELP`, `WORDS`, `FORGET`, `>HEADER`, `>NFA`, `ID.`, `ANS-VALIDATE`; no `LOCATE`, `COMPILE`, `NEEDS`, `REQUIRED` |
+| **Programming-Tools** | Partial — `SEE`, `HELP`, `WORDS`, `FORGET`, `DUMP`, `.S`, `ANS-VALIDATE`; no `LOCATE`, `COMPILE`, `NEEDS`, `REQUIRED`, `NAME>STRING`, `TRAVERSE-WORDLIST` |
 | **File-Access (11)** | Substantial — 11.6.1 core words + `INCLUDE`/`INCLUDED`; no `REQUIRE`/`REQUIRED` |
 | **Exception (9)** | Complete — `CATCH`, `THROW`; Core `ABORT`/`ABORT"` delegate to `THROW -1`/`-2` |
 | **String (17)** | Complete — 17.6.1 (`COMPARE`, `SEARCH`, `SLITERAL`, `/STRING`, `-TRAILING`, `BLANK`, `CMOVE`, `CMOVE>`) |
@@ -20,7 +20,7 @@ Last update: Locals word set (13) complete — `(LOCAL)`, `LOCALS|`, `{:`.
 | **Locals (13)** | Complete — `(LOCAL)`, `LOCALS|`, `{:`; `TO` for locals; max 32 (`#LOCALS`) |
 | **Other optional sets** | Mostly absent — Float, Facility, Block, Extended-Character, etc. |
 
-FTEST harness: run with `FTEST=1 swift /tmp/combined.swift` (concatenate `TZForth.swift`, `TZForthTests.swift`, `TestTZForth.swift`).
+FTEST harness: run with `FTEST=1 swift /tmp/combined.swift` (concatenate `TZForth.swift`, `TZForthTests.swift`, `TestTZForth.swift`). Current count: **228/228** TEST6 spot-checks plus block-comment / FLOAD harness tests.
 
 ## Core (6.1) — Complete
 
@@ -82,7 +82,7 @@ ANS word set 16.6.1 and extensions 16.6.2.
 | `SET-ORDER` | `( wid1 ... widn n -- )` — max **8** lists (`WORDLISTS`) |
 | `GET-CURRENT` / `SET-CURRENT` | compilation word list |
 | `SEARCH-WORDLIST` | `( c-addr u wid -- 0 \| xt 1 \| xt -1 )` — search one list |
-| `FIND` | `( c-addr -- c-addr 0 \| xt 1 \| xt -1 )` — search order |
+| `FIND` | `( c-addr -- c-addr 0 \| xt 1 \| xt -1 )` — search order; **xt is the cfa** (code-field address) |
 | `DEFINITIONS` | set `CURRENT` to first list in order |
 | `ALSO` / `ONLY` / `PREVIOUS` / `FORTH` / `ORDER` | classic vocab stack (16.6.2) |
 | `VOCABULARY` | compatibility: `CREATE WORDLIST` + `PUSH-ORDER` |
@@ -214,9 +214,40 @@ ANS word set 13.6.1 and extension 13.6.2. Locals are searched before the diction
 
 `TO name` works for locals during compilation. Minimum **32** locals per definition (`ENVIRONMENT?` `#LOCALS`). FTEST covers `LOCALS|`, `{:`, `TO`, and `DO`/`LOOP`.
 
+## Programming-Tools (15) — Partial
+
+ANS words implemented from 15.6.1 / extensions:
+
+| Word | Notes |
+|------|-------|
+| `.S` | Data stack dump |
+| `DUMP` | `( addr u -- )` — hex dump of **u address units (bytes)**; 16 per line, uppercase hex, ASCII gutter |
+| `SEE` | Decompile / list word |
+| `WORDS` | List dictionary (optional vocab filter) |
+| `FORGET` | Parse name; truncate dictionary from that word forward |
+
+Not implemented: `LOCATE`, `COMPILE`, `NEEDS`, `REQUIRED`, `NAME>INTERPRET`, `NAME>COMPILE`, `NAME>STRING`, `TRAVERSE-WORDLIST`, assembler words (`CODE`, `[IF]`, …).
+
+## Dictionary introspection (fig-style extensions)
+
+TZForth exposes the linked-list header layout for debugging (not ANS-standard; parallel to `NAME>STRING` / name tokens in ANS 2012).
+
+| Word | Stack | Notes |
+|------|-------|-------|
+| `'` | `( -- cfa ) name` | Tick — **returns cfa**, not the kernel dispatch ID |
+| `FIND` | `( c-addr -- … xt … )` | xt is **cfa** (same convention as `'`) |
+| `>HEADER` / `>LFA` | `( cfa -- header )` | Link field / start of dictionary entry |
+| `>NFA` | `( cfa -- nfa )` | Name field (`>HEADER 8 +`) |
+| `ID.` | `( cfa -- )` | Print name (masks immediate/hidden flags in count byte) |
+| `>XID` | `( cfa -- xid \| 0 )` | Kernel primitive dispatch ID from first cfa cell; **0** for colon/CREATE words |
+
+Compiled colon bodies still store **compact primitive IDs** for kernel words; use `>XID` to map cfa → dispatch ID. `COMPILE,` and `[']` accept cfa from `'`.
+
+Example: `' DUP >HEADER 32 DUMP` · `' DUP H.` · `' DUP >XID .` → `8`.
+
 ## TZForth-specific extensions (non-ANS)
 
-`FLOAD`, `EDIT`, `CHDIR`, `DIR`, `FILE-ECHO`, `DEBUG-ON`/`DEBUG-OFF`, `RESET`, `CLS`, `BYE`, `ANS-VALIDATE`, `.ENVIRONMENT`, `FORGET-WORD`, `>LFA`, `>HEADER`, `>NFA`, `ID.`, `\\` (block comment to `{`), `\\S`, `DP`, high-level `HERE` (`DP @`), `ERASE` (`0 FILL`), `GROWMEMORYMB`, etc.
+`FLOAD`, `EDIT`, `CHDIR`, `DIR`, `FILE-ECHO`, `DEBUG-ON`/`DEBUG-OFF`, `RESET`, `CLS`, `BYE`, `ANS-VALIDATE`, `.ENVIRONMENT`, `FORGET-WORD`, `>LFA`, `>HEADER`, `>NFA`, `>XID`, `ID.`, `H.` (unsigned hex print, ignores `BASE`), `\\` (block comment to `{`), `\\S`, `DP`, high-level `HERE` (`DP @`), `ERASE` (`0 FILL`), `GROWMEMORYMB`, etc.
 
 ## Missing optional / future word sets
 

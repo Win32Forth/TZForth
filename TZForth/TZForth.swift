@@ -231,6 +231,42 @@ public final class TZForth {
     /// Runtime primitive for MARKER restore (pops storage addr from stack).
     private var markerRestoreID: Cell = 0
 
+    // MARK: - File-Access (ANS optional word set 11)
+
+    /// Implementation-defined file access methods (documented in HELP / ANS_COMPLIANCE).
+    private let FAM_RDONLY: Cell = 1
+    private let FAM_WRONLY: Cell = 2
+    private let FAM_RDWR: Cell = 3
+    private let FAM_BIN: Cell = 8
+    private let FILE_IO_SUCCESS: Cell = 0
+    private let FILE_IO_ERROR: Cell = 1
+
+    private struct FileEntry {
+        var path: String
+        var fam: Cell
+        var data: Data
+        var position: Int = 0
+        var isOpen: Bool = true
+        var writeDirty: Bool = false
+    }
+
+    private var openFiles: [Int: FileEntry] = [:]
+    private var nextFileId: Int = 10
+
+    /// When >= 2, the text interpreter is reading lines from this fileid (INCLUDE-FILE / INCLUDED).
+    private var interpreterInputFileId: Cell = -1
+
+    private struct InputSourceFrame {
+        var sourceId: Cell
+        var inPos: Cell
+        var sourceLen: Int
+        var sourceBytes: [UInt8]
+        var queue: [UInt8]
+        var evaluateNesting: Int
+        var interpreterInputFileId: Cell
+    }
+    private var inputSourceStack: [InputSourceFrame] = []
+
     // Primitive dispatch table: ID -> implementation
     private var primitives: [(() -> Void)?] = []
 
@@ -551,6 +587,30 @@ public final class TZForth {
         ("SOURCE-ID","( -- id )",         "input source id (-1 terminal, 0 evaluate, 1 file)"),
         ("S\\\"",   "( -- )",             "compile escaped \"-delimited string (leaves c-addr u at run-time)"),
         ("REFILL",  "( -- flag )",        "attempt to refill the input buffer; flag true if successful"),
+
+        // File-Access (ANS word set 11)
+        ("R/O",     "( -- fam )",         "read-only file access method"),
+        ("W/O",     "( -- fam )",         "write-only file access method"),
+        ("R/W",     "( -- fam )",         "read/write file access method"),
+        ("BIN",     "( fam -- fam )",     "add binary (non line-oriented) access to fam"),
+        ("OPEN-FILE","( c-addr u fam -- fileid ior )", "open a file"),
+        ("CLOSE-FILE","( fileid -- ior )", "close a file"),
+        ("CREATE-FILE","( c-addr u fam -- fileid ior )", "create/truncate a file"),
+        ("DELETE-FILE","( c-addr u -- ior )", "delete a file"),
+        ("READ-FILE", "( c-addr u fileid -- u2 ior )", "read u bytes from file"),
+        ("WRITE-FILE","( c-addr u fileid -- u2 ior )", "write u bytes to file"),
+        ("READ-LINE", "( c-addr u fileid -- u2 flag ior )", "read a line from file"),
+        ("WRITE-LINE","( c-addr u fileid -- ior )", "write a line to file (adds newline)"),
+        ("FILE-POSITION","( fileid -- ud ior )", "current file position as unsigned double"),
+        ("FILE-SIZE", "( fileid -- ud ior )", "file size as unsigned double"),
+        ("REPOSITION-FILE","( ud fileid -- ior )", "set file position"),
+        ("RESIZE-FILE","( ud fileid -- ior )", "set file size"),
+        ("INCLUDE-FILE","( fileid -- )",   "interpret contents of open text file, then close it"),
+        ("INCLUDED", "( c-addr u -- )",    "open and interpret named file, then close it"),
+        ("INCLUDE", "( -- ) name",         "parse name and INCLUDED (immediate)"),
+        ("FILE-STATUS","( fileid -- fl ior )", "implementation-defined file status"),
+        ("FLUSH-FILE","( fileid -- ior )",  "flush buffered file data to disk"),
+        ("RENAME-FILE","( c-addr1 u1 c-addr2 u2 -- ior )", "rename file"),
 
         // New for FLOAD / EDIT / file helpers (cwd + dialog driven by host for sandbox friendliness)
         ("\\",      "( -- )",             "comment to end of line (immediate)"),
@@ -1037,6 +1097,203 @@ public final class TZForth {
         // Helpful hint for the common sandbox case (no bookmark/scope for the logical dir yet).
         tell("  (If the file is in your current directory, type bare `fload` and pick any file in that folder once to authorize it. Then named FLOAD and CHDIR will stick across launches.)\n")
         errorFlag = true
+    }
+
+    // MARK: - File-Access helpers (ANS word set 11)
+
+    private func stringFromAddr(_ caddr: Int, _ u: Int) -> String {
+        var bytes: [UInt8] = []
+        for i in 0..<u { bytes.append(readByte(caddr + i)) }
+        return String(bytes: bytes, encoding: .utf8) ?? String(decoding: bytes, as: UTF8.self)
+    }
+
+    private func pathURLFromCounted(_ caddr: Int, _ u: Int) -> URL {
+        let spec = stringFromAddr(caddr, u)
+        return resolvedURL(for: spec)
+    }
+
+    private func pushUD(_ ud: UInt64) {
+        push(Cell(ud & 0xffff_ffff))
+        push(Cell((ud >> 32) & 0xffff_ffff))
+    }
+
+    private func popUD() -> UInt64 {
+        let high = UInt64(bitPattern: Int64(pop()))
+        let low = UInt64(bitPattern: Int64(pop()))
+        return (high << 32) | low
+    }
+
+    private func allocFileId() -> Int {
+        let id = nextFileId
+        nextFileId += 1
+        return id
+    }
+
+    private func famAllowsRead(_ fam: Cell) -> Bool {
+        let base = fam & ~FAM_BIN
+        return base == FAM_RDONLY || base == FAM_RDWR
+    }
+
+    private func famAllowsWrite(_ fam: Cell) -> Bool {
+        let base = fam & ~FAM_BIN
+        return base == FAM_WRONLY || base == FAM_RDWR
+    }
+
+    private func openFileAtPath(_ path: String, fam: Cell, create: Bool) -> (fileid: Cell, ior: Cell) {
+        let url = URL(fileURLWithPath: path)
+        let fm = FileManager.default
+        if create {
+            fm.createFile(atPath: path, contents: Data(), attributes: nil)
+        }
+        guard fm.fileExists(atPath: path) else {
+            return (0, FILE_IO_ERROR)
+        }
+        var data = Data()
+        if famAllowsRead(fam) {
+            do {
+                data = try Data(contentsOf: url)
+            } catch {
+                return (0, FILE_IO_ERROR)
+            }
+        }
+        let fid = allocFileId()
+        openFiles[fid] = FileEntry(path: path, fam: fam, data: data, position: 0, isOpen: true, writeDirty: create || famAllowsWrite(fam))
+        if create && famAllowsWrite(fam) {
+            openFiles[fid]?.writeDirty = true
+        }
+        return (Cell(fid), FILE_IO_SUCCESS)
+    }
+
+    private func closeFileEntry(_ fileId: Int, flush: Bool) -> Cell {
+        guard var entry = openFiles[fileId], entry.isOpen else { return FILE_IO_ERROR }
+        if flush && entry.writeDirty && famAllowsWrite(entry.fam) {
+            do {
+                try entry.data.write(to: URL(fileURLWithPath: entry.path))
+                entry.writeDirty = false
+            } catch {
+                return FILE_IO_ERROR
+            }
+        }
+        entry.isOpen = false
+        openFiles.removeValue(forKey: fileId)
+        return FILE_IO_SUCCESS
+    }
+
+    private func activeInterpreterFileId() -> Int? {
+        if interpreterInputFileId >= 2 { return Int(interpreterInputFileId) }
+        if currentSourceId >= 2 { return Int(currentSourceId) }
+        return nil
+    }
+
+    private func isFileInputSource() -> Bool {
+        activeInterpreterFileId() != nil
+    }
+
+    /// Read a line into memory buffer; returns (u2, flag, ior). flag false at EOF.
+    private func readLineFromFile(_ fileId: Int, buffer: Int, maxLen: Int) -> (u2: Int, flag: Bool, ior: Cell) {
+        guard var entry = openFiles[fileId], entry.isOpen, famAllowsRead(entry.fam) else {
+            return (0, false, FILE_IO_ERROR)
+        }
+        if entry.position >= entry.data.count {
+            return (0, false, FILE_IO_SUCCESS)
+        }
+        var lineBytes: [UInt8] = []
+        var pos = entry.position
+        while pos < entry.data.count && lineBytes.count < maxLen {
+            let b = entry.data[pos]
+            pos += 1
+            if b == 10 { break }
+            if b == 13 {
+                if pos < entry.data.count && entry.data[pos] == 10 { pos += 1 }
+                break
+            }
+            lineBytes.append(b)
+        }
+        entry.position = pos
+        openFiles[fileId] = entry
+        let u2 = min(lineBytes.count, maxLen)
+        for i in 0..<u2 {
+            writeByte(buffer + i, lineBytes[i])
+        }
+        return (u2, true, FILE_IO_SUCCESS)
+    }
+
+    /// Load the next source line from file into SOURCE/inputQueue. Returns false at EOF.
+    private func refillFromFile(_ fileId: Int) -> Bool {
+        let (u2, flag, ior) = readLineFromFile(fileId, buffer: SOURCE_BUFFER, maxLen: SOURCE_BUFFER_SIZE)
+        if ior != FILE_IO_SUCCESS || !flag { return false }
+        currentSourceLen = u2
+        writeCell(IN, 0)
+        inputQueue.removeAll(keepingCapacity: true)
+        for i in 0..<u2 {
+            inputQueue.append(readByte(SOURCE_BUFFER + i))
+        }
+        inputQueue.append(10)
+        return true
+    }
+
+    private func pushInputSourceFrame() {
+        var sourceBytes: [UInt8] = []
+        for i in 0..<currentSourceLen {
+            sourceBytes.append(readByte(SOURCE_BUFFER + i))
+        }
+        inputSourceStack.append(InputSourceFrame(
+            sourceId: currentSourceId,
+            inPos: readCell(IN),
+            sourceLen: currentSourceLen,
+            sourceBytes: sourceBytes,
+            queue: inputQueue,
+            evaluateNesting: evaluateNesting,
+            interpreterInputFileId: interpreterInputFileId
+        ))
+    }
+
+    private func popInputSourceFrame() {
+        guard let frame = inputSourceStack.popLast() else { return }
+        currentSourceId = frame.sourceId
+        writeCell(IN, frame.inPos)
+        currentSourceLen = frame.sourceLen
+        for i in 0..<frame.sourceLen {
+            writeByte(SOURCE_BUFFER + i, frame.sourceBytes[i])
+        }
+        inputQueue = frame.queue
+        evaluateNesting = frame.evaluateNesting
+        interpreterInputFileId = frame.interpreterInputFileId
+    }
+
+    private func includeFileInterpret(_ fileId: Int, closeWhenDone: Bool) {
+        guard openFiles[fileId]?.isOpen == true else {
+            tell("? INCLUDE-FILE: invalid fileid\n")
+            errorFlag = true
+            return
+        }
+        pushInputSourceFrame()
+        interpreterInputFileId = Cell(fileId)
+        currentSourceId = Cell(fileId)
+        loadNesting += 1
+        sourceLoadStop = false
+        defer {
+            if loadNesting > 0 { loadNesting -= 1 }
+            popInputSourceFrame()
+            if closeWhenDone {
+                _ = closeFileEntry(fileId, flush: false)
+            }
+        }
+        while refillFromFile(fileId) {
+            runInterpreter()
+            if errorFlag || sourceLoadStop { break }
+        }
+    }
+
+    private func includedFromSpec(_ caddr: Int, _ u: Int) {
+        let url = pathURLFromCounted(caddr, u)
+        let (fid, ior) = openFileAtPath(url.path, fam: FAM_RDONLY, create: false)
+        if ior != FILE_IO_SUCCESS {
+            tell("? INCLUDED could not open '\(url.lastPathComponent)'\n")
+            errorFlag = true
+            return
+        }
+        includeFileInterpret(Int(fid), closeWhenDone: true)
     }
 
     // CHDIR support (used by the CHDIR word)
@@ -2409,10 +2666,16 @@ public final class TZForth {
 
         // ( comment ) — classic and essential
         _ = register("(", immediate: true) {
-            // Eat characters until we see )
-            while !self.inputQueue.isEmpty {
-                let c = self.consumeInput() ?? 0
-                if c == 41 { break } // ')'
+            // Eat characters until ) ; when parsing from a text file, refill across lines (ANS File-Access).
+            while true {
+                while !self.inputQueue.isEmpty {
+                    let c = self.consumeInput() ?? 0
+                    if c == 41 { return }
+                }
+                if let fid = self.activeInterpreterFileId(), self.refillFromFile(fid) {
+                    continue
+                }
+                return
             }
         }
 
@@ -2551,7 +2814,7 @@ public final class TZForth {
             self.push( rolled )
         }
         _ = register("TUCK") { let b = self.pop(); let a = self.pop(); self.push(b); self.push(a); self.push(b) }
-        _ = register("NIP") { let b = self.pop(); _ = self.pop(); self.push(b) }
+        _ = register("NIP") { _ = self.pop() }  // ( x1 x2 -- x1 ) discard top
 
         _ = register("2@") {
             let a = Int(self.pop())
@@ -2798,9 +3061,13 @@ public final class TZForth {
             self.push(0) // success (flag false)
         }
 
-        // REFILL ( -- flag )  Core Ext — line-oriented engine: no mid-source refill; returns false.
+        // REFILL ( -- flag )  Core/File Ext — true when next line loaded from text file input.
         _ = register("REFILL") {
-            self.push(0)
+            if let fid = self.activeInterpreterFileId(), self.refillFromFile(fid) {
+                self.push(-1)
+            } else {
+                self.push(0)
+            }
         }
 
         // PAD ( -- addr )  Transient scratch (WORD/S"/C"/." parse, user strings, etc.).
@@ -3523,6 +3790,8 @@ public final class TZForth {
                 self.push(255); self.push(-1)
             case "CORE-EXT":
                 self.push(-1) // we have many ext words too
+            case "FILE", "FILE-ACCESS", "FILE-EXT":
+                self.push(-1)
             default:
                 self.push(0) // false
             }
@@ -3830,6 +4099,247 @@ public final class TZForth {
             // The user's code after DOES> (e.g. @ or more) continues to be compiled here
             // into the parent's body. At runtime of the parent the (DOES>) patch will
             // return early (via rpop) so the does code is not executed in the parent's context.
+        }
+
+        registerFileAccessWords()
+    }
+
+    // MARK: - File-Access word registrations (ANS word set 11)
+
+    private func registerFileAccessWords() {
+        _ = register("R/O") { self.push(self.FAM_RDONLY) }
+        _ = register("W/O") { self.push(self.FAM_WRONLY) }
+        _ = register("R/W") { self.push(self.FAM_RDWR) }
+        _ = register("BIN") { self.push(self.pop() | self.FAM_BIN) }
+
+        _ = register("OPEN-FILE") {
+            let fam = self.pop()
+            let u = Int(self.pop())
+            let caddr = Int(self.pop())
+            let url = self.pathURLFromCounted(caddr, u)
+            let (fid, ior) = self.openFileAtPath(url.path, fam: fam, create: false)
+            self.push(fid)
+            self.push(ior)
+        }
+
+        _ = register("CREATE-FILE") {
+            let fam = self.pop()
+            let u = Int(self.pop())
+            let caddr = Int(self.pop())
+            let url = self.pathURLFromCounted(caddr, u)
+            let (fid, ior) = self.openFileAtPath(url.path, fam: fam, create: true)
+            self.push(fid)
+            self.push(ior)
+        }
+
+        _ = register("CLOSE-FILE") {
+            let fileId = Int(self.pop())
+            self.push(self.closeFileEntry(fileId, flush: true))
+        }
+
+        _ = register("DELETE-FILE") {
+            let u = Int(self.pop())
+            let caddr = Int(self.pop())
+            let url = self.pathURLFromCounted(caddr, u)
+            do {
+                try FileManager.default.removeItem(at: url)
+                self.push(self.FILE_IO_SUCCESS)
+            } catch {
+                self.push(self.FILE_IO_ERROR)
+            }
+        }
+
+        _ = register("RENAME-FILE") {
+            let u2 = Int(self.pop())
+            let caddr2 = Int(self.pop())
+            let u1 = Int(self.pop())
+            let caddr1 = Int(self.pop())
+            let from = self.pathURLFromCounted(caddr1, u1)
+            let to = self.pathURLFromCounted(caddr2, u2)
+            do {
+                try FileManager.default.moveItem(at: from, to: to)
+                self.push(self.FILE_IO_SUCCESS)
+            } catch {
+                self.push(self.FILE_IO_ERROR)
+            }
+        }
+
+        _ = register("READ-FILE") {
+            let fileId = Int(self.pop())
+            let u1 = Int(self.pop())
+            let caddr = Int(self.pop())
+            guard u1 >= 0, u1 <= self.MEM_SIZE,
+                  var entry = self.openFiles[fileId], entry.isOpen, self.famAllowsRead(entry.fam) else {
+                self.push(0); self.push(self.FILE_IO_ERROR); return
+            }
+            let avail = max(0, entry.data.count - entry.position)
+            let n = min(u1, avail)
+            for i in 0..<n {
+                self.writeByte(caddr + i, entry.data[entry.position + i])
+            }
+            entry.position += n
+            self.openFiles[fileId] = entry
+            self.push(Cell(n))
+            self.push(self.FILE_IO_SUCCESS)
+        }
+
+        _ = register("WRITE-FILE") {
+            let fileId = Int(self.pop())
+            let u1 = Int(self.pop())
+            let caddr = Int(self.pop())
+            guard u1 >= 0, u1 <= self.MEM_SIZE,
+                  var entry = self.openFiles[fileId], entry.isOpen, self.famAllowsWrite(entry.fam) else {
+                self.push(0); self.push(self.FILE_IO_ERROR); return
+            }
+            let needed = entry.position + u1
+            if needed > entry.data.count {
+                let addCount = needed - entry.data.count
+                if addCount > 0 {
+                    entry.data.append(contentsOf: repeatElement(UInt8(0), count: addCount))
+                }
+            }
+            for i in 0..<u1 {
+                entry.data[entry.position + i] = self.readByte(caddr + i)
+            }
+            entry.position += u1
+            entry.writeDirty = true
+            self.openFiles[fileId] = entry
+            self.push(Cell(u1))
+            self.push(self.FILE_IO_SUCCESS)
+        }
+
+        _ = register("READ-LINE") {
+            let fileId = Int(self.pop())
+            let u1 = Int(self.pop())
+            let caddr = Int(self.pop())
+            let (u2, flag, ior) = self.readLineFromFile(fileId, buffer: caddr, maxLen: u1)
+            self.push(Cell(u2))
+            self.push(flag ? -1 : 0)
+            self.push(ior)
+        }
+
+        _ = register("WRITE-LINE") {
+            let fileId = Int(self.pop())
+            let u1 = Int(self.pop())
+            let caddr = Int(self.pop())
+            guard var entry = self.openFiles[fileId], entry.isOpen, self.famAllowsWrite(entry.fam) else {
+                self.push(self.FILE_IO_ERROR); return
+            }
+            let needed = entry.position + u1 + 1
+            if needed > entry.data.count {
+                entry.data.append(contentsOf: repeatElement(UInt8(0), count: needed - entry.data.count))
+            }
+            for i in 0..<u1 {
+                entry.data[entry.position + i] = self.readByte(caddr + i)
+            }
+            entry.data[entry.position + u1] = 10
+            entry.position += u1 + 1
+            entry.writeDirty = true
+            self.openFiles[fileId] = entry
+            self.push(self.FILE_IO_SUCCESS)
+        }
+
+        _ = register("FILE-POSITION") {
+            let fileId = Int(self.pop())
+            guard let entry = self.openFiles[fileId], entry.isOpen else {
+                self.push(0); self.push(0); self.push(self.FILE_IO_ERROR); return
+            }
+            self.pushUD(UInt64(entry.position))
+            self.push(self.FILE_IO_SUCCESS)
+        }
+
+        _ = register("FILE-SIZE") {
+            let fileId = Int(self.pop())
+            guard fileId != 0, let entry = self.openFiles[fileId], entry.isOpen else {
+                self.push(0); self.push(0); self.push(self.FILE_IO_ERROR); return
+            }
+            self.pushUD(UInt64(entry.data.count))
+            self.push(self.FILE_IO_SUCCESS)
+        }
+
+        _ = register("REPOSITION-FILE") {
+            let fileId = Int(self.pop())
+            let ud = self.popUD()
+            guard var entry = self.openFiles[fileId], entry.isOpen else {
+                self.push(self.FILE_IO_ERROR); return
+            }
+            let pos = Int(ud)
+            if pos < 0 || pos > entry.data.count {
+                self.push(self.FILE_IO_ERROR); return
+            }
+            entry.position = pos
+            self.openFiles[fileId] = entry
+            self.push(self.FILE_IO_SUCCESS)
+        }
+
+        _ = register("RESIZE-FILE") {
+            let fileId = Int(self.pop())
+            let ud = self.popUD()
+            guard var entry = self.openFiles[fileId], entry.isOpen, self.famAllowsWrite(entry.fam) else {
+                self.push(self.FILE_IO_ERROR); return
+            }
+            let newSize = Int(ud)
+            if newSize < 0 {
+                self.push(self.FILE_IO_ERROR); return
+            }
+            if newSize > entry.data.count {
+                entry.data.append(contentsOf: repeatElement(UInt8(0), count: newSize - entry.data.count))
+            } else if newSize < entry.data.count {
+                entry.data = entry.data.prefix(newSize)
+            }
+            if entry.position > newSize { entry.position = newSize }
+            entry.writeDirty = true
+            self.openFiles[fileId] = entry
+            self.push(self.FILE_IO_SUCCESS)
+        }
+
+        _ = register("FILE-STATUS") {
+            let fileId = Int(self.pop())
+            if self.openFiles[fileId]?.isOpen == true {
+                self.push(0)
+                self.push(self.FILE_IO_SUCCESS)
+            } else {
+                self.push(-1)
+                self.push(self.FILE_IO_ERROR)
+            }
+        }
+
+        _ = register("FLUSH-FILE") {
+            let fileId = Int(self.pop())
+            self.push(self.flushFileEntry(fileId))
+        }
+
+        _ = register("INCLUDE-FILE") {
+            let fileId = Int(self.pop())
+            self.includeFileInterpret(fileId, closeWhenDone: true)
+        }
+
+        _ = register("INCLUDED") {
+            let u = Int(self.pop())
+            let caddr = Int(self.pop())
+            self.includedFromSpec(caddr, u)
+        }
+
+        _ = register("INCLUDE", immediate: true) {
+            let name = self.parseWord()
+            if name.isEmpty { self.tell("? INCLUDE needs a name\n"); self.errorFlag = true; return }
+            let bytes = Array(name.utf8)
+            for (i, b) in bytes.enumerated() {
+                self.writeByte(self.PAD_BUFFER + 1 + i, b)
+            }
+            self.includedFromSpec(self.PAD_BUFFER + 1, bytes.count)
+        }
+    }
+
+    private func flushFileEntry(_ fileId: Int) -> Cell {
+        guard var entry = openFiles[fileId], entry.isOpen, entry.writeDirty else { return FILE_IO_SUCCESS }
+        do {
+            try entry.data.write(to: URL(fileURLWithPath: entry.path))
+            entry.writeDirty = false
+            openFiles[fileId] = entry
+            return FILE_IO_SUCCESS
+        } catch {
+            return FILE_IO_ERROR
         }
     }
 

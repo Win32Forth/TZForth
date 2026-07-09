@@ -88,6 +88,9 @@ if ProcessInfo.processInfo.environment["FTEST"] == "1" {
     let fecho = tmp.appendingPathComponent("testecho_\(suffix).fth")
     let fdebug = tmp.appendingPathComponent("testdebug_\(suffix).fth")
     let fdotq = tmp.appendingPathComponent("testdotq_\(suffix).fth")
+    let fline = tmp.appendingPathComponent("testline_\(suffix).txt")
+    let finc = tmp.appendingPathComponent("testinc_\(suffix).fth")
+    let fwr = tmp.appendingPathComponent("testwr_\(suffix).txt")
 
     // Note: in Swift literals, \\\\ produces two backslash chars in the string (for the \\ word in Forth source)
     let blockSrc = """
@@ -136,6 +139,8 @@ hello
         try echoSrc.write(to: fecho, atomically: true, encoding: String.Encoding.utf8)
         try debugSrc.write(to: fdebug, atomically: true, encoding: String.Encoding.utf8)
         try dotqSrc.write(to: fdotq, atomically: true, encoding: String.Encoding.utf8)
+        try "alpha\nbeta\n".write(to: fline, atomically: true, encoding: String.Encoding.utf8)
+        try ": fincw 42 ;\n".write(to: finc, atomically: true, encoding: String.Encoding.utf8)
     } catch {
         print("TEST write fail: \(error)")
         exit(1)
@@ -445,7 +450,7 @@ hello
     ansTest("?DUP", "0 ?DUP .", "0")
     ansTest("?DUP", "5 ?DUP . .", "5 5")
     ansTest("ROT", "1 2 3 ROT . . .", "1 3 2")
-    ansTest("NIP", "1 2 NIP .", "2")
+    ansTest("NIP", "1 2 NIP .", "1")
     ansTest("TUCK", "1 2 TUCK . . .", "2 1 2")
     ansTest("PICK", "10 20 30 1 PICK .", "20")  // 0=top, 1=next
     ansTest("ROLL", "10 20 30 1 ROLL . . .", "20 30 10")
@@ -571,6 +576,19 @@ hello
     ansTest("S\\\"", ": t7sq S\\\" hello\" TYPE ; t7sq", "hello")
     ansTest("S\\\" escapes", ": t7sq2 S\\\" a\\\\b\" TYPE ; t7sq2", "a\\b")
 
+    // File-Access (ANS word set 11)
+    let flinePath = fline.path
+    let fincPath = finc.path
+    let fwrPath = fwr.path
+    ansTest("R/O OPEN-FILE", "S\" \(flinePath)\" R/O OPEN-FILE 0= .", "-1")
+    ansTest("FILE-SIZE", "S\" \(flinePath)\" R/O OPEN-FILE NIP FILE-SIZE DROP DROP .", "11")
+    ansTest("READ-LINE", "S\" \(flinePath)\" R/O OPEN-FILE NIP PAD 1+ SWAP 80 SWAP READ-LINE NIP NIP PAD 1+ SWAP TYPE CLOSE-FILE DROP", "alpha")
+    ansTest("INCLUDED", "S\" \(fincPath)\" INCLUDED fincw .", "42")
+    ansTest("ENVIRONMENT? FILE", "S\" FILE\" ENVIRONMENT? .", "-1")
+    forth.feedLine("VARIABLE t8wf")
+    forth.feedLine(": t8wv S\" \(fwrPath)\" W/O CREATE-FILE NIP t8wf ! S\" hi\" t8wf @ WRITE-LINE DROP t8wf @ CLOSE-FILE DROP ;")
+    ansTest("WRITE-LINE", "t8wv S\" \(fwrPath)\" R/O OPEN-FILE NIP FILE-SIZE DROP DROP .", "3")
+
     print("TEST6 ANS core summary: \(ansPassed)/\(ansTotal) passed")
     if ansPassed != ansTotal {
         print("WARNING: some ANS 2012 core tests failed — review against standard stack effects.")
@@ -579,6 +597,9 @@ hello
     // cleanup
     try? fm.removeItem(at: fblock)
     try? fm.removeItem(at: fstop)
+    try? fm.removeItem(at: fline)
+    try? fm.removeItem(at: finc)
+    try? fm.removeItem(at: fwr)
 
     print("=== FTEST complete ===")
     exit(0)

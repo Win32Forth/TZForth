@@ -484,6 +484,8 @@ hello
 
     // I/O basics (already some coverage, add U. SPACES)
     ansTest("U.", "123 U.", "123")
+    ansTest("H.", "255 H.", "FF")
+    ansTest("H. ignores BASE", "DECIMAL 255 H.", "FF")
     ansTest("SPACES", "3 SPACES 42 .", "42")  // hard to count spaces but no crash + output
 
     // Pictured numeric output (core)

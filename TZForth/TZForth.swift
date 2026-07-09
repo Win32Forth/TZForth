@@ -475,6 +475,7 @@ public final class TZForth {
         ("KEY?",    "( -- flag )",        "true if a key is available now"),
         ("TYPE",    "( addr len -- )",    "print len characters from addr"),
         ("U.",      "( u -- )",           "print unsigned number"),
+        ("H.",      "( u -- )",           "print unsigned as uppercase hex (ignores BASE)"),
         ("ABORT",   "( -- )",             "THROW -1 (catchable; prints Aborted! if uncaught)"),
         ("ABORT\"", "( flag \"text\" -- )", "if flag, type message and THROW -2 (immediate)"),
         ("CATCH",   "( xt -- n )",        "execute xt; push 0 or throw code"),
@@ -3490,6 +3491,12 @@ public final class TZForth {
             let v = self.pop()
             let b = self.readCell(self.BASE)
             self.tell( self.formatNumber(v, base: b, signed: false) ); self.putkey(32)
+        }
+        _ = register("H.") {
+            let v = self.pop()
+            let u = UInt64(bitPattern: Int64(v))
+            self.tell(String(u, radix: 16).uppercased())
+            self.putkey(32)
         }
         _ = register("U.R") {
             let wid = Int(self.pop())

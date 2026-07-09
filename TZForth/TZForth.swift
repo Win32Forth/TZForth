@@ -446,7 +446,7 @@ public final class TZForth {
         ("KEY?",    "( -- flag )",        "true if a key is available now"),
         ("TYPE",    "( addr len -- )",    "print len characters from addr"),
         ("U.",      "( u -- )",           "print unsigned number"),
-        ("ABORT",   "( -- )",             "THROW -1 (catchable; classic reset if uncaught)"),
+        ("ABORT",   "( -- )",             "THROW -1 (catchable; prints Aborted! if uncaught)"),
         ("ABORT\"", "( flag \"text\" -- )", "if flag, type message and THROW -2 (immediate)"),
         ("CATCH",   "( xt -- n )",        "execute xt; push 0 or throw code"),
         ("THROW",   "( n -- )",           "raise exception n (0 is no-op)"),
@@ -1754,6 +1754,7 @@ public final class TZForth {
             if flag != 0 {
                 self.lastAbortQuoteText = String(bytes: (0..<len).map { self.readByte(strAddr + 1 + $0) }, encoding: .utf8) ?? ""
                 self.deliverThrow(-2)
+                if self.throwActive { return }
             }
             var newIP = self.ip + 1 + len
             while (newIP & 7) != 0 { newIP += 1 }
@@ -4892,7 +4893,9 @@ public final class TZForth {
     private func handleUnhandledThrow(_ n: Cell) {
         if n == -2 && !self.lastAbortQuoteText.isEmpty {
             self.tell(self.lastAbortQuoteText + "\n")
-        } else if n != -1 {
+        } else if n == -1 {
+            self.tell("Aborted!\n")
+        } else {
             self.tell("? THROW \(n)\n")
         }
         self.resetRuntimeState()

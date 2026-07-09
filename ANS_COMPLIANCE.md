@@ -2,7 +2,7 @@
 
 This document tracks implementation status of the 2012 ANS Forth Standard word sets in TZForth (Swift port of the lbForth model). Generated from codebase inspection (`TZForth/TZForth.swift`, `TestTZForth.swift`, `TZForthTests.swift`).
 
-Last update: Exception word set (`CATCH`, `THROW`; `ABORT`/`ABORT"` via `THROW -1`/`-2`).
+Last update: unhandled `ABORT` prints `Aborted!`; `ABORT`/`ABORT"` catch tests expanded.
 
 ## Summary
 
@@ -106,10 +106,12 @@ ANS word set 9.6.1 and extensions 9.6.2 (`ABORT`/`ABORT"` as `THROW` aliases).
 |------|----------------|
 | `CATCH` | `( xt -- n | i*x n )` — saves data/return stack depths, `STATE`, loop-control stack, and input-source nesting; executes `xt`; pushes `0` on normal completion or the throw code |
 | `THROW` | `( n -- )` — `0` is a no-op; non-zero unwinds to the nearest `CATCH`, restoring saved depths and input nesting per 9.3.5 |
-| `ABORT` | `( -- )` — `THROW -1` (silent reset if no handler) |
-| `ABORT"` | `( flag "ccc" -- )` — if flag, `THROW -2` (message shown only if uncaught) |
+| `ABORT` | `( -- )` — `THROW -1` (catchable; uncaught → print `Aborted!`, reset, REPL continues) |
+| `ABORT"` | `( flag "ccc" -- )` — if flag, `THROW -2` (catchable; uncaught → type `ccc` then reset) |
 
-Unhandled `THROW` with no active `CATCH`: `-1` → classic `ABORT` reset; `-2` → type stored `ABORT"` text then reset; other codes → `? THROW n` then reset.
+Unhandled `THROW` with no active `CATCH`: `-1` → print `Aborted!`, reset stacks/input, REPL ready for next line; `-2` → type stored `ABORT"` text then reset; other codes → `? THROW n` then reset. Caught `-1`/`-2` leave the throw code on the stack with no message.
+
+FTEST covers `ABORT`/`ABORT"` with and without `CATCH`, including REPL recovery after uncaught `ABORT`.
 
 Not yet wired: automatic `THROW` of standard codes (-3…-75) from every ambiguous condition (division by zero still uses `errorFlag` + message).
 

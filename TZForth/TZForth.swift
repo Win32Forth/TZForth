@@ -411,6 +411,7 @@ public final class TZForth {
         ("SET-ORDER", "( wid1 ... widn n -- )", "set the search order"),
         ("GET-CURRENT", "( -- wid )",      "fetch the compilation word list"),
         ("SET-CURRENT", "( wid -- )",      "set the compilation word list"),
+        ("SEARCH-WORDLIST", "( c-addr u wid -- 0 | xt 1 | xt -1 )", "find name in one word list"),
         ("ORDER",   "( -- )",             "display search order and compilation word list"),
         ("PREVIOUS","( -- )",             "remove first word list from search order"),
         ("SOURCE",  "( -- c-addr u )",    "current input source buffer and length"),
@@ -476,6 +477,7 @@ public final class TZForth {
         ("EXECUTE", "( xt -- )",          "execute the word with the given xt"),
         ("EVALUATE","( i*x c-addr u -- j*x )", "interpret the string as Forth source"),
         ("ENVIRONMENT?","( c-addr u -- false | i*x true )", "query environment string"),
+        (".ENVIRONMENT","( -- )",           "display all supported ENVIRONMENT? query strings and values"),
         (">NUMBER", "( ud1 c-addr1 u1 -- ud2 c-addr2 u2 )", "convert string digits to number accumulating in ud"),
         ("FIND",    "( c-addr -- c-addr 0 | xt 1 | xt -1 )", "find word from counted string (from WORD)"),
         ("FORGET",  "( -- ) name",        "forget name and all words defined after it"),
@@ -1574,32 +1576,99 @@ public final class TZForth {
 
     // MARK: - Finding words
 
-    private func findWord(_ name: String) -> Cell {
+    private func findWordInWordlist(_ wlID: Cell, name: String) -> Cell {
         let upper = name.uppercased()
-        for wlID in searchOrder {
-            var link = readCell(wlID)
-            var safety = 0
-            while link != 0 && safety < 10000 {
-                safety += 1
-                if !isValidDictionaryLink(link) { break }
-                let flagsLen = readByte(link + 8)
-                let namelen = Int(flagsLen & MASK_NAMELENGTH)
-                if namelen == upper.utf8.count {
-                    var match = true
-                    for (i, ch) in upper.utf8.enumerated() {
-                        if up(readByte(link + 9 + i)) != up(ch) {
-                            match = false
-                            break
-                        }
-                    }
-                    if match && (flagsLen & FLAG_HIDDEN) == 0 {
-                        return link
+        var link = readCell(Int(wlID))
+        var safety = 0
+        while link != 0 && safety < 10000 {
+            safety += 1
+            if !isValidDictionaryLink(link) { break }
+            let flagsLen = readByte(link + 8)
+            let namelen = Int(flagsLen & MASK_NAMELENGTH)
+            if namelen == upper.utf8.count {
+                var match = true
+                for (i, ch) in upper.utf8.enumerated() {
+                    if up(readByte(link + 9 + i)) != up(ch) {
+                        match = false
+                        break
                     }
                 }
-                link = readCell(link)
+                if match && (flagsLen & FLAG_HIDDEN) == 0 {
+                    return link
+                }
             }
+            link = readCell(link)
         }
         return 0
+    }
+
+    private func findWord(_ name: String) -> Cell {
+        for wlID in searchOrder {
+            let hdr = findWordInWordlist(wlID, name: name)
+            if hdr != 0 { return hdr }
+        }
+        return 0
+    }
+
+    private func xtAndFindFlag(fromHeader hdr: Cell) -> (xt: Cell, flag: Cell) {
+        let cfa = getCFA(hdr)
+        let firstCell = readCell(Int(cfa))
+        let xt: Cell
+        if firstCell < Cell(MAX_BUILTIN_ID) && firstCell != docolID {
+            xt = firstCell
+        } else {
+            xt = cfa
+        }
+        let flagsLen = readByte(Int(hdr) + 8)
+        let isImmediate = (flagsLen & FLAG_IMMEDIATE) != 0
+        return (xt, isImmediate ? 1 : -1)
+    }
+
+    private static let environmentQueryCatalog: [String] = [
+        "CORE",
+        "CORE-EXT",
+        "/COUNTED-STRING",
+        "ADDRESS-UNIT-BITS",
+        "MAX-CHAR",
+        "SEARCH-ORDER",
+        "WORDLISTS",
+        "EXCEPTION",
+        "FILE",
+        "FILE-ACCESS",
+        "FILE-EXT",
+    ]
+
+    /// ANS ENVIRONMENT? values for a query string, or nil if unsupported.
+    private func environmentQueryValues(for query: String) -> [Cell]? {
+        switch query.uppercased() {
+        case "CORE", "CORE-EXT", "SEARCH-ORDER":
+            return [-1]
+        case "/COUNTED-STRING", "COUNTED-STRING":
+            return [255, -1]
+        case "ADDRESS-UNIT-BITS":
+            return [8, -1]
+        case "MAX-CHAR":
+            return [255, -1]
+        case "WORDLISTS":
+            return [Cell(MAX_VOCABS), -1]
+        case "FILE", "FILE-ACCESS", "FILE-EXT", "EXCEPTION":
+            return [-1]
+        default:
+            return nil
+        }
+    }
+
+    private func displayEnvironmentCatalog() {
+        self.tell("Environment:\n")
+        for name in Self.environmentQueryCatalog {
+            guard let values = self.environmentQueryValues(for: name) else { continue }
+            if values == [-1] {
+                self.tell("  \(name)\n")
+            } else {
+                let parts = values.dropLast().map { String($0) }.joined(separator: " ")
+                self.tell("  \(name) \(parts)\n")
+            }
+        }
     }
 
     private func up(_ c: UInt8) -> UInt8 {
@@ -1960,6 +2029,25 @@ public final class TZForth {
         _ = register("SET-CURRENT") {
             let wid = self.pop()
             self.writeCell(self.CURRENT, wid)
+        }
+
+        _ = register("SEARCH-WORDLIST") {
+            let wid = self.pop()
+            let u = Int(self.pop())
+            let caddr = Int(self.pop())
+            var nameBytes: [UInt8] = []
+            for i in 0..<u {
+                nameBytes.append(self.readByte(caddr + i))
+            }
+            let name = String(bytes: nameBytes, encoding: .utf8) ?? ""
+            let hdr = self.findWordInWordlist(wid, name: name)
+            if hdr == 0 {
+                self.push(0)
+                return
+            }
+            let (xt, flag) = self.xtAndFindFlag(fromHeader: hdr)
+            self.push(xt)
+            self.push(flag)
         }
 
         _ = register("DEFINITIONS") {
@@ -2595,18 +2683,9 @@ public final class TZForth {
                 self.push(0)
                 return
             }
-            let cfa = self.getCFA(hdr)
-            let firstCell = self.readCell(Int(cfa))
-            let xt: Cell
-            if firstCell < Cell(self.MAX_BUILTIN_ID) && firstCell != self.docolID {
-                xt = firstCell
-            } else {
-                xt = cfa
-            }
-            let flagsLen = self.readByte(Int(hdr) + 8)
-            let isImmediate = (flagsLen & self.FLAG_IMMEDIATE) != 0
+            let (xt, flag) = self.xtAndFindFlag(fromHeader: hdr)
             self.push(xt)
-            self.push(isImmediate ? 1 : -1)
+            self.push(flag)
         }
 
         // EVALUATE ( i*x c-addr u -- j*x )
@@ -3827,34 +3906,23 @@ public final class TZForth {
         }
 
         // ENVIRONMENT? ( c-addr u -- false | i*x true )
-        // Minimal but useful support for common ANS queries (so that portable code can probe).
         _ = register("ENVIRONMENT?") {
             let u = Int(self.pop())
             let caddr = Int(self.pop())
-            // Build query string (assume ASCII for env queries)
             var q: [UInt8] = []
             for i in 0..<u {
-                q.append( self.readByte(caddr + i) )
+                q.append(self.readByte(caddr + i))
             }
-            let query = (String(bytes: q, encoding: .utf8) ?? "").uppercased()
-            switch query {
-            case "CORE":
-                self.push(-1) // true
-            case "/COUNTED-STRING", "COUNTED-STRING":
-                self.push(255); self.push(-1)
-            case "ADDRESS-UNIT-BITS":
-                self.push(8); self.push(-1)
-            case "MAX-CHAR":
-                self.push(255); self.push(-1)
-            case "CORE-EXT":
-                self.push(-1) // we have many ext words too
-            case "FILE", "FILE-ACCESS", "FILE-EXT":
-                self.push(-1)
-            case "EXCEPTION":
-                self.push(-1)
-            default:
-                self.push(0) // false
+            let query = String(bytes: q, encoding: .utf8) ?? ""
+            if let values = self.environmentQueryValues(for: query) {
+                for v in values { self.push(v) }
+            } else {
+                self.push(0)
             }
+        }
+
+        _ = register(".ENVIRONMENT") {
+            self.displayEnvironmentCatalog()
         }
 
         // S"  immediate — like ." but leaves ( c-addr u ) on the stack instead of printing.

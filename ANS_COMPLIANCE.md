@@ -2,7 +2,7 @@
 
 This document tracks implementation status of the 2012 ANS Forth Standard word sets in TZForth (Swift port of the lbForth model). Generated from codebase inspection (`TZForth/TZForth.swift`, `TestTZForth.swift`, `TZForthTests.swift`).
 
-Last update: unhandled `ABORT` prints `Aborted!`; `ABORT`/`ABORT"` catch tests expanded.
+Last update: Search-Order word set complete (`SEARCH-WORDLIST`, `ENVIRONMENT?` `WORDLISTS`/`SEARCH-ORDER`); `.ENVIRONMENT` added.
 
 ## Summary
 
@@ -10,7 +10,7 @@ Last update: unhandled `ABORT` prints `Aborted!`; `ABORT`/`ABORT"` catch tests e
 |----------|--------|
 | **Core (6.1)** | Complete — all required words implemented with FTEST coverage |
 | **Core Ext (6.2)** | Complete — all standard Core Ext words implemented |
-| **Search-Order (16)** | Substantial — `WORDLIST`, `GET/SET-ORDER`, `GET/SET-CURRENT`, `FORTH-WORDLIST`, plus `VOCABULARY`, `FORTH`, `DEFINITIONS`, `ALSO`, `ONLY`, `ORDER` |
+| **Search-Order (16)** | Complete — 16.6.1 + 16.6.2; `SEARCH-WORDLIST`, `ENVIRONMENT?` `WORDLISTS` (8) |
 | **Programming-Tools** | Partial — `SEE`, `HELP`, `WORDS`, `FORGET`, `>HEADER`, `>NFA`, `ID.`, `ANS-VALIDATE`; no `LOCATE`, `COMPILE`, `NEEDS`, `REQUIRED` |
 | **File-Access (11)** | Substantial — 11.6.1 core words + `INCLUDE`/`INCLUDED`; no `REQUIRE`/`REQUIRED` |
 | **Exception (9)** | Complete — `CATCH`, `THROW`; Core `ABORT`/`ABORT"` delegate to `THROW -1`/`-2` |
@@ -28,7 +28,7 @@ All Core words required for conformance are implemented. Notable details:
 - **PARSE** / **PARSE-NAME** return slices of **SOURCE**, not `STRING_BUFFER` or `PAD`.
 - Pictured numeric (`<#` … `#>`) uses a separate high-memory buffer, not `PAD`.
 - **POSTPONE** / **[COMPILE]** use captured `executeID` + emit `LIT`/`EXECUTE` for immediate words.
-- **ENVIRONMENT?** returns values for `CORE`, `CORE-EXT`, `/COUNTED-STRING` (255), `ADDRESS-UNIT-BITS`, `MAX-CHAR`, `FILE`, `FILE-ACCESS`, `FILE-EXT`, `EXCEPTION`.
+- **ENVIRONMENT?** returns values for `CORE`, `CORE-EXT`, `/COUNTED-STRING` (255), `ADDRESS-UNIT-BITS`, `MAX-CHAR`, `SEARCH-ORDER`, `WORDLISTS` (8), `FILE`, `FILE-ACCESS`, `FILE-EXT`, `EXCEPTION`. **`.ENVIRONMENT`** lists all supported queries.
 - Memory: 1 MB dictionary region; low fixed layout `SOURCE` (1024) → `STRING_BUFFER` (4096) → `PAD` (1024) → data/return stacks; **UNUSED** / **.FREE** report free dictionary bytes.
 
 ### Low-memory map (implementation-defined)
@@ -64,7 +64,26 @@ All Core words required for conformance are implemented. Notable details:
 
 ### Search-order / vocab (Core Ext + word set 16)
 
-`VOCABULARY`, `FORTH`, `DEFINITIONS`, `ALSO`, `ONLY`, `ORDER`, `WORDS` (optional filter). `FORTH` is default; new vocabs start empty; lookup falls back to `FORTH` for system words.
+`VOCABULARY`, `FORTH`, `DEFINITIONS`, `ALSO`, `ONLY`, `ORDER`, `WORDS` (optional filter). `FORTH` is default; new vocabs start empty; `VOCABULARY` prepends to search order so `FORTH` remains visible unless `ONLY` is used.
+
+## Search-Order (16) — Complete
+
+ANS word set 16.6.1 and extensions 16.6.2.
+
+| Word | Stack / notes |
+|------|----------------|
+| `WORDLIST` | `( -- wid )` — create empty word list |
+| `FORTH-WORDLIST` | `( -- wid )` — the `FORTH` list (`LATEST` head cell) |
+| `GET-ORDER` | `( -- wid1 ... widn n )` |
+| `SET-ORDER` | `( wid1 ... widn n -- )` — max **8** lists (`WORDLISTS`) |
+| `GET-CURRENT` / `SET-CURRENT` | compilation word list |
+| `SEARCH-WORDLIST` | `( c-addr u wid -- 0 \| xt 1 \| xt -1 )` — search one list |
+| `FIND` | `( c-addr -- c-addr 0 \| xt 1 \| xt -1 )` — search order |
+| `DEFINITIONS` | set `CURRENT` to first list in order |
+| `ALSO` / `ONLY` / `PREVIOUS` / `FORTH` / `ORDER` | classic vocab stack (16.6.2) |
+| `VOCABULARY` | compatibility: `CREATE WORDLIST` + `PUSH-ORDER` |
+
+`ENVIRONMENT?` answers `SEARCH-ORDER` and `WORDLISTS` (8). FTEST covers `SEARCH-WORDLIST`, order round-trip, and vocab isolation.
 
 ## File-Access (11) — Substantial
 
@@ -117,7 +136,7 @@ Not yet wired: automatic `THROW` of standard codes (-3…-75) from every ambiguo
 
 ## TZForth-specific extensions (non-ANS)
 
-`FLOAD`, `EDIT`, `CHDIR`, `DIR`, `FILE-ECHO`, `DEBUG-ON`/`DEBUG-OFF`, `RESET`, `CLS`, `BYE`, `ANS-VALIDATE`, `FORGET-WORD`, `>LFA`, `>HEADER`, `>NFA`, `ID.`, `\\` (block comment to `{`), `\\S`, `DP`, high-level `HERE` (`DP @`), `ERASE` (`0 FILL`), etc.
+`FLOAD`, `EDIT`, `CHDIR`, `DIR`, `FILE-ECHO`, `DEBUG-ON`/`DEBUG-OFF`, `RESET`, `CLS`, `BYE`, `ANS-VALIDATE`, `.ENVIRONMENT`, `FORGET-WORD`, `>LFA`, `>HEADER`, `>NFA`, `ID.`, `\\` (block comment to `{`), `\\S`, `DP`, high-level `HERE` (`DP @`), `ERASE` (`0 FILL`), etc.
 
 ## Missing optional / future word sets
 

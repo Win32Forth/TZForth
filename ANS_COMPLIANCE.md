@@ -2,7 +2,7 @@
 
 This document tracks implementation status of the 2012 ANS Forth Standard word sets in TZForth (Swift port of the lbForth model). Generated from codebase inspection (`TZForth/TZForth.swift`, `TestTZForth.swift`, `TZForthTests.swift`).
 
-Last update: Search-Order word set complete (`SEARCH-WORDLIST`, `ENVIRONMENT?` `WORDLISTS`/`SEARCH-ORDER`); `.ENVIRONMENT` added.
+Last update: String word set (17.6.1) complete — `COMPARE`, `SEARCH`, `SLITERAL`, `/STRING`, `-TRAILING`, `BLANK`, `CMOVE`, `CMOVE>`.
 
 ## Summary
 
@@ -14,7 +14,8 @@ Last update: Search-Order word set complete (`SEARCH-WORDLIST`, `ENVIRONMENT?` `
 | **Programming-Tools** | Partial — `SEE`, `HELP`, `WORDS`, `FORGET`, `>HEADER`, `>NFA`, `ID.`, `ANS-VALIDATE`; no `LOCATE`, `COMPILE`, `NEEDS`, `REQUIRED` |
 | **File-Access (11)** | Substantial — 11.6.1 core words + `INCLUDE`/`INCLUDED`; no `REQUIRE`/`REQUIRED` |
 | **Exception (9)** | Complete — `CATCH`, `THROW`; Core `ABORT`/`ABORT"` delegate to `THROW -1`/`-2` |
-| **Other optional sets** | Mostly absent — Double, Float, Facility, String, Block, Locals, Memory-Allocation, Extended-Character, etc. |
+| **String (17)** | Complete — 17.6.1 (`COMPARE`, `SEARCH`, `SLITERAL`, `/STRING`, `-TRAILING`, `BLANK`, `CMOVE`, `CMOVE>`) |
+| **Other optional sets** | Mostly absent — Double, Float, Facility, Block, Locals, Memory-Allocation, Extended-Character, etc. |
 
 FTEST harness: run with `FTEST=1 swift /tmp/combined.swift` (concatenate `TZForth.swift`, `TZForthTests.swift`, `TestTZForth.swift`).
 
@@ -28,7 +29,7 @@ All Core words required for conformance are implemented. Notable details:
 - **PARSE** / **PARSE-NAME** return slices of **SOURCE**, not `STRING_BUFFER` or `PAD`.
 - Pictured numeric (`<#` … `#>`) uses a separate high-memory buffer, not `PAD`.
 - **POSTPONE** / **[COMPILE]** use captured `executeID` + emit `LIT`/`EXECUTE` for immediate words.
-- **ENVIRONMENT?** returns values for `CORE`, `CORE-EXT`, `/COUNTED-STRING` (255), `ADDRESS-UNIT-BITS`, `MAX-CHAR`, `SEARCH-ORDER`, `WORDLISTS` (8), `FILE`, `FILE-ACCESS`, `FILE-EXT`, `EXCEPTION`. **`.ENVIRONMENT`** lists all supported queries.
+- **ENVIRONMENT?** returns values for `CORE`, `CORE-EXT`, `/COUNTED-STRING` (255), `ADDRESS-UNIT-BITS`, `MAX-CHAR`, `SEARCH-ORDER`, `WORDLISTS` (8), `FILE`, `FILE-ACCESS`, `FILE-EXT`, `EXCEPTION`, `STRING`. **`.ENVIRONMENT`** lists all supported queries.
 - Memory: 1 MB dictionary region; low fixed layout `SOURCE` (1024) → `STRING_BUFFER` (4096) → `PAD` (1024) → data/return stacks; **UNUSED** / **.FREE** report free dictionary bytes.
 
 ### Low-memory map (implementation-defined)
@@ -84,6 +85,27 @@ ANS word set 16.6.1 and extensions 16.6.2.
 | `VOCABULARY` | compatibility: `CREATE WORDLIST` + `PUSH-ORDER` |
 
 `ENVIRONMENT?` answers `SEARCH-ORDER` and `WORDLISTS` (8). FTEST covers `SEARCH-WORDLIST`, order round-trip, and vocab isolation.
+
+## String (17) — Complete
+
+ANS word set 17.6.1 (character-string operations). Core `MOVE`/`FILL` remain; `CMOVE`/`BLANK` follow ANS stack effects.
+
+| Word | Stack / notes |
+|------|----------------|
+| `BLANK` | `( c-addr u -- )` — fill with `BL` (32) |
+| `CMOVE` | `( c-addr1 c-addr2 u -- )` — copy with overlap-safe direction |
+| `CMOVE>` | `( c-addr1 c-addr2 u -- )` — copy high-to-low |
+| `COMPARE` | `( c-addr1 u1 c-addr2 u2 -- n )` — byte-wise `-1` / `0` / `1` |
+| `/STRING` | `( c-addr u n -- c-addr' u' )` — skip or include `n` characters |
+| `-TRAILING` | `( c-addr u -- c-addr' u' )` — drop trailing spaces |
+| `SEARCH` | `( c-addr1 u1 c-addr2 u2 -- c-addr3 u3 flag )` — first match; empty needle matches |
+| `SLITERAL` | `( c-addr u -- )` immediate — compile `(S")` + inline literal |
+
+`ENVIRONMENT?` answers `STRING`. FTEST covers compare, search, trailing, blank, `/STRING`, and `SLITERAL` via `[ ]`.
+
+### Not implemented (String extensions 17.6.2)
+
+`REPLACES`, `SUBSTITUTE`, `UNESCAPE` — substitution/escape tables not yet wired.
 
 ## File-Access (11) — Substantial
 
@@ -145,7 +167,6 @@ Not implemented (no current plan unless requested):
 - **Double** (`D+`, `D.`, `2CONSTANT`, …)
 - **Float**
 - **Facility** (`AT-XY`, `TIME&DATE`, …)
-- **String** (`COMPARE`, `SEARCH`, …)
 - **Block**
 - **Locals**
 - **Memory-Allocation** (`ALLOCATE`, `FREE`, `RESIZE`)

@@ -330,6 +330,8 @@ public final class TZForth {
     private var throwActive: Bool = false
     /// Text from the most recent ABORT" before THROW -2 (for unhandled -2 display).
     private var lastAbortQuoteText: String = ""
+    /// Depth of `[` … `]` compile-time interpret brackets (for SLITERAL et al.).
+    private var bracketCompileDepth: Int = 0
 
     // IDs for words used to emit setup code for DO/LOOP etc at compile time (for clean threaded DO...LOOP)
     private var swapID: Cell = 0
@@ -432,6 +434,14 @@ public final class TZForth {
         (",",       "( n -- )",           "compile a cell"),
         ("FILL",    "( addr u b -- )",    "fill u bytes at addr with b"),
         ("MOVE",    "( addr1 addr2 u -- )", "copy u bytes"),
+        ("BLANK",   "( c-addr u -- )",    "fill u bytes with blanks (BL)"),
+        ("CMOVE",   "( c-addr1 c-addr2 u -- )", "copy u characters c-addr2 -> c-addr1"),
+        ("CMOVE>",  "( c-addr1 c-addr2 u -- )", "copy u characters high-to-low"),
+        ("COMPARE", "( c-addr1 u1 c-addr2 u2 -- n )", "compare strings (-1/0/1)"),
+        ("/STRING", "( c-addr u n -- c-addr' u' )", "adjust string by n characters"),
+        ("-TRAILING","( c-addr u -- c-addr' u' )", "remove trailing spaces"),
+        ("SEARCH",  "( c-addr1 u1 c-addr2 u2 -- c-addr3 u3 flag )", "search for substring"),
+        ("SLITERAL","( c-addr u -- )",    "compile string literal (immediate; run-time c-addr u)"),
         ("ALIGN",   "( -- )",             "align DP to cell boundary"),
         ("ALIGNED", "( addr -- addr' )",  "next aligned address"),
         (">BODY",   "( xt -- addr )",     "data field of a CREATEd word"),
@@ -1636,6 +1646,7 @@ public final class TZForth {
         "FILE",
         "FILE-ACCESS",
         "FILE-EXT",
+        "STRING",
     ]
 
     /// ANS ENVIRONMENT? values for a query string, or nil if unsupported.
@@ -1651,11 +1662,42 @@ public final class TZForth {
             return [255, -1]
         case "WORDLISTS":
             return [Cell(MAX_VOCABS), -1]
-        case "FILE", "FILE-ACCESS", "FILE-EXT", "EXCEPTION":
+        case "FILE", "FILE-ACCESS", "FILE-EXT", "EXCEPTION", "STRING":
             return [-1]
         default:
             return nil
         }
+    }
+
+    /// ANS COMPARE on primitive characters (bytes).
+    private func compareCharacterStrings(caddr1: Int, u1: Int, caddr2: Int, u2: Int) -> Cell {
+        let minLen = min(u1, u2)
+        for i in 0..<minLen {
+            let b1 = self.readByte(caddr1 + i)
+            let b2 = self.readByte(caddr2 + i)
+            if b1 != b2 {
+                return b1 < b2 ? -1 : 1
+            }
+        }
+        if u1 == u2 { return 0 }
+        return u1 < u2 ? -1 : 1
+    }
+
+    /// ANS SEARCH — first occurrence; empty needle matches at start.
+    private func searchCharacterStrings(hayCaddr: Int, hayLen: Int, needleCaddr: Int, needleLen: Int) -> (caddr: Int, u: Int, found: Bool) {
+        if needleLen == 0 {
+            return (hayCaddr, hayLen, true)
+        }
+        if hayLen < needleLen {
+            return (hayCaddr, hayLen, false)
+        }
+        let maxStart = hayLen - needleLen
+        for pos in 0...maxStart {
+            if self.compareCharacterStrings(caddr1: hayCaddr + pos, u1: needleLen, caddr2: needleCaddr, u2: needleLen) == 0 {
+                return (hayCaddr + pos, hayLen - pos, true)
+            }
+        }
+        return (hayCaddr, hayLen, false)
     }
 
     private func displayEnvironmentCatalog() {
@@ -2129,7 +2171,10 @@ public final class TZForth {
         }
 
         _ = register("]", immediate: false) { self.writeCell(self.STATE, 1) }
-        _ = register("[", immediate: true)  { self.writeCell(self.STATE, 0) }
+        _ = register("[", immediate: true)  {
+            self.bracketCompileDepth += 1
+            self.writeCell(self.STATE, 0)
+        }
 
         _ = register("IMMEDIATE") {
             let defsHeadCell = self.readCell(self.CURRENT)
@@ -3089,6 +3134,78 @@ public final class TZForth {
                 for i in (0..<u).reversed() { self.writeByte( dst + i , self.readByte(src + i) ) }
             }
         }
+
+        // === ANS Forth 2012 String word set (Section 17) ===
+
+        _ = register("BLANK") {
+            let u = Int(self.pop())
+            let addr = Int(self.pop())
+            for i in 0..<u { self.writeByte(addr + i, 32) }
+        }
+
+        _ = register("CMOVE") {
+            let u = Int(self.pop())
+            let src = Int(self.pop())
+            let dst = Int(self.pop())
+            if u <= 0 { return }
+            if dst < src {
+                for i in 0..<u { self.writeByte(dst + i, self.readByte(src + i)) }
+            } else {
+                for i in (0..<u).reversed() { self.writeByte(dst + i, self.readByte(src + i)) }
+            }
+        }
+
+        _ = register("CMOVE>") {
+            let u = Int(self.pop())
+            let src = Int(self.pop())
+            let dst = Int(self.pop())
+            if u <= 0 { return }
+            for i in (0..<u).reversed() { self.writeByte(dst + i, self.readByte(src + i)) }
+        }
+
+        _ = register("COMPARE") {
+            let u2 = Int(self.pop())
+            let caddr2 = Int(self.pop())
+            let u1 = Int(self.pop())
+            let caddr1 = Int(self.pop())
+            self.push(self.compareCharacterStrings(caddr1: caddr1, u1: u1, caddr2: caddr2, u2: u2))
+        }
+
+        _ = register("/STRING") {
+            let n = Int(self.pop())
+            let u1 = Int(self.pop())
+            let caddr1 = Int(self.pop())
+            self.push(Cell(caddr1 + n))
+            self.push(Cell(u1 - n))
+        }
+
+        _ = register("-TRAILING") {
+            let u1 = Int(self.pop())
+            let caddr = Int(self.pop())
+            if u1 <= 0 {
+                self.push(Cell(caddr))
+                self.push(0)
+                return
+            }
+            var u2 = u1
+            while u2 > 0 && self.readByte(caddr + u2 - 1) == 32 {
+                u2 -= 1
+            }
+            self.push(Cell(caddr))
+            self.push(Cell(u2))
+        }
+
+        _ = register("SEARCH") {
+            let u2 = Int(self.pop())
+            let caddr2 = Int(self.pop())
+            let u1 = Int(self.pop())
+            let caddr1 = Int(self.pop())
+            let hit = self.searchCharacterStrings(hayCaddr: caddr1, hayLen: u1, needleCaddr: caddr2, needleLen: u2)
+            self.push(Cell(hit.caddr))
+            self.push(Cell(hit.u))
+            self.push(hit.found ? -1 : 0)
+        }
+
         _ = register("ALIGN") {
             var h = self.readCell(self.DP_ADDR)
             while (h & 7) != 0 { h += 1 }
@@ -3950,6 +4067,24 @@ public final class TZForth {
             }
         }
 
+        // SLITERAL ( c-addr u -- ) immediate — compile (S") + inline string; interpret undefined.
+        _ = register("SLITERAL", immediate: true) {
+            let compiling = self.readCell(self.STATE) != 0 || self.bracketCompileDepth > 0
+            if !compiling {
+                self.tell("? SLITERAL undefined in interpret state\n")
+                self.errorFlag = true
+                return
+            }
+            let u = Int(self.pop())
+            let caddr = Int(self.pop())
+            self.push(self.sQuoteID); self.comma()
+            self.writeByteHere(UInt8(u))
+            for i in 0..<u {
+                self.writeByteHere(self.readByte(caddr + i))
+            }
+            self.alignHere()
+        }
+
         // C"  immediate — ANS compile: parse ccc, compile (C") + inline counted string.
         // Run-time (and our interpret extension): leave c-addr only (count is at c-addr).
         _ = register("C\"", immediate: true) {
@@ -4577,6 +4712,9 @@ public final class TZForth {
         while !inputQueue.isEmpty && !errorFlag && !exitReq && !throwActive {
             let name = parseWord()
             if name.isEmpty { break }
+            if name == "]" && self.bracketCompileDepth > 0 {
+                self.bracketCompileDepth -= 1
+            }
 
             let hdr = findWord(name)
             if hdr != 0 {
@@ -5338,6 +5476,7 @@ public final class TZForth {
         self.exceptionFrames.removeAll()
         self.throwActive = false
         self.lastAbortQuoteText = ""
+        self.bracketCompileDepth = 0
         self.inSlashSlashComment = false
         self.sourceLoadStop = false
         self.loadNesting = 0

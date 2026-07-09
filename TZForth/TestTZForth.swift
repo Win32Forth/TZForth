@@ -576,6 +576,20 @@ hello
     ansTest("ENVIRONMENT? SEARCH-ORDER", "S\" SEARCH-ORDER\" ENVIRONMENT? .", "-1")
     ansTest(".ENVIRONMENT", ".ENVIRONMENT", "WORDLISTS 8")
 
+    // String word set (17): COMPARE SEARCH SLITERAL /STRING -TRAILING BLANK CMOVE
+    ansTest("COMPARE equal", "S\" abc\" S\" abc\" COMPARE .", "0")
+    ansTest("COMPARE less", "S\" ab\" S\" abc\" COMPARE .", "-1")
+    ansTest("COMPARE greater", "S\" abcd\" S\" abc\" COMPARE .", "1")
+    ansTest("/STRING", "S\" abcdef\" 2 /STRING TYPE", "cdef")
+    ansTest("-TRAILING", "S\" abc   \" -TRAILING TYPE", "abc")
+    ansTest("BLANK", "PAD 8 2DUP BLANK 2DUP COMPARE .", "0")
+    ansTest("SEARCH found", "S\" xyzabc\" S\" abc\" SEARCH .", "-1")
+    ansTest("SEARCH miss", "S\" xyz\" S\" abc\" SEARCH .", "0")
+    ansTest("SEARCH empty", "S\" abc\" S\" \" SEARCH .", "-1")
+    forth.feedLine(": t17sl [ S\" hello\" SLITERAL ] ;")
+    ansTest("SLITERAL", "t17sl TYPE", "hello")
+    ansTest("ENVIRONMENT? STRING", "S\" STRING\" ENVIRONMENT? .", "-1")
+
     // Core Ext Tier 2: :NONAME ACTION-OF MARKER SAVE-INPUT RESTORE-INPUT SOURCE-ID S\" REFILL
     ansTest(":NONAME", "VARIABLE t7n1 :NONAME 1234 ; t7n1 ! t7n1 @ EXECUTE .", "1234")
     ansTest("ACTION-OF", "DEFER t7d : t7a1 42 ; ' t7a1 IS t7d ' t7d ACTION-OF EXECUTE .", "42")

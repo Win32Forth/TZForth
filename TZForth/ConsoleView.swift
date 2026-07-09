@@ -69,17 +69,19 @@ struct ConsoleView: View {
     /// Prevents duplicate Return handling when both AppKit and SwiftUI key paths fire.
     @State private var isHandlingReturn = false
 
-    /// When true, the next NSTextView sync moves the caret to end-of-document (after commit/output).
-    @State private var pinCaretToEnd = false
+    /// Incremented to request moving the caret to end-of-document (after commit/output).
+    @State private var pinCaretRequest = 0
 
     var body: some View {
         ConsoleTextView(
             text: $consoleText,
             isFocused: $isFocused,
-            pinCaretToEnd: $pinCaretToEnd,
+            pinCaretRequest: $pinCaretRequest,
             onReturnPressed: { handleReturnKey() }
         ) { textView in
-            consoleTextView = textView
+            DispatchQueue.main.async {
+                consoleTextView = textView
+            }
         }
             .focused($isFocused)
             .onDisappear {
@@ -154,12 +156,19 @@ struct ConsoleView: View {
 
                 // Hook the Forth output callback
                 forth.onOutput = { text in
-                    DispatchQueue.main.async {
-                        pinCaretToEnd = true
+                    let applyOutput = {
+                        pinCaretRequest += 1
                         consoleText += text
                         markProtectedThroughEndOfText()
                         keepCursorVisible(followPrompt: true)
                         handlePostFeedActions()
+                    }
+                    // Apply synchronously on the main thread so a trailing keepCursorVisible
+                    // (e.g. from commitEmptyLine) does not scroll before " OK" is appended.
+                    if Thread.isMainThread {
+                        applyOutput()
+                    } else {
+                        DispatchQueue.main.async(execute: applyOutput)
                     }
                 }
 
@@ -199,16 +208,14 @@ struct ConsoleView: View {
         protectedSnapshot = String(consoleText.prefix(length))
     }
 
-    /// Scrolls the NSTextView so the insertion point stays visible after text grows.
-    /// When followPrompt is true, move the caret to end-of-document first (engine output / prompt).
+    /// Requests that the AppKit text view keep the insertion point visible.
+    /// Scrolling is scheduled on the NSTextView directly and again from updateNSView after sync.
     private func keepCursorVisible(followPrompt: Bool = false) {
-        guard let textView = consoleTextView else { return }
-        DispatchQueue.main.async {
-            if followPrompt {
-                let end = (textView.string as NSString).length
-                textView.setSelectedRange(NSRange(location: end, length: 0))
-            }
-            textView.scrollRangeToVisible(textView.selectedRange())
+        if followPrompt {
+            pinCaretRequest += 1
+        }
+        if let textView = consoleTextView {
+            ConsoleTextView.scheduleScrollToInsertionPoint(in: textView)
         }
     }
 
@@ -280,7 +287,7 @@ struct ConsoleView: View {
 
     /// End the committed command line before engine output so responses start on the next line.
     private func finalizeCommittedInputLine() {
-        pinCaretToEnd = true
+        pinCaretRequest += 1
         if !consoleText.hasSuffix("\n") {
             consoleText += "\n"
         }
@@ -289,10 +296,10 @@ struct ConsoleView: View {
 
     private func commitEmptyLine() {
         markProtected(through: consoleText.count)
-        pinCaretToEnd = true
+        pinCaretRequest += 1
         DispatchQueue.main.async {
             forth.feedLine("")
-            handlePostFeedActions()
+            // onOutput (now synchronous on main) has already appended " OK\n".
 
             if forth.clearScreenRequested {
                 consoleText = consoleMessage
@@ -301,13 +308,11 @@ struct ConsoleView: View {
                 forth.clearScreenRequested = false
             }
 
-            DispatchQueue.main.async {
-                if !consoleText.hasSuffix("\n") {
-                    consoleText += "\n"
-                    markProtectedThroughEndOfText()
-                }
-                keepCursorVisible(followPrompt: true)
+            if !consoleText.hasSuffix("\n") {
+                consoleText += "\n"
+                markProtectedThroughEndOfText()
             }
+            keepCursorVisible(followPrompt: true)
         }
     }
 
@@ -344,13 +349,11 @@ struct ConsoleView: View {
                 }
             }
 
-            DispatchQueue.main.async {
-                if !consoleText.hasSuffix("\n") {
-                    consoleText += "\n"
-                    markProtectedThroughEndOfText()
-                }
-                keepCursorVisible(followPrompt: true)
+            if !consoleText.hasSuffix("\n") {
+                consoleText += "\n"
+                markProtectedThroughEndOfText()
             }
+            keepCursorVisible(followPrompt: true)
         }
     }
 
@@ -902,7 +905,7 @@ struct ConsoleView: View {
 
     /// Returns a directory URL that can be listed with the current security scope active.
     private func directoryURLWithActiveScope(for requested: URL) -> URL? {
-        let fm = FileManager.default
+        // let fm = FileManager.default
         let reqLower = requested.path.lowercased()
 
         if let scoped = currentScopedDirectory {
@@ -1103,7 +1106,7 @@ struct ConsoleView: View {
 private struct ConsoleTextView: NSViewRepresentable {
     @Binding var text: String
     @FocusState.Binding var isFocused: Bool
-    @Binding var pinCaretToEnd: Bool
+    @Binding var pinCaretRequest: Int
     var onReturnPressed: () -> Bool
     var onTextViewReady: (NSTextView) -> Void
 
@@ -1156,6 +1159,12 @@ private struct ConsoleTextView: NSViewRepresentable {
         guard let textView = scrollView.documentView as? NSTextView else { return }
         context.coordinator.parent = self
 
+        var shouldScroll = false
+        let needsPinCaret = context.coordinator.lastHandledPinCaretRequest != pinCaretRequest
+        if needsPinCaret {
+            context.coordinator.lastHandledPinCaretRequest = pinCaretRequest
+        }
+
         if textView.string != text {
             let oldString = textView.string
             let selected = textView.selectedRange()
@@ -1166,23 +1175,31 @@ private struct ConsoleTextView: NSViewRepresentable {
             let end = (text as NSString).length
             let oldEnd = (oldString as NSString).length
 
-            if pinCaretToEnd {
+            if needsPinCaret {
                 textView.setSelectedRange(NSRange(location: end, length: 0))
-                pinCaretToEnd = false
+                shouldScroll = true
             } else if text.hasPrefix(oldString), end > oldEnd, selected.location >= oldEnd {
                 // Suffix appends while caret was at end: follow new output.
                 textView.setSelectedRange(NSRange(location: end, length: 0))
+                shouldScroll = true
             } else if selected.location <= end {
                 textView.setSelectedRange(selected)
+                shouldScroll = true
             } else {
                 textView.setSelectedRange(NSRange(location: end, length: 0))
+                shouldScroll = true
             }
-            textView.scrollRangeToVisible(textView.selectedRange())
-        } else if pinCaretToEnd {
+
+            Self.resizeTextViewToFitContent(textView)
+        } else if needsPinCaret {
             let end = (text as NSString).length
             textView.setSelectedRange(NSRange(location: end, length: 0))
-            pinCaretToEnd = false
-            textView.scrollRangeToVisible(textView.selectedRange())
+            shouldScroll = true
+            Self.resizeTextViewToFitContent(textView)
+        }
+
+        if shouldScroll {
+            Self.scheduleScrollToInsertionPoint(in: textView)
         }
 
         if isFocused, let window = scrollView.window, window.firstResponder !== textView {
@@ -1190,10 +1207,108 @@ private struct ConsoleTextView: NSViewRepresentable {
         }
     }
 
+    /// Scroll after layout catches up (needed when WORDS / many OK lines grow the document).
+    fileprivate static func scheduleScrollToInsertionPoint(in textView: NSTextView) {
+        DispatchQueue.main.async {
+            resizeTextViewToFitContent(textView)
+            scrollToShowInsertionPoint(in: textView)
+            // Large appends (WORDS) may need a second layout pass before geometry is final.
+            DispatchQueue.main.async {
+                resizeTextViewToFitContent(textView)
+                scrollToShowInsertionPoint(in: textView)
+            }
+        }
+    }
+
+    /// Programmatic `string =` updates do not always grow the document view; fix before scrolling.
+    private static func resizeTextViewToFitContent(_ textView: NSTextView) {
+        guard let layoutManager = textView.layoutManager,
+              let textContainer = textView.textContainer else { return }
+
+        layoutManager.ensureLayout(for: textContainer)
+
+        var contentHeight = layoutManager.usedRect(for: textContainer).height
+        let extraRect = layoutManager.extraLineFragmentRect
+        if extraRect.height > 0, layoutManager.extraLineFragmentTextContainer === textContainer {
+            contentHeight = max(contentHeight, extraRect.maxY)
+        }
+
+        let inset = textView.textContainerInset
+        let targetHeight = max(contentHeight + inset.height * 2, textView.enclosingScrollView?.contentSize.height ?? 0)
+        if abs(textView.frame.height - targetHeight) > 0.5 {
+            var frame = textView.frame
+            frame.size.height = targetHeight
+            textView.frame = frame
+        }
+    }
+
+    /// Keep the caret on screen; when at end-of-document, pin the scroll view to the bottom.
+    fileprivate static func scrollToShowInsertionPoint(in textView: NSTextView) {
+        guard let layoutManager = textView.layoutManager,
+              let textContainer = textView.textContainer,
+              let scrollView = textView.enclosingScrollView else { return }
+
+        layoutManager.ensureLayout(for: textContainer)
+
+        let range = textView.selectedRange()
+        let length = (textView.string as NSString).length
+        let atEnd = range.location >= length
+
+        if atEnd {
+            scrollToDocumentBottom(
+                textView: textView,
+                scrollView: scrollView,
+                layoutManager: layoutManager,
+                textContainer: textContainer
+            )
+        } else if length > 0 {
+            textView.scrollRangeToVisible(NSRange(location: range.location, length: max(range.length, 1)))
+        }
+    }
+
+    /// Pin the clip view to the true document bottom (caret row included).
+    private static func scrollToDocumentBottom(
+        textView: NSTextView,
+        scrollView: NSScrollView,
+        layoutManager: NSLayoutManager,
+        textContainer: NSTextContainer
+    ) {
+        layoutManager.ensureLayout(for: textContainer)
+
+        var contentBottom = layoutManager.usedRect(for: textContainer).maxY
+        let extraRect = layoutManager.extraLineFragmentRect
+        if extraRect.height > 0, layoutManager.extraLineFragmentTextContainer === textContainer {
+            contentBottom = max(contentBottom, extraRect.maxY)
+        }
+
+        let origin = textView.textContainerOrigin
+        let inset = textView.textContainerInset
+        let documentBottom = contentBottom + origin.y + inset.height
+        let docHeight = max(documentBottom, textView.frame.maxY)
+
+        let clipView = scrollView.contentView
+        let clipHeight = clipView.bounds.height
+        let targetY = max(0, docHeight - clipHeight)
+
+        if abs(clipView.bounds.origin.y - targetY) > 0.5 {
+            clipView.scroll(to: NSPoint(x: 0, y: targetY))
+            scrollView.reflectScrolledClipView(clipView)
+        }
+
+        if length(of: textView) > 0 {
+            textView.scrollRangeToVisible(NSRange(location: length(of: textView), length: 0))
+        }
+    }
+
+    private static func length(of textView: NSTextView) -> Int {
+        (textView.string as NSString).length
+    }
+
     final class Coordinator: NSObject, NSTextViewDelegate {
         var parent: ConsoleTextView
         weak var textView: NSTextView?
         var isProgrammaticUpdate = false
+        var lastHandledPinCaretRequest = 0
 
         init(parent: ConsoleTextView) {
             self.parent = parent

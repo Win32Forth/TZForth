@@ -614,6 +614,16 @@ hello
     ansTest("THROW catch", "t9c3 . . .", "99 2 1")
     forth.feedLine(": t9ab ABORT ; : t9abc 1 ['] t9ab CATCH ;")
     ansTest("ABORT CATCH", "t9abc . .", "-1 1")
+    forth.feedLine("ABORT")
+    collected = ""
+    forth.feedLine("42 .")
+    ansTotal += 1
+    if collected.contains("42") {
+        ansPassed += 1
+        print("TEST6 ABORT recover REPL: pass")
+    } else {
+        print("TEST6 ABORT recover REPL: FAIL got '\(collected.trimmingCharacters(in: .whitespacesAndNewlines))' (expected 42 on next line)")
+    }
     ansTest("ENVIRONMENT? EXCEPTION", "S\" EXCEPTION\" ENVIRONMENT? .", "-1")
     forth.feedLine(": t9t5 2DROP 2DROP 9999 THROW ; : t9c5 1 2 3 4 ['] t9t5 CATCH DEPTH ;")
     ansTest("CATCH depth restore", "t9c5 .", "5")

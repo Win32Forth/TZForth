@@ -922,6 +922,7 @@ public final class TZForth {
         // This guarantees feedLine always returns normally and leaves the engine
         // ready for the next command.
         validateAndRepairSystemState()
+        self.throwActive = false
 
         // Prepare the SOURCE buffer and >IN for this line (supports SOURCE, PARSE, >IN tracking).
         // Each feedLine (REPL or per-line during FLOAD) becomes the "current input source".
@@ -4504,7 +4505,7 @@ public final class TZForth {
         validateAndRepairSystemState()
         errorFlag = false
 
-        while !inputQueue.isEmpty && !errorFlag && !exitReq {
+        while !inputQueue.isEmpty && !errorFlag && !exitReq && !throwActive {
             let name = parseWord()
             if name.isEmpty { break }
 
@@ -4526,6 +4527,10 @@ public final class TZForth {
                 } else {
                     // Execute
                     execute(cfa: cfa, firstCell: first)
+                    if throwActive {
+                        if !errorFlag { errorFlag = true }
+                        break
+                    }
                     if waitingForKey {
                         // A blocking input word (currently only KEY) has suspended.
                         // Break out of the line interpreter so control returns to the UI.
@@ -5366,6 +5371,8 @@ public final class TZForth {
 
         ip = 0
         commandAddress = 0
+        self.throwActive = false
+        self.exceptionFrames.removeAll()
 
         // For errors during FLOAD (loadNesting > 0 at time of error), leave errorFlag set so that
         // loadFileContents can observe it after the sub-feedLine returns and abort

@@ -530,6 +530,16 @@ extension TZForth {
         ansTest("THROW catch", "t9c3 . . .", "99 2 1")
         self.feedLine(": t9ab ABORT ; : t9abc 1 ['] t9ab CATCH ;")
         ansTest("ABORT CATCH", "t9abc . .", "-1 1")
+        self.feedLine("ABORT")
+        collected = ""
+        self.feedLine("42 .")
+        ansTotal += 1
+        if collected.contains("42") {
+            ansPassed += 1
+            results += "TEST6 ABORT recover REPL: pass\n"
+        } else {
+            results += "TEST6 ABORT recover REPL: FAIL got '\(collected.trimmingCharacters(in: .whitespacesAndNewlines))' (expected 42 on next line)\n"
+        }
         ansTest("ENVIRONMENT? EXCEPTION", "S\" EXCEPTION\" ENVIRONMENT? .", "-1")
         self.feedLine(": t9t5 2DROP 2DROP 9999 THROW ; : t9c5 1 2 3 4 ['] t9t5 CATCH DEPTH ;")
         ansTest("CATCH depth restore", "t9c5 .", "5")

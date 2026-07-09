@@ -58,9 +58,9 @@ public final class TZForth {
 
     // MARK: - Configuration
 
-    private let MEM_SIZE = 256 * 1024   // generous for a modern machine
-    private let STACK_SIZE = 256
-    private let RSTACK_SIZE = 128
+    private let MEM_SIZE = 1024 * 1024   // 1 MB dictionary / heap region
+    private let STACK_SIZE = 256         // data stack depth (cells)
+    private let RSTACK_SIZE = 256        // return stack depth (cells)
     /// Fixed low-memory layout: SOURCE line buffer, PAD (also WORD/S" parse scratch), then stacks.
     private enum MemLayout {
         static let sourceBuffer = 128
@@ -506,6 +506,7 @@ public final class TZForth {
         ("HOLDS",   "( c-addr u -- )",    "add string to pictured numeric output (prepend via HOLD)"),
         ("BUFFER:", "( u -- ) name",      "create an aligned buffer of u bytes"),
         ("UNUSED",  "( -- u )",           "bytes remaining in dictionary (HERE to dictionary limit)"),
+        (".FREE",   "( -- )",             "print free dictionary bytes remaining (unsigned, like UNUSED U.)"),
         ("0<>",     "( x -- flag )",      "true if not zero"),
         ("<>",      "( n1 n2 -- flag )",  "not equal"),
         ("U>",      "( u1 u2 -- flag )",  "unsigned greater"),
@@ -1144,6 +1145,13 @@ public final class TZForth {
     }
 
     // MARK: - Dictionary creation (very close to the original)
+
+    /// Bytes from HERE (DP) to the dictionary limit (below the pictured-numeric buffer).
+    private func dictionaryFreeBytes() -> Cell {
+        let here = readCell(DP_ADDR)
+        let limit = pnoBufferAddr > 0 ? pnoBufferAddr : (MEM_SIZE - PNO_BUFFER_SIZE)
+        return Cell(max(0, limit - here))
+    }
 
     private func alignHere() {
         var h = readCell(DP_ADDR)
@@ -2723,10 +2731,14 @@ public final class TZForth {
 
         // UNUSED ( -- u )  Core Ext — bytes from HERE to the dictionary limit (below pictured-numeric buffer).
         _ = register("UNUSED") {
-            let here = self.readCell(self.DP_ADDR)
-            let limit = self.pnoBufferAddr > 0 ? self.pnoBufferAddr : (self.MEM_SIZE - self.PNO_BUFFER_SIZE)
-            let u = max(0, limit - here)
-            self.push(Cell(u))
+            self.push(self.dictionaryFreeBytes())
+        }
+
+        _ = register(".FREE") {
+            let free = self.dictionaryFreeBytes()
+            let b = self.readCell(self.BASE)
+            self.tell(self.formatNumber(free, base: b, signed: false))
+            self.putkey(32)
         }
 
         // === Full implementation of counted loops: DO ... LOOP / +LOOP , ?DO, I, UNLOOP, LEAVE ===

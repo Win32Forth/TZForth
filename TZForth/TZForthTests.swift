@@ -460,6 +460,7 @@ extension TZForth {
         ansTest("HOLDS", "123 S>D <# #S S\" Num: \" HOLDS #> TYPE", "Num: 123")
         ansTest("BUFFER:", "64 BUFFER: tb1 tb1 99 OVER C! C@ .", "99")
         ansTest("UNUSED", "UNUSED 1000 > .", "-1")
+        ansTest(".FREE", "UNUSED 1000 > .FREE 42 .", "42")
         ansTest("C\"", "C\" HELLO\" COUNT TYPE", "HELLO")
         ansTest("C\" compile", ": tcq C\" world\" COUNT TYPE ; tcq", "world")
         ansTest("C\" EVALUATE", ": tcqe C\" 42 .\" ; tcqe COUNT EVALUATE", "42")

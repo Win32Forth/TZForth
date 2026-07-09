@@ -452,8 +452,11 @@ extension TZForth {
         ansTest("DEFER IS DEFER@ DEFER!", "DEFER d1 : a1 777 ; ' a1 IS d1 d1 . : a2 888 ; ' a2 ' d1 DEFER! d1 .", "777 888")
         ansTest("CASE OF ENDOF ENDCASE", " ' CASE  ' OF  ' ENDOF  ' ENDCASE  DROP DROP DROP DROP 42 .", "42")
 
-        // Vocabularies and filtered WORDS (all words currently in FORTH)
-        ansTest("VOCABULARY FORTH DEFINITIONS", "VOCABULARY FOO FOO DEFINITIONS 123 CONSTANT baz FORTH DEFINITIONS 456 .", "456")
+        // Vocabularies: words defined in a custom vocab must not leak into FORTH.
+        ansTest("VOCAB isolate FORTH", "VOCABULARY FOO FOO DEFINITIONS 123 CONSTANT baz FORTH DEFINITIONS baz .", "? baz")
+        ansTest("VOCAB define FORTH", "VOCABULARY FOO FOO DEFINITIONS 123 CONSTANT baz FORTH DEFINITIONS 456 .", "456")
+        ansTest("VOCAB lookup FOO", "VOCABULARY FOO FOO DEFINITIONS 123 CONSTANT baz FORTH DEFINITIONS FOO baz .", "123")
+        ansTest("VOCABULARIES name", "VOCABULARY FOO FOO DEFINITIONS VOCABULARIES", "Current: FOO")
         ansTest("WORDS filter", "WORDS CONSTANT", "CONSTANT")
         ansTest("ALSO ONLY VOCABULARIES", "ONLY ALSO FORTH VOCABULARIES", "FORTH")
         ansTest("ALSO search", "ONLY ALSO FORTH 1 2 + .", "3")

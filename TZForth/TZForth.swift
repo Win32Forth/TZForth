@@ -1209,7 +1209,9 @@ public final class TZForth {
             let cfa = getCFA(link)
             let first = readCell(Int(cfa))
             if first == createRuntimeID || first == dodoesID {
-                let dataAddr = readCell(Int(cfa) + 8)
+                let dataAddr: Cell = (first == dodoesID)
+                    ? Cell(Int(cfa) + 16)
+                    : readCell(Int(cfa) + 8)
                 if dataAddr == wlID {
                     let flagsLen = readByte(Int(link) + 8)
                     let len = Int(flagsLen & MASK_NAMELENGTH)
@@ -1229,7 +1231,18 @@ public final class TZForth {
 
     private func findWord(_ name: String) -> Cell {
         let upper = name.uppercased()
-        for wlID in searchOrder {
+        var searched: Set<Cell> = []
+        var order: [Cell] = searchOrder
+        let contextHead = readCell(CONTEXT)
+        if contextHead != 0 && !order.contains(contextHead) {
+            order.append(contextHead)
+        }
+        if !order.contains(LATEST) {
+            order.append(LATEST)
+        }
+        for wlID in order {
+            if searched.contains(wlID) { continue }
+            searched.insert(wlID)
             var link = readCell(wlID)
             var safety = 0
             while link != 0 && safety < 10000 {
@@ -1547,7 +1560,7 @@ public final class TZForth {
 
         _ = register("SET-CONTEXT") {
             let wlID = self.pop()
-            self.setContext(wlID)
+            self.writeCell(self.CONTEXT, wlID)
         }
 
         _ = register("ALSO") {
@@ -3492,7 +3505,7 @@ public final class TZForth {
         self.feedLine(": HERE DP @ ;")
 
         // Vocabulary support (high-level for nice SEE decompile)
-        self.feedLine(": VOCABULARY CREATE 0 , DOES> @ SET-CONTEXT ;")
+        self.feedLine(": VOCABULARY CREATE 0 , DOES> SET-CONTEXT ;")
         self.feedLine(": FORTH 0 SET-CONTEXT ;")
         self.feedLine(": DEFINITIONS CONTEXT @ CURRENT ! ;")
 

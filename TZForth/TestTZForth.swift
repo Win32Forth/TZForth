@@ -484,8 +484,11 @@ hello
     ansTest("<# #S #>", "123 S>D <# #S #> TYPE", "123")
     ansTest("SIGN", "0 0 0 <# SIGN #S #> TYPE", "0")
 
-    // S"
+    // S" / C"
     ansTest("S\"", "S\" HELLO\" TYPE", "HELLO")
+    ansTest("C\"", "C\" HELLO\" COUNT TYPE", "HELLO")
+    ansTest("C\" compile", ": tcq C\" world\" COUNT TYPE ; tcq", "world")
+    ansTest("C\" EVALUATE", ": tcqe C\" 42 .\" ; tcqe COUNT EVALUATE", "42")
 
     // Control structures (via temp definitions; some coverage in 2d/2f)
     ansTest("IF ELSE THEN", ": t6if 5 0= IF 99 ELSE 88 THEN ; t6if .", "88")

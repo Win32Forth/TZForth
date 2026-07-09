@@ -460,6 +460,9 @@ extension TZForth {
         ansTest("HOLDS", "123 S>D <# #S S\" Num: \" HOLDS #> TYPE", "Num: 123")
         ansTest("BUFFER:", "64 BUFFER: tb1 tb1 99 OVER C! C@ .", "99")
         ansTest("UNUSED", "UNUSED 1000 > .", "-1")
+        ansTest("C\"", "C\" HELLO\" COUNT TYPE", "HELLO")
+        ansTest("C\" compile", ": tcq C\" world\" COUNT TYPE ; tcq", "world")
+        ansTest("C\" EVALUATE", ": tcqe C\" 42 .\" ; tcqe COUNT EVALUATE", "42")
         ansTest("DEFER IS DEFER@ DEFER!", "DEFER d1 : a1 777 ; ' a1 IS d1 d1 . : a2 888 ; ' a2 ' d1 DEFER! d1 .", "777 888")
         ansTest("CASE OF ENDOF ENDCASE", " ' CASE  ' OF  ' ENDOF  ' ENDCASE  DROP DROP DROP DROP 42 .", "42")
 

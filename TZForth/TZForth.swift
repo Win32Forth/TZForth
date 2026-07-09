@@ -61,12 +61,19 @@ public final class TZForth {
     private let MEM_SIZE = 256 * 1024   // generous for a modern machine
     private let STACK_SIZE = 256
     private let RSTACK_SIZE = 128
-    private let WORD_BUFFER_SIZE = 64
-    private let WORD_BUFFER: Int = 256  // fixed buffer for WORD, before stacks at 1024
-    private let SOURCE_BUFFER: Int = 320
-    private let SOURCE_BUFFER_SIZE = 256
-    private let PAD_BUFFER: Int = 576
-    private let PAD_BUFFER_SIZE = 128
+    /// Fixed low-memory layout: SOURCE line buffer, PAD (also WORD/S" parse scratch), then stacks.
+    private enum MemLayout {
+        static let sourceBuffer = 128
+        static let sourceBufferSize = 256
+        static let padBuffer = sourceBuffer + sourceBufferSize
+        static let padBufferSize = 257  // count + 255 chars + trailing NUL
+    }
+    private let SOURCE_BUFFER: Int = MemLayout.sourceBuffer
+    private let SOURCE_BUFFER_SIZE = MemLayout.sourceBufferSize
+    private let PAD_BUFFER: Int = MemLayout.padBuffer
+    private let PAD_BUFFER_SIZE = MemLayout.padBufferSize
+    /// Max chars for counted strings built in PAD (length byte + trailing NUL reserve 2 bytes).
+    private let PAD_MAX_COUNTED_CHARS = MemLayout.padBufferSize - 2
     private let MAX_BUILTIN_ID = 256    // plenty of room
 
     private let FLAG_IMMEDIATE: UInt8 = 0x80
@@ -136,7 +143,6 @@ public final class TZForth {
 
     // Input
     private var inputQueue: [UInt8] = []
-    private var wordBuffer = [UInt8](repeating: 0, count: 64)
     private var currentSourceLen: Int = 0  // length of current SOURCE buffer (set on each feedLine / EVALUATE)
 
     // Output
@@ -212,6 +218,7 @@ public final class TZForth {
     private var litID: Cell = 0
     private var emitID: Cell = 0
     private var dotQuoteID: Cell = 0   // runtime ID for (." ) used by . " to embed compact string literals
+    private var cQuoteID: Cell = 0     // runtime for (C") used by C" to embed counted string literals
 
     // Address of the FILE-ECHO variable's data cell (populated at bootstrap).
     private var fileEchoAddr: Cell = 0
@@ -321,7 +328,7 @@ public final class TZForth {
         ("PREVIOUS","( -- )",             "remove first word list from search order"),
         ("SOURCE",  "( -- c-addr u )",    "current input source buffer and length"),
         ("PARSE",   "( char -- c-addr u )", "parse text from input up to char (leaves delim, updates >IN)"),
-        ("PAD",     "( -- addr )",        "user scratch buffer (fixed, 128 bytes)"),
+        ("PAD",     "( -- addr )",        "transient scratch (257 bytes); also used by WORD, S\", C\", .\""),
         ("QUIT",    "( -- )",             "empty return stack, set interpret state, return to outer interpreter"),
         ("SP!",     "( n -- )",           "set data stack pointer (updates both cell and internal)"),
         ("RSP!",    "( n -- )",           "set return stack pointer (updates both cell and internal)"),
@@ -362,6 +369,7 @@ public final class TZForth {
         ("HOLD",    "( char -- )",        "insert char into pictured output"),
         ("SIGN",    "( n -- )",           "insert minus sign if n<0 into pictured"),
         ("S\"",     "( -- c-addr u )",    "compile/interpret \"-delimited string (leaves addr u)"),
+        ("C\"",     "( -- c-addr )",      "compile \"-delimited counted string (run-time: addr of length byte)"),
         
         // Comparisons
         ("=",       "( n1 n2 -- flag )",  "equal?"),
@@ -488,7 +496,7 @@ public final class TZForth {
         ("NIP",     "( a b -- b )",       "nip"),
         ("BL",      "( -- 32 )",          "blank (space)"),
         ("CHAR",    "( -- c )",           "parse next word, return its first char"),
-        ("WORD",    "( char -- addr )",   "parse input up to delimiter char, return addr of counted string (trailing blank appended)"),
+        ("WORD",    "( char -- addr )",   "parse input up to delimiter char, return addr of counted string (trailing NUL)"),
         ("COUNT",   "( c-addr -- addr u )", "from counted string addr return char-addr and length"),
 
         // Core Extensions (6.2)
@@ -560,8 +568,8 @@ public final class TZForth {
     public init() {
         memory = Array(repeating: 0, count: MEM_SIZE)
 
-        // Layout the fixed system variables
-        stackBase = 1024
+        // Layout fixed buffers (WORD, SOURCE, PAD) then data/return stacks above PAD.
+        stackBase = (PAD_BUFFER + PAD_BUFFER_SIZE + 7) & ~7
         rstackBase = stackBase + STACK_SIZE * CELL_SIZE
 
         // Initialize system variables
@@ -1127,8 +1135,6 @@ public final class TZForth {
     }
 
     private func refillLineBuffer() -> Bool {
-        // For simplicity in the first version we read directly from inputQueue
-        // into wordBuffer when needed. The original used a separate line buffer.
         return !inputQueue.isEmpty
     }
 
@@ -1281,7 +1287,7 @@ public final class TZForth {
     }
 
     /// Returns true for any character that should be treated as a double quote
-    /// for the purposes of S" . " ABORT" etc. string delimiters and word names like S".
+    /// for the purposes of S" C" . " ABORT" etc. string delimiters and word names like S".
     /// Covers straight ASCII " plus various curly/smart double quotes that macOS produces.
     private func isDoubleQuoteLike(_ c: Character) -> Bool {
         switch c {
@@ -1389,6 +1395,16 @@ public final class TZForth {
             let charAddr = strAddr + 1
             self.push(Cell(charAddr))
             self.push(Cell(len))
+            var newIP = self.ip + 1 + len
+            while (newIP & 7) != 0 { newIP += 1 }
+            self.ip = newIP
+        }
+
+        // Runtime for C" : leave c-addr of the inlined counted string (length byte at c-addr).
+        cQuoteID = register("(C\\\")") {
+            let strAddr = self.ip
+            let len = Int(self.readByte(strAddr))
+            self.push(Cell(strAddr))
             var newIP = self.ip + 1 + len
             while (newIP & 7) != 0 { newIP += 1 }
             self.ip = newIP
@@ -2631,7 +2647,7 @@ public final class TZForth {
         // Parse the input stream (inputQueue, from keyboard lines or FLOADed file lines)
         // using the given delimiter char. Skip leading delimiters, collect chars until
         // the next delimiter (leaving the delimiter in the stream), build a counted string
-        // at the fixed WORD_BUFFER in memory (count byte, chars, trailing blank), return its addr.
+        // at PAD in memory (count byte, chars, trailing NUL), return its addr.
         // This is the general parser needed for strings, names, etc. (e.g. to implement .", S", etc.).
         _ = register("WORD") {
             let delim = UInt8(self.pop() & 0xff)
@@ -2655,7 +2671,7 @@ public final class TZForth {
             self.push( Cell( self.currentSourceLen ) )
         }
 
-        // PAD ( -- addr )  A transient scratch buffer (for pictured output hold area, user strings etc).
+        // PAD ( -- addr )  Transient scratch (WORD/S"/C"/." parse, user strings, etc.).
         // Fixed location so it doesn't move when HERE advances.
         _ = register("PAD") {
             self.push( Cell( self.PAD_BUFFER ) )
@@ -3372,6 +3388,39 @@ public final class TZForth {
             }
         }
 
+        // C"  immediate — ANS compile: parse ccc, compile (C") + inline counted string.
+        // Run-time (and our interpret extension): leave c-addr only (count is at c-addr).
+        _ = register("C\"", immediate: true) {
+            let caddr = self.parseToWordBuffer(using: 34)
+            var len = Int( self.readByte( Int(caddr) ) )
+            var saddr = Int(caddr) + 1
+            if len > 0 && self.readByte(saddr) <= 32 {
+                saddr += 1
+                len -= 1
+            }
+            if self.readCell(self.STATE) != 0 {
+                self.push(self.cQuoteID); self.comma()
+                self.writeByteHere(UInt8(len))
+                for i in 0..<len {
+                    self.writeByteHere( self.readByte(saddr + i) )
+                }
+                self.alignHere()
+            } else {
+                // Interpret: counted string already in PAD from parseToWordBuffer.
+                // Normalize leading separator (same rule as S") in place, then leave PAD.
+                if len > 0 && self.readByte(saddr) <= 32 {
+                    saddr += 1
+                    len -= 1
+                    self.writeByte(Int(caddr), UInt8(len))
+                    for i in 0..<len {
+                        self.writeByte(Int(caddr) + 1 + i, self.readByte(saddr + i))
+                    }
+                    self.writeByte(Int(caddr) + 1 + len, 0)
+                }
+                self.push(Cell(caddr))
+            }
+        }
+
         // Simple CONSTANT (enough for education)
         _ = register("CONSTANT") {
             let name = self.parseWord()
@@ -3877,8 +3926,8 @@ public final class TZForth {
     // Helper used by WORD and CHAR (and future string parsers). Consumes from inputQueue
     // (which receives appended lines from feedLine, whether REPL or FLOAD content).
     // Skips leading exact delims, collects until delim or line-end, builds counted string
-    // (len byte + chars + trailing blank) at fixed WORD_BUFFER in the memory array.
-    // Returns the Forth addr of the count byte. The trailing delim (if any) is left in queue.
+    // (len byte + chars + trailing NUL) at PAD. Returns counted-string c-addr (PAD).
+    // The trailing delim (if any) is left in queue. Transient — next WORD/S"/etc. overwrites.
     private func parseToWordBuffer(using delim: UInt8) -> Cell {
         var collected: [UInt8] = []
 
@@ -3901,13 +3950,13 @@ public final class TZForth {
         // Consume a closing delim if present (supports smart doubles for ")
         _ = self.consumeDelim(delim)
 
-        let len = min(collected.count, self.WORD_BUFFER_SIZE - 2)
-        self.writeByte(self.WORD_BUFFER, UInt8(len))
+        let len = min(collected.count, self.PAD_MAX_COUNTED_CHARS)
+        self.writeByte(self.PAD_BUFFER, UInt8(len))
         for (i, b) in collected.prefix(len).enumerated() {
-            self.writeByte(self.WORD_BUFFER + 1 + i, b)
+            self.writeByte(self.PAD_BUFFER + 1 + i, b)
         }
-        self.writeByte(self.WORD_BUFFER + 1 + len, 32)  // trailing blank per classic
-        return Cell(self.WORD_BUFFER)
+        self.writeByte(self.PAD_BUFFER + 1 + len, 0)
+        return Cell(self.PAD_BUFFER)
     }
 
     private func execute(cfa: Cell, firstCell: Cell) {
@@ -4105,6 +4154,30 @@ public final class TZForth {
             // (S\") <garbage number> etc.
             if cell == self.sQuoteID {
                 self.tell("S\" ")
+                let strAddr = ip
+                let len = Int(self.readByte(strAddr))
+                var content = ""
+                for i in 0..<len {
+                    let b = self.readByte(strAddr + 1 + i)
+                    if b == 34 {
+                        content += "\\\""
+                    } else if b == 92 {
+                        content += "\\\\"
+                    } else if let scalar = UnicodeScalar(UInt32(b)) {
+                        content += String(Character(scalar))
+                    } else {
+                        content += "?"
+                    }
+                }
+                self.tell(content + "\" ")
+                var newIP = ip + 1 + len
+                while (newIP & 7) != 0 { newIP += 1 }
+                ip = newIP
+                continue
+            }
+
+            if cell == self.cQuoteID {
+                self.tell("C\" ")
                 let strAddr = ip
                 let len = Int(self.readByte(strAddr))
                 var content = ""

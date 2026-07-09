@@ -64,7 +64,7 @@ public final class TZForth {
     /// Fixed low-memory layout: SOURCE, STRING_BUFFER (parse scratch ring), PAD (user only), then stacks.
     private enum MemLayout {
         static let sourceBuffer = 128
-        static let sourceBufferSize = 256
+        static let sourceBufferSize = 1024
         static let stringBuffer = sourceBuffer + sourceBufferSize
         static let stringBufferSize = 4096
         static let stringBufferSlotSize = 512

@@ -2,7 +2,7 @@
 
 This document tracks implementation status of the 2012 ANS Forth Standard word sets in TZForth (Swift port of the lbForth model). Generated from codebase inspection (`TZForth/TZForth.swift`, `TestTZForth.swift`, `TZForthTests.swift`).
 
-Last update: after `STRING_BUFFER` ring allocator (4 KB parse scratch, 512-byte slots) and user-only `PAD` (1024 bytes).
+Last update: `SOURCE` input buffer expanded to 1024 bytes.
 
 ## Summary
 
@@ -21,23 +21,23 @@ FTEST harness: run with `FTEST=1 swift /tmp/combined.swift` (concatenate `TZFort
 
 All Core words required for conformance are implemented. Notable details:
 
-- **QUIT** is a primitive (safe RSP wipe); **SOURCE** / **PARSE** / **>IN** track the per-line `SOURCE` buffer (128 @, 256 bytes).
-- **PAD** at 4480, **1024 bytes** — user/programmer scratch only. Per ANS rationale (6.2.2000), no standard words use `PAD`; TZForth keeps parsers out of `PAD` entirely.
-- **STRING_BUFFER** at 384, **4096 bytes** — system parse scratch (not exposed as a Forth word). Each interpret-time use of `WORD`, `CHAR`, `S"`, `C"`, `. "`, `ABORT"`, `S\"`, and `INCLUDE` (immediate path) allocates the next **512-byte slot** in a ring; when the offset reaches the end, allocation wraps to the start. Up to **8** concurrent transient strings can coexist before the oldest slot is reused. Counted strings are capped at **255** characters (`/COUNTED-STRING`). Contents are transient (invalidated by further parsing, dictionary growth, etc., per 3.3.3.6).
+- **QUIT** is a primitive (safe RSP wipe); **SOURCE** / **PARSE** / **>IN** track the per-line `SOURCE` buffer (128 @, **1024 bytes**). `REFILL` and `feedLine` truncate input lines longer than 1024 characters.
+- **PAD** at 5248, **1024 bytes** — user/programmer scratch only. Per ANS rationale (6.2.2000), no standard words use `PAD`; TZForth keeps parsers out of `PAD` entirely.
+- **STRING_BUFFER** at 1152, **4096 bytes** — system parse scratch (not exposed as a Forth word). Each interpret-time use of `WORD`, `CHAR`, `S"`, `C"`, `. "`, `ABORT"`, `S\"`, and `INCLUDE` (immediate path) allocates the next **512-byte slot** in a ring; when the offset reaches the end, allocation wraps to the start. Up to **8** concurrent transient strings can coexist before the oldest slot is reused. Counted strings are capped at **255** characters (`/COUNTED-STRING`). Contents are transient (invalidated by further parsing, dictionary growth, etc., per 3.3.3.6).
 - **PARSE** / **PARSE-NAME** return slices of **SOURCE**, not `STRING_BUFFER` or `PAD`.
 - Pictured numeric (`<#` … `#>`) uses a separate high-memory buffer, not `PAD`.
 - **POSTPONE** / **[COMPILE]** use captured `executeID` + emit `LIT`/`EXECUTE` for immediate words.
 - **ENVIRONMENT?** returns values for `CORE`, `CORE-EXT`, `/COUNTED-STRING` (255), `ADDRESS-UNIT-BITS`, `MAX-CHAR`, `FILE`, `FILE-ACCESS`, `FILE-EXT`.
-- Memory: 1 MB dictionary region; low fixed layout `SOURCE` (256) → `STRING_BUFFER` (4096) → `PAD` (1024) → data/return stacks; **UNUSED** / **.FREE** report free dictionary bytes.
+- Memory: 1 MB dictionary region; low fixed layout `SOURCE` (1024) → `STRING_BUFFER` (4096) → `PAD` (1024) → data/return stacks; **UNUSED** / **.FREE** report free dictionary bytes.
 
 ### Low-memory map (implementation-defined)
 
 | Region | Base @ | Size | Used by |
 |--------|--------|------|---------|
-| `SOURCE` | 128 | 256 | `REFILL`, `SOURCE`, `PARSE`, `PARSE-NAME` |
-| `STRING_BUFFER` | 384 | 4096 | `WORD`, `CHAR`, interpret `S"`/`C"`/`. "`/`ABORT"`, `S\"` compile parse, `INCLUDE` immediate |
-| `PAD` | 4480 | 1024 | User only (`READ-LINE` buffers, scratch, etc.) |
-| Data stack | ~5504 | 256 cells | — |
+| `SOURCE` | 128 | 1024 | `REFILL`, `SOURCE`, `PARSE`, `PARSE-NAME` |
+| `STRING_BUFFER` | 1152 | 4096 | `WORD`, `CHAR`, interpret `S"`/`C"`/`. "`/`ABORT"`, `S\"` compile parse, `INCLUDE` immediate |
+| `PAD` | 5248 | 1024 | User only (`READ-LINE` buffers, scratch, etc.) |
+| Data stack | ~6272 | 256 cells | — |
 | Return stack | above data | 256 cells | — |
 
 `WORD` buffer size (4.1.1): each slot is 512 bytes (minimum 33 required by 3.3.3.6). Compiled `S"` / `C"` / `. "` strings are inlined in the word body and do not use `STRING_BUFFER`.

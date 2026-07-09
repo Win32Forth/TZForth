@@ -308,6 +308,29 @@ public final class TZForth {
     // Using dedicated stack avoids interleaving issues with IF/ELSE/THEN/WHILE markers on data stack.
     private var loopControlStack: [Cell] = []
 
+    /// Saved machine state for each active CATCH (ANS 9.3.2 exception frame).
+    private struct ExceptionFrame {
+        var dataStackDepth: Cell
+        var returnStackDepth: Cell
+        var savedIp: Int
+        var state: Cell
+        var inputSourceStackDepth: Int
+        var loadNesting: Int
+        var evaluateNesting: Int
+        var interpreterInputFileId: Cell
+        var currentSourceId: Cell
+        var currentSourceLen: Int
+        var sourceBytes: [UInt8]
+        var inPos: Cell
+        var inputQueue: [UInt8]
+        var loopControlStack: [Cell]
+    }
+    private var exceptionFrames: [ExceptionFrame] = []
+    /// Set by THROW while unwinding to an active CATCH; checked by innerThread / execute.
+    private var throwActive: Bool = false
+    /// Text from the most recent ABORT" before THROW -2 (for unhandled -2 display).
+    private var lastAbortQuoteText: String = ""
+
     // IDs for words used to emit setup code for DO/LOOP etc at compile time (for clean threaded DO...LOOP)
     private var swapID: Cell = 0
     private var toR_ID: Cell = 0
@@ -423,8 +446,10 @@ public final class TZForth {
         ("KEY?",    "( -- flag )",        "true if a key is available now"),
         ("TYPE",    "( addr len -- )",    "print len characters from addr"),
         ("U.",      "( u -- )",           "print unsigned number"),
-        ("ABORT",   "( -- )",             "clear stacks, return to interpreter"),
-        ("ABORT\"", "( flag \"text\" -- )", "if flag, type message and ABORT (immediate)"),
+        ("ABORT",   "( -- )",             "THROW -1 (catchable; classic reset if uncaught)"),
+        ("ABORT\"", "( flag \"text\" -- )", "if flag, type message and THROW -2 (immediate)"),
+        ("CATCH",   "( xt -- n )",        "execute xt; push 0 or throw code"),
+        ("THROW",   "( n -- )",           "raise exception n (0 is no-op)"),
         ("ACCEPT",  "( c-addr +n1 -- +n2 )", "read up to n1 chars from input into buffer"),
         ("<#",      "( -- )",             "begin pictured numeric output"),
         ("#",       "( ud -- ud )",       "add one digit to pictured output"),
@@ -1726,12 +1751,8 @@ public final class TZForth {
             let strAddr = self.ip
             let len = Int(self.readByte(strAddr))
             if flag != 0 {
-                for i in 0..<len {
-                    self.putkey(self.readByte(strAddr + 1 + i))
-                }
-                self.putkey(10) // nl?
-                self.resetRuntimeState()
-                self.errorFlag = true  // so outer can see abort
+                self.lastAbortQuoteText = String(bytes: (0..<len).map { self.readByte(strAddr + 1 + $0) }, encoding: .utf8) ?? ""
+                self.deliverThrow(-2)
             }
             var newIP = self.ip + 1 + len
             while (newIP & 7) != 0 { newIP += 1 }
@@ -2626,9 +2647,39 @@ public final class TZForth {
             }
         }
 
-        // ABORT ( -- )  clear stacks and return to interpreter (reset state)
+        // CATCH ( xt -- n | i*x n )  ANS Exception — execute xt; 0 on success, throw code otherwise.
+        _ = register("CATCH") {
+            let xt = self.pop()
+            let stackDepth = self.spGet()
+            let savedIp = self.ip
+            self.exceptionFrames.append(self.captureExceptionFrame(dataStackDepth: stackDepth, savedIp: savedIp))
+            self.throwActive = false
+            if xt < Cell(self.MAX_BUILTIN_ID) {
+                self.execute(cfa: xt, firstCell: xt)
+            } else {
+                let cfa = xt
+                let firstCell = self.readCell(Int(cfa))
+                self.execute(cfa: cfa, firstCell: firstCell)
+            }
+            if !self.throwActive {
+                if let frame = self.exceptionFrames.popLast() {
+                    self.rspSet(frame.returnStackDepth)
+                }
+                self.ip = savedIp
+                self.push(0)
+            }
+            self.throwActive = false
+        }
+
+        // THROW ( n -- )  ANS Exception — 0 is no-op; non-zero unwinds to nearest CATCH.
+        _ = register("THROW") {
+            let n = self.pop()
+            self.deliverThrow(n)
+        }
+
+        // ABORT ( -- )  THROW -1 per Exception word set (uncaught → classic reset).
         _ = register("ABORT") {
-            self.resetRuntimeState()
+            self.deliverThrow(-1)
         }
 
         // QUIT ( -- )  Empty return stack (to top level), set interpret mode, clear current input.
@@ -3751,11 +3802,8 @@ public final class TZForth {
             } else {
                 let flag = self.pop()
                 if flag != 0 {
-                    for i in 0..<len {
-                        self.putkey( self.readByte( saddr + i ) )
-                    }
-                    self.resetRuntimeState()
-                    self.errorFlag = true
+                    self.lastAbortQuoteText = String(bytes: (0..<len).map { self.readByte(saddr + $0) }, encoding: .utf8) ?? ""
+                    self.deliverThrow(-2)
                 }
             }
         }
@@ -3799,6 +3847,8 @@ public final class TZForth {
             case "CORE-EXT":
                 self.push(-1) // we have many ext words too
             case "FILE", "FILE-ACCESS", "FILE-EXT":
+                self.push(-1)
+            case "EXCEPTION":
                 self.push(-1)
             default:
                 self.push(0) // false
@@ -4775,7 +4825,78 @@ public final class TZForth {
         self.validateAndRepairSystemState()
     }
 
+    private func captureExceptionFrame(dataStackDepth: Cell, savedIp: Int) -> ExceptionFrame {
+        var sourceBytes: [UInt8] = []
+        for i in 0..<self.currentSourceLen {
+            sourceBytes.append(self.readByte(self.SOURCE_BUFFER + i))
+        }
+        return ExceptionFrame(
+            dataStackDepth: dataStackDepth,
+            returnStackDepth: self.rspGet(),
+            savedIp: savedIp,
+            state: self.readCell(self.STATE),
+            inputSourceStackDepth: self.inputSourceStack.count,
+            loadNesting: self.loadNesting,
+            evaluateNesting: self.evaluateNesting,
+            interpreterInputFileId: self.interpreterInputFileId,
+            currentSourceId: self.currentSourceId,
+            currentSourceLen: self.currentSourceLen,
+            sourceBytes: sourceBytes,
+            inPos: self.readCell(self.IN),
+            inputQueue: self.inputQueue,
+            loopControlStack: self.loopControlStack
+        )
+    }
+
+    private func restoreExceptionFrame(_ frame: ExceptionFrame) {
+        while self.inputSourceStack.count > frame.inputSourceStackDepth {
+            self.popInputSourceFrame()
+        }
+        self.loadNesting = frame.loadNesting
+        self.evaluateNesting = frame.evaluateNesting
+        self.interpreterInputFileId = frame.interpreterInputFileId
+        self.currentSourceId = frame.currentSourceId
+        self.currentSourceLen = frame.currentSourceLen
+        self.writeCell(self.IN, frame.inPos)
+        for i in 0..<frame.currentSourceLen {
+            self.writeByte(self.SOURCE_BUFFER + i, frame.sourceBytes[i])
+        }
+        self.inputQueue = frame.inputQueue
+        self.loopControlStack = frame.loopControlStack
+        self.writeCell(self.STATE, frame.state)
+        self.rspSet(frame.returnStackDepth)
+        self.ip = frame.savedIp
+        self.waitingForKey = false
+        self.exitReq = false
+    }
+
+    /// ANS THROW / ABORT delivery. n=0 is a no-op. Caught throws restore the CATCH frame.
+    private func deliverThrow(_ n: Cell) {
+        if n == 0 { return }
+        if self.exceptionFrames.isEmpty {
+            self.handleUnhandledThrow(n)
+            return
+        }
+        let frame = self.exceptionFrames.removeLast()
+        self.restoreExceptionFrame(frame)
+        self.spSet(frame.dataStackDepth)
+        self.push(n)
+        self.throwActive = true
+    }
+
+    private func handleUnhandledThrow(_ n: Cell) {
+        if n == -2 && !self.lastAbortQuoteText.isEmpty {
+            self.tell(self.lastAbortQuoteText + "\n")
+        } else if n != -1 {
+            self.tell("? THROW \(n)\n")
+        }
+        self.resetRuntimeState()
+        self.errorFlag = true
+        self.throwActive = true
+    }
+
     private func execute(cfa: Cell, firstCell: Cell) {
+        if self.throwActive { return }
         // If the first cell at the CFA is a small primitive ID, we dispatch directly.
         // Otherwise we treat the CFA as a threaded code address (colon definition).
         if firstCell < Cell(MAX_BUILTIN_ID), let body = primitives[Int(firstCell)] {
@@ -4813,7 +4934,7 @@ public final class TZForth {
         // Classic indirect-threaded / token-threaded inner interpreter
         var safety = 0
         let SAFETY_LIMIT = 100000
-        while safety < SAFETY_LIMIT && !errorFlag && !exitReq {
+        while safety < SAFETY_LIMIT && !errorFlag && !exitReq && !throwActive {
             safety += 1
 
             let instrAddr = ip
@@ -5138,6 +5259,9 @@ public final class TZForth {
         pendingEditURL = nil
         pendingLoadURL = nil
         loopControlStack.removeAll()
+        self.exceptionFrames.removeAll()
+        self.throwActive = false
+        self.lastAbortQuoteText = ""
         self.inSlashSlashComment = false
         self.sourceLoadStop = false
         self.loadNesting = 0

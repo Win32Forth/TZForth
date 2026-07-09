@@ -2,7 +2,7 @@
 
 This document tracks implementation status of the 2012 ANS Forth Standard word sets in TZForth (Swift port of the lbForth model). Generated from codebase inspection (`TZForth/TZForth.swift`, `TestTZForth.swift`, `TZForthTests.swift`).
 
-Last update: `SOURCE` input buffer expanded to 1024 bytes.
+Last update: Exception word set (`CATCH`, `THROW`; `ABORT`/`ABORT"` via `THROW -1`/`-2`).
 
 ## Summary
 
@@ -13,7 +13,8 @@ Last update: `SOURCE` input buffer expanded to 1024 bytes.
 | **Search-Order (16)** | Substantial — `WORDLIST`, `GET/SET-ORDER`, `GET/SET-CURRENT`, `FORTH-WORDLIST`, plus `VOCABULARY`, `FORTH`, `DEFINITIONS`, `ALSO`, `ONLY`, `ORDER` |
 | **Programming-Tools** | Partial — `SEE`, `HELP`, `WORDS`, `FORGET`, `>HEADER`, `>NFA`, `ID.`, `ANS-VALIDATE`; no `LOCATE`, `COMPILE`, `NEEDS`, `REQUIRED` |
 | **File-Access (11)** | Substantial — 11.6.1 core words + `INCLUDE`/`INCLUDED`; no `REQUIRE`/`REQUIRED` |
-| **Other optional sets** | Mostly absent — Double, Float, Exception, String, Block, Locals, Memory-Allocation, etc. |
+| **Exception (9)** | Complete — `CATCH`, `THROW`; Core `ABORT`/`ABORT"` delegate to `THROW -1`/`-2` |
+| **Other optional sets** | Mostly absent — Double, Float, Facility, String, Block, Locals, Memory-Allocation, Extended-Character, etc. |
 
 FTEST harness: run with `FTEST=1 swift /tmp/combined.swift` (concatenate `TZForth.swift`, `TZForthTests.swift`, `TestTZForth.swift`).
 
@@ -27,7 +28,7 @@ All Core words required for conformance are implemented. Notable details:
 - **PARSE** / **PARSE-NAME** return slices of **SOURCE**, not `STRING_BUFFER` or `PAD`.
 - Pictured numeric (`<#` … `#>`) uses a separate high-memory buffer, not `PAD`.
 - **POSTPONE** / **[COMPILE]** use captured `executeID` + emit `LIT`/`EXECUTE` for immediate words.
-- **ENVIRONMENT?** returns values for `CORE`, `CORE-EXT`, `/COUNTED-STRING` (255), `ADDRESS-UNIT-BITS`, `MAX-CHAR`, `FILE`, `FILE-ACCESS`, `FILE-EXT`.
+- **ENVIRONMENT?** returns values for `CORE`, `CORE-EXT`, `/COUNTED-STRING` (255), `ADDRESS-UNIT-BITS`, `MAX-CHAR`, `FILE`, `FILE-ACCESS`, `FILE-EXT`, `EXCEPTION`.
 - Memory: 1 MB dictionary region; low fixed layout `SOURCE` (1024) → `STRING_BUFFER` (4096) → `PAD` (1024) → data/return stacks; **UNUSED** / **.FREE** report free dictionary bytes.
 
 ### Low-memory map (implementation-defined)
@@ -97,6 +98,21 @@ ANS optional word set 11.6.1 (file operations) and key 11.6.2 extensions are imp
 
 Host extension **`FLOAD`** remains available alongside ANS `INCLUDED` / `INCLUDE-FILE`.
 
+## Exception (9) — Complete
+
+ANS word set 9.6.1 and extensions 9.6.2 (`ABORT`/`ABORT"` as `THROW` aliases).
+
+| Word | Stack / notes |
+|------|----------------|
+| `CATCH` | `( xt -- n | i*x n )` — saves data/return stack depths, `STATE`, loop-control stack, and input-source nesting; executes `xt`; pushes `0` on normal completion or the throw code |
+| `THROW` | `( n -- )` — `0` is a no-op; non-zero unwinds to the nearest `CATCH`, restoring saved depths and input nesting per 9.3.5 |
+| `ABORT` | `( -- )` — `THROW -1` (silent reset if no handler) |
+| `ABORT"` | `( flag "ccc" -- )` — if flag, `THROW -2` (message shown only if uncaught) |
+
+Unhandled `THROW` with no active `CATCH`: `-1` → classic `ABORT` reset; `-2` → type stored `ABORT"` text then reset; other codes → `? THROW n` then reset.
+
+Not yet wired: automatic `THROW` of standard codes (-3…-75) from every ambiguous condition (division by zero still uses `errorFlag` + message).
+
 ## TZForth-specific extensions (non-ANS)
 
 `FLOAD`, `EDIT`, `CHDIR`, `DIR`, `FILE-ECHO`, `DEBUG-ON`/`DEBUG-OFF`, `RESET`, `CLS`, `BYE`, `ANS-VALIDATE`, `FORGET-WORD`, `>LFA`, `>HEADER`, `>NFA`, `ID.`, `\\` (block comment to `{`), `\\S`, `DP`, high-level `HERE` (`DP @`), `ERASE` (`0 FILL`), etc.
@@ -107,16 +123,17 @@ Not implemented (no current plan unless requested):
 
 - **Double** (`D+`, `D.`, `2CONSTANT`, …)
 - **Float**
-- **Exception** (`CATCH`, `THROW`)
+- **Facility** (`AT-XY`, `TIME&DATE`, …)
 - **String** (`COMPARE`, `SEARCH`, …)
 - **Block**
 - **Locals**
-- **Memory-Allocation**
-- Full **Programming-Tools** (`LOCATE`, `COMPILE`, …)
+- **Memory-Allocation** (`ALLOCATE`, `FREE`, `RESIZE`)
+- **Extended-Character**
+- Full **Programming-Tools** (`LOCATE`, `COMPILE`, `REQUIRE`, …)
 
 ## Recommendations
 
 - TZForth is highly functional for classic Forth sources, REPL, sandboxed `FLOAD`/`EDIT`/`CHDIR`, ANS Core + Core Ext conformance testing, and ANS File-Access file I/O / `INCLUDED`.
-- Next logical steps (if desired): `REQUIRE`/`REQUIRED`, Exception (`CATCH`/`THROW`), or vocabulary polish to hide kernel internals.
+- Next logical steps (if desired): Double-Number, Float, Facility, or map remaining `errorFlag` paths to standard `THROW` codes.
 
 For full standard details, see the official 2012 ANS Forth document (sections 6.1, 6.2, and optional word sets in chapters 7–18).

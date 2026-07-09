@@ -521,6 +521,19 @@ extension TZForth {
         ansTest("RENAME-FILE", "S\" \(fwrPath)\" S\" \(frenamedPath)\" RENAME-FILE 0= .", "-1")
         ansTest("READ renamed file", "S\" \(frenamedPath)\" R/O OPEN-FILE DROP FILE-SIZE DROP DROP .", "5")
 
+        // Exception word set (9): CATCH THROW; ABORT/ABORT" use THROW -1/-2
+        self.feedLine(": t9a 9 ; : t9c1 1 2 3 ['] t9a CATCH ;")
+        ansTest("CATCH normal", "t9c1 . . . . .", "0 9 3 2 1")
+        self.feedLine(": t9t2 8 0 THROW ; : t9c2 1 2 ['] t9t2 CATCH ;")
+        ansTest("THROW 0", "t9c2 . . . .", "0 8 2 1")
+        self.feedLine(": t9t3 7 8 9 99 THROW ; : t9c3 1 2 ['] t9t3 CATCH ;")
+        ansTest("THROW catch", "t9c3 . . .", "99 2 1")
+        self.feedLine(": t9ab ABORT ; : t9abc 1 ['] t9ab CATCH ;")
+        ansTest("ABORT CATCH", "t9abc . .", "-1 1")
+        ansTest("ENVIRONMENT? EXCEPTION", "S\" EXCEPTION\" ENVIRONMENT? .", "-1")
+        self.feedLine(": t9t5 2DROP 2DROP 9999 THROW ; : t9c5 1 2 3 4 ['] t9t5 CATCH DEPTH ;")
+        ansTest("CATCH depth restore", "t9c5 .", "5")
+
         results += "TEST6 ANS core summary: \(ansPassed)/\(ansTotal) passed\n"
         if ansPassed != ansTotal {
             results += "WARNING: some ANS 2012 core tests failed — review against standard stack effects.\n"

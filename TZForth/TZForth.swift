@@ -522,7 +522,7 @@ public final class TZForth {
         ("TRUE",    "( -- -1 )",          "true flag"),
         ("FALSE",   "( -- 0 )",           "false flag"),
         ("BL",      "( -- 32 )",          "blank character (space)"),
-        ("DUMP",    "( addr u -- )",      "dump u cells starting at addr"),
+        ("DUMP",    "( addr u -- )",      "hex dump u bytes from addr (16 per line, ASCII gutter)"),
         (".(",      "( -- )",             "print text until ) immediately (immediate)"),
         (".\"",     "( -- )",             "print text until \" (immediate)"),
         ("(",       "( -- )",             "comment until ) (immediate)"),
@@ -4502,17 +4502,45 @@ public final class TZForth {
             self.onQuitRequested?()
         }
 
-        // Simple DUMP ( addr u -- )  prints u cells starting at addr
+        // DUMP ( addr u -- )  ANS Programming-Tools — hex dump of u address units (bytes).
         _ = register("DUMP") {
-            let u = Int(self.pop())
-            var addr = Int(self.pop())
-            for i in 0..<u {
-                if i > 0 && i % 8 == 0 { self.putkey(10) }
-                let val = self.readCell(addr)
-                self.tell(String(format: "%016llx ", UInt64(bitPattern: Int64(val))))
-                addr += 8
+            let byteCount = Int(self.pop())
+            let start = Int(self.pop())
+            if byteCount <= 0 { return }
+            let bytesPerLine = 16
+            var offset = 0
+            while offset < byteCount {
+                let lineAddr = start + offset
+                let lineLen = min(bytesPerLine, byteCount - offset)
+                var line = String(format: "%08X  ", lineAddr)
+                var ascii = ""
+                for i in 0..<lineLen {
+                    let addr = lineAddr + i
+                    let b: UInt8
+                    if addr < 0 || addr >= self.memory.count {
+                        self.tell("? DUMP out of range (addr=\(addr))\n")
+                        self.errorFlag = true
+                        return
+                    }
+                    b = self.memory[addr]
+                    line += String(format: "%02X", b)
+                    line += (i == 7) ? "  " : " "
+                    if b >= 32 && b < 127 {
+                        ascii.append(Character(UnicodeScalar(b)))
+                    } else {
+                        ascii.append(".")
+                    }
+                }
+                if lineLen < bytesPerLine {
+                    let missing = bytesPerLine - lineLen
+                    for i in 0..<missing {
+                        line += "   "
+                        if i == 7 - lineLen && lineLen <= 7 { line += " " }
+                    }
+                }
+                self.tell(line + " |" + ascii + "|\n")
+                offset += lineLen
             }
-            self.putkey(10)
         }
 
         // .(  immediate — print characters until )

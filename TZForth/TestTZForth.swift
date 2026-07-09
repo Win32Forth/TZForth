@@ -470,6 +470,7 @@ hello
     ansTest("C! C@", "65 t6mem C! t6mem C@ .", "65")
     ansTest("+!", "0 t6mem ! 5 t6mem +! t6mem @ .", "5")
     ansTest("FILL", "t6mem 3 65 FILL t6mem C@ .", "65")
+    ansTest("DUMP", "t6mem 3 65 FILL t6mem 3 DUMP", "41 41 41")
     ansTest("MOVE", "t6mem 8 + 3 66 FILL t6mem 16 + 3 0 FILL t6mem 8 + t6mem 16 + 3 MOVE t6mem 16 + C@ .", "66")
     ansTest(",", "42 , 43 .", "43")
     // ALLOT tested indirectly via , behavior

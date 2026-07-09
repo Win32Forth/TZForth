@@ -492,6 +492,12 @@ public final class TZForth {
         ("COUNT",   "( c-addr -- addr u )", "from counted string addr return char-addr and length"),
 
         // Core Extensions (6.2)
+        (".R",      "( n width -- )",     "print signed number right-justified in width field"),
+        ("TO",      "( n -- ) name",      "store n into a VALUE (parsing)"),
+        ("PARSE-NAME","( -- c-addr u )",  "parse name from input (skip leading blanks, BL-delimited)"),
+        ("HOLDS",   "( c-addr u -- )",    "add string to pictured numeric output (prepend via HOLD)"),
+        ("BUFFER:", "( u -- ) name",      "create an aligned buffer of u bytes"),
+        ("UNUSED",  "( -- u )",           "bytes remaining in dictionary (HERE to dictionary limit)"),
         ("0<>",     "( x -- flag )",      "true if not zero"),
         ("<>",      "( n1 n2 -- flag )",  "not equal"),
         ("U>",      "( u1 u2 -- flag )",  "unsigned greater"),
@@ -2494,6 +2500,14 @@ public final class TZForth {
             if s.count < wid { s = String(repeating: " ", count: wid - s.count) + s }
             self.tell(s)
         }
+        _ = register(".R") {
+            let wid = Int(self.pop())
+            let v = self.pop()
+            let b = self.readCell(self.BASE)
+            var s = self.formatNumber(v, base: b, signed: true)
+            if s.count < wid { s = String(repeating: " ", count: wid - s.count) + s }
+            self.tell(s)
+        }
         _ = register("TYPE") {
             let len = Int(self.pop())
             let addr = Int(self.pop())
@@ -2665,8 +2679,38 @@ public final class TZForth {
             }
             // Do not consume the delim (standard PARSE leaves it in the input stream)
             let addr = self.SOURCE_BUFFER + startPos
+            self.writeCell(self.IN, startPos + len)
             self.push( Cell(addr) )
             self.push( Cell(len) )
+        }
+
+        // PARSE-NAME ( -- c-addr u )  Core Ext
+        // Skip leading delimiters (chars <= BL), then parse up to BL without consuming the delimiter.
+        _ = register("PARSE-NAME") {
+            while !self.inputQueue.isEmpty {
+                let b = self.inputQueue.first!
+                if b > 32 { break }
+                if b == 10 || b == 13 { break }
+                _ = self.consumeInput()
+            }
+            let startPos = Int(self.readCell(self.IN))
+            var len = 0
+            while !self.inputQueue.isEmpty {
+                let b = self.inputQueue.first!
+                if b == 32 || b == 10 || b == 13 { break }
+                _ = self.consumeInput()
+                len += 1
+            }
+            self.push(Cell(self.SOURCE_BUFFER + startPos))
+            self.push(Cell(len))
+        }
+
+        // UNUSED ( -- u )  Core Ext — bytes from HERE to the dictionary limit (below pictured-numeric buffer).
+        _ = register("UNUSED") {
+            let here = self.readCell(self.DP_ADDR)
+            let limit = self.pnoBufferAddr > 0 ? self.pnoBufferAddr : (self.MEM_SIZE - self.PNO_BUFFER_SIZE)
+            let u = max(0, limit - here)
+            self.push(Cell(u))
         }
 
         // === Full implementation of counted loops: DO ... LOOP / +LOOP , ?DO, I, UNLOOP, LEAVE ===
@@ -3468,6 +3512,28 @@ public final class TZForth {
             self.writeCell(storageAddr, newXt)
         }
 
+        // TO ( n "<name>" -- )  Core Ext — parsing assignment for VALUE (stores n, not an xt).
+        _ = register("TO", immediate: false) {
+            let n = self.pop()
+            let name = self.parseWord()
+            if name.isEmpty { self.tell("? TO needs a name\n"); self.errorFlag = true; return }
+            let hdr = self.findWord(name)
+            if hdr == 0 { self.tell("? TO ? " + name + "\n"); self.errorFlag = true; return }
+            let cfa = self.getCFA(hdr)
+            let first = self.readCell(Int(cfa))
+            var storageAddr: Int = 0
+            if first == self.docolID {
+                let second = self.readCell(Int(cfa) + 8)
+                if second != self.litID {
+                    self.tell("? TO target does not look like a VALUE\n"); self.errorFlag = true; return
+                }
+                storageAddr = Int(self.readCell(Int(cfa) + 16))
+            } else {
+                self.tell("? TO target is not a VALUE\n"); self.errorFlag = true; return
+            }
+            self.writeCell(storageAddr, n)
+        }
+
         // CREATE ( "<spaces>name" -- )  ANS 2012
         // Create a word "name" whose execution semantics are to push its data-field address.
         // The data field starts at the current HERE after CREATE (user can then , ALLOT etc.).
@@ -3581,6 +3647,8 @@ public final class TZForth {
         // Default is 0 (off) because the data cell lives in the zeroed memory area.
         self.feedLine("VARIABLE FILE-ECHO")
         self.feedLine(": ERASE 0 FILL ;")  // high-level so SEE shows source (0 FILL)
+        self.feedLine(": HOLDS ( c-addr u -- ) BEGIN DUP WHILE 1- 2DUP + C@ HOLD REPEAT 2DROP ;")
+        self.feedLine(": BUFFER: CREATE ALLOT ALIGN ;")
 
         // Capture the data address of FILE-ECHO by walking its colon body (DOCOL LIT <addr> EXIT).
         // This lets FLOAD check it quickly without repeated dictionary lookup or tick+exec.

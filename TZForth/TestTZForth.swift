@@ -539,6 +539,12 @@ hello
     ansTest("ERASE", "HERE 5 ERASE HERE C@ HERE 4 + C@ . .", "0 0")
     ansTest("COMPILE,", ": [c+] ['] + COMPILE, ; IMMEDIATE : tcm [c+] ; 10 20 tcm .", "30")
     ansTest("VALUE IS", "123 VALUE v1 v1 .  456 IS v1 v1 .", "123 456")
+    ansTest("TO", "100 VALUE tv1  200 TO tv1  tv1 .", "200")
+    ansTest(".R", "-5 8 .R", "-5")
+    ansTest("PARSE-NAME", "S\" : tpn PARSE-NAME TYPE ; tpn   hello\" EVALUATE", "hello")
+    ansTest("HOLDS", "123 S>D <# #S S\" Num: \" HOLDS #> TYPE", "Num: 123")
+    ansTest("BUFFER:", "64 BUFFER: tb1 tb1 99 OVER C! C@ .", "99")
+    ansTest("UNUSED", "UNUSED 1000 > .", "-1")
     ansTest("DEFER IS DEFER@ DEFER!", "DEFER d1 : a1 777 ; ' a1 IS d1 d1 . : a2 888 ; ' a2 ' d1 DEFER! d1 .", "777 888")
     ansTest("CASE OF ENDOF ENDCASE", " ' CASE  ' OF  ' ENDOF  ' ENDCASE  DROP DROP DROP DROP 42 .", "42")
 

@@ -261,6 +261,9 @@ public final class TZForth {
         ("/MOD",    "( n1 n2 -- rem quot )", "remainder and quotient"),
         ("/",       "( n1 n2 -- quot )",  "division (quotient)"),
         ("*/MOD",   "( n1 n2 n3 -- rem quot )", "multiply then divmod"),
+        ("*/",      "( n1 n2 n3 -- n4 )", "multiply to double-cell, divide (quotient)"),
+        ("2*",      "( x1 -- x2 )",       "shift left one bit (multiply by two)"),
+        ("2/",      "( x1 -- x2 )",       "arithmetic shift right one bit (divide by two)"),
         ("M*",      "( n1 n2 -- d )",     "signed double multiply (low high)"),
         ("FM/MOD",  "( d n -- rem quot )", "floored divmod"),
         ("SM/REM",  "( d n -- rem quot )", "symmetric divmod"),
@@ -1432,6 +1435,15 @@ public final class TZForth {
             let prod = n1 * n2
             self.push( prod % n3 ); self.push( prod / n3 )
         }
+        _ = register("*/") {
+            let n3 = self.pop(); let n2 = self.pop(); let n1 = self.pop()
+            if n3 == 0 { self.tell("? Division by zero\n"); self.errorFlag = true; self.push(0); return }
+            // ANS: M* double-cell product, then divide by n3 (trunc toward zero, same as /).
+            let prod = Int64(n1) * Int64(n2)
+            self.push(Cell(prod / Int64(n3)))
+        }
+        _ = register("2*") { let a = self.pop(); self.push(a << 1) }
+        _ = register("2/") { let a = self.pop(); self.push(a >> 1) }
         _ = register("M*") {
             let b = self.pop(); let a = self.pop()
             let prod = Int64(a) * Int64(b)

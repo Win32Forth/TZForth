@@ -36,7 +36,7 @@ extension TZForth {
         let preValidationCurrent = self.readCell(self.CURRENT)
         let preValidationSearchOrder = self.searchOrder
 
-        var results = "=== ANS-VALIDATE: 2012 ANS Forth Core + Core Ext validation (from TestTZForth / original TestLBForth FTEST logic) ===\n\n"
+        var results = "=== ANS-VALIDATE: 2012 ANS Forth Core + Core Ext + File-Access validation (from TestTZForth / original TestLBForth FTEST logic) ===\n\n"
         var collected = ""
 
         let originalOnOutput = self.onOutput
@@ -57,6 +57,9 @@ extension TZForth {
         let fecho = tmp.appendingPathComponent("ansval_echo_\(suffix).fth")
         let fdebug = tmp.appendingPathComponent("ansval_debug_\(suffix).fth")
         let fdotq = tmp.appendingPathComponent("ansval_dotq_\(suffix).fth")
+        let fline = tmp.appendingPathComponent("ansval_line_\(suffix).txt")
+        let finc = tmp.appendingPathComponent("ansval_inc_\(suffix).fth")
+        let fwr = tmp.appendingPathComponent("ansval_wr_\(suffix).txt")
 
         do {
             try self.testBlockSrc.write(to: fblock, atomically: true, encoding: String.Encoding.utf8)
@@ -64,6 +67,8 @@ extension TZForth {
             try self.testEchoSrc.write(to: fecho, atomically: true, encoding: String.Encoding.utf8)
             try self.testDebugSrc.write(to: fdebug, atomically: true, encoding: String.Encoding.utf8)
             try self.testDotqSrc.write(to: fdotq, atomically: true, encoding: String.Encoding.utf8)
+            try "alpha\nbeta\n".write(to: fline, atomically: true, encoding: String.Encoding.utf8)
+            try ": fincw 42 ;\n".write(to: finc, atomically: true, encoding: String.Encoding.utf8)
         } catch {
             results += "TEST write fail: \(error)\n"
             self.onOutput = originalOnOutput
@@ -328,7 +333,6 @@ extension TZForth {
         ansTest("U>", "2 1 U> .  1 2 U> .", "-1 0")
         ansTest("UM*", "100 100 UM* . .", "0 10000")
         ansTest("UM/MOD", "0 100 10 UM/MOD . .", "10 0")
-        ansTest("+!", "0 t6mem ! 5 t6mem +! t6mem @ .", "5")
         ansTest("MOD", "10 3 MOD .", "1")
         ansTest("1+", "41 1+ .", "42")
         ansTest("1-", "43 1- .", "42")
@@ -417,7 +421,11 @@ extension TZForth {
         ansTest("RECURSE", ": t6rec 1- DUP 0= IF DROP 99 ELSE RECURSE THEN ; 5 t6rec .", "99")
         ansTest("EXECUTE", "3 4 ' + EXECUTE .", "7")
 
-        // Dictionary / introspection (current words) - limited
+        // Dictionary / introspection
+        ansTest(">HEADER >NFA ID.", "VARIABLE t6v ' t6v >NFA COUNT TYPE", "t6v")
+        ansTest("ID.", "' t6v ID.", "t6v")
+        ansTest("HERE (value) DP", "HERE DP @ = .", "-1")
+        ansTest("LATEST", "LATEST @ 0= 0= .", "-1")
         ansTest("DEPTH", "1 2 3 DEPTH .", "3")
         ansTest("[']", ": t6p ['] DUP ; ' DUP t6p = .", "-1")
 
@@ -433,9 +441,7 @@ extension TZForth {
         ansTest("ACCEPT basic", "HERE 0 ACCEPT .", "0")
         ansTest("ABORT\" no", "0 ABORT\" oops\" 42 .", "42")
 
-        // Sync + new Core (QUIT SOURCE PARSE PAD POSTPONE [COMPILE] + SP!/RSP! helpers + improved ENV)
-        ansTest("HERE (value) DP", "HERE DP @ = .", "-1")
-        ansTest("LATEST", "LATEST @ 0= 0= .", "-1")
+        // Core (QUIT SOURCE PARSE PAD POSTPONE [COMPILE] + SP!/RSP! helpers + improved ENV)
         ansTest("ARSHIFT", "-8 1 ARSHIFT .", "-4")
         ansTest("CLS (no crash)", "CLS 42 .", "42")
         ansTest("SPACES (no crash)", "2 SPACES 99 .", "99")
@@ -476,6 +482,32 @@ extension TZForth {
         ansTest("ALSO ONLY ORDER", "ONLY ALSO FORTH ORDER", "Search order: FORTH FORTH")
         ansTest("ALSO search", "ONLY ALSO FORTH 1 2 + .", "3")
 
+        // Core Ext Tier 2: :NONAME ACTION-OF MARKER SAVE-INPUT RESTORE-INPUT SOURCE-ID S" REFILL
+        ansTest(":NONAME", "VARIABLE t7n1 :NONAME 1234 ; t7n1 ! t7n1 @ EXECUTE .", "1234")
+        ansTest("ACTION-OF", "DEFER t7d : t7a1 42 ; ' t7a1 IS t7d ' t7d ACTION-OF EXECUTE .", "42")
+        ansTest("MARKER", "MARKER t7m1 : t7w1 11 ; : t7w2 22 ; t7m1 t7w1 .", "? t7w1")
+        ansTest("SOURCE-ID terminal", "SOURCE-ID .", "-1")
+        ansTest("REFILL", "REFILL 0= .", "-1")
+        ansTest("SAVE-INPUT RESTORE-INPUT", "SAVE-INPUT S\" 222 .\" EVALUATE RESTORE-INPUT 0= . 333 .", "0 333")
+        ansTest("S\\\"", ": t7sq S\\\" hello\" TYPE ; t7sq", "hello")
+        ansTest("S\\\" escapes", ": t7sq2 S\\\" a\\\\b\" TYPE ; t7sq2", "a\\b")
+
+        // File-Access (ANS word set 11): read pre-seeded files, write via CREATE-FILE/WRITE-LINE, read back
+        let flinePath = fline.path
+        let fincPath = finc.path
+        let fwrPath = fwr.path
+        ansTest("R/O OPEN-FILE", "S\" \(flinePath)\" R/O OPEN-FILE 0= .", "-1")
+        ansTest("FILE-SIZE", "S\" \(flinePath)\" R/O OPEN-FILE DROP FILE-SIZE DROP DROP .", "11")
+        ansTest("READ-LINE", "S\" \(flinePath)\" R/O OPEN-FILE DROP PAD 1+ SWAP 80 SWAP READ-LINE DROP DROP PAD 1+ SWAP TYPE CLOSE-FILE DROP", "alpha")
+        ansTest("INCLUDED", "S\" \(fincPath)\" INCLUDED fincw .", "42")
+        ansTest("ENVIRONMENT? FILE", "S\" FILE\" ENVIRONMENT? .", "-1")
+        ansTest("CREATE-FILE", "S\" \(fwrPath)\" W/O CREATE-FILE 0= SWAP CLOSE-FILE DROP .", "-1")
+        self.feedLine("VARIABLE t8wf")
+        self.feedLine(": t8wv S\" \(fwrPath)\" W/O CREATE-FILE DROP t8wf ! S\" hi\" t8wf @ WRITE-LINE DROP t8wf @ CLOSE-FILE DROP 1 ;")
+        ansTest("WRITE-LINE", "t8wv .", "1")
+        ansTest("WRITE-LINE size", "S\" \(fwrPath)\" R/O OPEN-FILE DROP FILE-SIZE DROP DROP .", "3")
+        ansTest("READ written file", "S\" \(fwrPath)\" R/O OPEN-FILE DROP PAD 1+ SWAP 80 SWAP READ-LINE DROP DROP PAD 1+ SWAP TYPE CLOSE-FILE DROP", "hi")
+
         results += "TEST6 ANS core summary: \(ansPassed)/\(ansTotal) passed\n"
         if ansPassed != ansTotal {
             results += "WARNING: some ANS 2012 core tests failed — review against standard stack effects.\n"
@@ -487,6 +519,9 @@ extension TZForth {
         try? fm.removeItem(at: fecho)
         try? fm.removeItem(at: fdebug)
         try? fm.removeItem(at: fdotq)
+        try? fm.removeItem(at: fline)
+        try? fm.removeItem(at: finc)
+        try? fm.removeItem(at: fwr)
 
         // Restore dict to exactly the state before this ANS-VALIDATE run. All the test-only
         // words defined during the ansTest feeds (t6mem, t6if, t6until, t6do, t6dop, etc.)

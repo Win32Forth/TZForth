@@ -510,9 +510,11 @@ public final class TZForth {
         ("FIND",    "( c-addr -- c-addr 0 | xt 1 | xt -1 )", "find word from counted string (from WORD)"),
         ("FORGET",  "( -- ) name",        "forget name and all words defined after it"),
         ("FORGET-WORD", "( xt -- )",      "forget using xt ( ' NAME FORGET-WORD )"),
-        (">HEADER", "( xt -- header )",   "convert xt to header (starts with link field; name count+text at +8/+9)"),
-        (">LFA",    "( xt -- lfa )",      "convert xt to link field (alias for >HEADER)"),
-        (">NFA",    "( xt -- nfa )",      "convert xt to name field addr (flags+len byte; COUNT TYPE works for ordinary words)"),
+        (">HEADER", "( cfa -- header )",  "find header for word with this code-field address (not primitive ID from ')"),
+        (">LFA",    "( cfa -- lfa )",     "convert cfa to link field (alias for >HEADER)"),
+        (">NFA",    "( cfa -- nfa )",     "convert cfa to name field (flags+len byte; use NFA on a header)"),
+        ("HEADER'", "( -- ) name",        "parse name; push its dictionary header (link field addr)"),
+        ("CFA'",    "( -- ) name",        "parse name; push its code-field address"),
         ("ID.",     "( xt -- )",          "print the name of the word given its xt (robust, masks flags from count)"),
         ("VARIABLE","( -- ) name",        "create a variable"),
         ("CONSTANT","( n -- ) name",      "create a constant"),
@@ -2506,9 +2508,10 @@ public final class TZForth {
             self.tell(cnm + "\n")
         }
 
-        // >HEADER ( xt -- header )  Given a code field address (xt), return the
+        // >HEADER ( cfa -- header )  Given a code field address, return the
         // start of its dictionary header (the link field address).  This is the
         // key primitive needed to implement proper linked-list dictionary walking.
+        // Note: ' on a primitive pushes its small execution ID, not the cfa — use HEADER' or CFA'.
         // The active user-facing FORGET is the parsing primitive below (FORGET NAME).
         // FORGET now also restores HERE to reclaim memory for the forgotten word(s).
         _ = register(">HEADER") {
@@ -2528,6 +2531,40 @@ public final class TZForth {
                 }
             }
             self.push(0)   // not found
+        }
+
+        // HEADER' ( -- ) name  — parse name, push dictionary header (0 if not found).
+        _ = register("HEADER'") {
+            let name = self.parseWord()
+            if name.isEmpty {
+                self.tell("? HEADER' needs a name\n")
+                self.errorFlag = true
+                return
+            }
+            let hdr = self.findWord(name)
+            if hdr == 0 {
+                self.tell("? \(name) ?\n")
+                self.errorFlag = true
+                return
+            }
+            self.push(hdr)
+        }
+
+        // CFA' ( -- ) name  — parse name, push code-field address (0 if not found).
+        _ = register("CFA'") {
+            let name = self.parseWord()
+            if name.isEmpty {
+                self.tell("? CFA' needs a name\n")
+                self.errorFlag = true
+                return
+            }
+            let hdr = self.findWord(name)
+            if hdr == 0 {
+                self.tell("? \(name) ?\n")
+                self.errorFlag = true
+                return
+            }
+            self.push(self.getCFA(hdr))
         }
 
         _ = register("]", immediate: false) { self.writeCell(self.STATE, 1) }
@@ -5330,11 +5367,11 @@ public final class TZForth {
         // very start of the header, so >HEADER is effectively >LFA).
         self.feedLine(": >LFA >HEADER ;")
 
-        // >NFA gives address of the name field (the flags+length byte). For words
-        // defined without IMMEDIATE or HIDDEN, the byte value is just the name length,
-        // so COUNT TYPE on it will print the name cleanly. For flagged words the
-        // count will be inflated by the flag bits.
-        self.feedLine(": >NFA >HEADER 8 + ;   ( xt -- nfa )")
+        // NFA / CFA convert a *header* address (from HEADER', LATEST, etc.).
+        // >NFA / >HEADER take a *code-field address* (cfa) — use CFA' or ' on colon defs.
+        self.feedLine(": NFA ( hdr -- nfa ) 8 + ;")
+        self.feedLine(": CFA ( hdr -- cfa ) DUP 8 + C@ 31 AND 1+ BEGIN DUP 7 AND WHILE 1+ REPEAT SWAP 8 + + ;")
+        self.feedLine(": >NFA >HEADER 8 + ;   ( cfa -- nfa )")
 
         // ID. is a robust "print name from xt" that masks the length out of the
         // flags+len byte, so it always prints exactly the name chars even for

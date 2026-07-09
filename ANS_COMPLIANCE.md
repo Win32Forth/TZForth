@@ -2,7 +2,7 @@
 
 This document tracks implementation status of the 2012 ANS Forth Standard word sets in TZForth (Swift port of the lbForth model). Generated from codebase inspection (`TZForth/TZForth.swift`, `TestTZForth.swift`, `TZForthTests.swift`).
 
-Last update: Double-Number word set (8) complete — all 8.6.1 words plus 8.6.2 extensions (`2ROT`, `2VALUE`, `DU<`).
+Last update: Locals word set (13) complete — `(LOCAL)`, `LOCALS|`, `{:`.
 
 ## Summary
 
@@ -17,7 +17,8 @@ Last update: Double-Number word set (8) complete — all 8.6.1 words plus 8.6.2 
 | **String (17)** | Complete — 17.6.1 (`COMPARE`, `SEARCH`, `SLITERAL`, `/STRING`, `-TRAILING`, `BLANK`, `CMOVE`, `CMOVE>`) |
 | **Memory-Allocation (14)** | Complete — 14.6.1 (`ALLOCATE`, `FREE`, `RESIZE`); extension `GROWMEMORYMB` |
 | **Double-Number (8)** | Complete — 8.6.1 + 8.6.2 (`2ROT`, `2VALUE`, `DU<`); trailing `.` literals |
-| **Other optional sets** | Mostly absent — Float, Facility, Block, Locals, Extended-Character, etc. |
+| **Locals (13)** | Complete — `(LOCAL)`, `LOCALS|`, `{:`; `TO` for locals; max 32 (`#LOCALS`) |
+| **Other optional sets** | Mostly absent — Float, Facility, Block, Extended-Character, etc. |
 
 FTEST harness: run with `FTEST=1 swift /tmp/combined.swift` (concatenate `TZForth.swift`, `TZForthTests.swift`, `TestTZForth.swift`).
 
@@ -31,7 +32,7 @@ All Core words required for conformance are implemented. Notable details:
 - **PARSE** / **PARSE-NAME** return slices of **SOURCE**, not `STRING_BUFFER` or `PAD`.
 - Pictured numeric (`<#` … `#>`) uses a separate high-memory buffer, not `PAD`.
 - **POSTPONE** / **[COMPILE]** use captured `executeID` + emit `LIT`/`EXECUTE` for immediate words.
-- **ENVIRONMENT?** returns values for `CORE`, `CORE-EXT`, `/COUNTED-STRING` (255), `ADDRESS-UNIT-BITS`, `MAX-CHAR`, `SEARCH-ORDER`, `WORDLISTS` (8), `FILE`, `FILE-ACCESS`, `FILE-EXT`, `EXCEPTION`, `STRING`, `MEMORY-ALLOCATION`, `DOUBLE`. **`.ENVIRONMENT`** lists all supported queries.
+- **ENVIRONMENT?** returns values for `CORE`, `CORE-EXT`, `/COUNTED-STRING` (255), `ADDRESS-UNIT-BITS`, `MAX-CHAR`, `SEARCH-ORDER`, `WORDLISTS` (8), `FILE`, `FILE-ACCESS`, `FILE-EXT`, `EXCEPTION`, `STRING`, `MEMORY-ALLOCATION`, `DOUBLE`, `LOCALS`, `#LOCALS` (32). **`.ENVIRONMENT`** lists all supported queries.
 - Memory: **1 MB** default linear region (growable via **`GROWMEMORYMB`**); low fixed layout `SOURCE` (1024) → `STRING_BUFFER` (4096) → `PAD` (1024) → data/return stacks; **UNUSED** / **.FREE** report free dictionary bytes up to the PNO buffer anchor.
 
 ### Low-memory map (implementation-defined)
@@ -201,6 +202,18 @@ ANS word set 8.6.1 and extensions 8.6.2. Double-cell layout matches existing Cor
 
 `TO` accepts a double on the stack for words created by `2VALUE`. `ENVIRONMENT?` answers `DOUBLE`.
 
+## Locals (13) — Complete
+
+ANS word set 13.6.1 and extension 13.6.2. Locals are searched before the dictionary while compiling. Run-time storage uses a re-entrant frame stack in Swift (not the data stack); `EXIT` / `;` release the innermost frame. `ABORT` / `CATCH` release frames per 13.3.3.1.
+
+| Word | Notes |
+|------|-------|
+| `(LOCAL)` | Compile-only message interface (`c-addr u`; `u=0` ends sequence) |
+| `LOCALS|` | Immediate; `name1 ... namen \|` — args initialized from stack (first name ← TOS) |
+| `{:` | Immediate; `{: arg ... \| val ... -- out ... :}` — rightmost arg ← TOS; vals default to 0 |
+
+`TO name` works for locals during compilation. Minimum **32** locals per definition (`ENVIRONMENT?` `#LOCALS`). FTEST covers `LOCALS|`, `{:`, `TO`, and `DO`/`LOOP`.
+
 ## TZForth-specific extensions (non-ANS)
 
 `FLOAD`, `EDIT`, `CHDIR`, `DIR`, `FILE-ECHO`, `DEBUG-ON`/`DEBUG-OFF`, `RESET`, `CLS`, `BYE`, `ANS-VALIDATE`, `.ENVIRONMENT`, `FORGET-WORD`, `>LFA`, `>HEADER`, `>NFA`, `ID.`, `\\` (block comment to `{`), `\\S`, `DP`, high-level `HERE` (`DP @`), `ERASE` (`0 FILL`), `GROWMEMORYMB`, etc.
@@ -212,7 +225,6 @@ Not implemented (no current plan unless requested):
 - **Float**
 - **Facility** (`AT-XY`, `TIME&DATE`, …)
 - **Block**
-- **Locals**
 - **Extended-Character**
 - Full **Programming-Tools** (`LOCATE`, `COMPILE`, `REQUIRE`, …)
 

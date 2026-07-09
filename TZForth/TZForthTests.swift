@@ -565,6 +565,18 @@ extension TZForth {
         ansTest("2ROT", "1. 2. 3. 2ROT 2DROP D.", "3")
         ansTest("ENVIRONMENT? DOUBLE", "S\" DOUBLE\" ENVIRONMENT? .", "-1")
 
+        // Locals (13): LOCALS| {: TO
+        self.feedLine(": t13a LOCALS| x | x ;")
+        ansTest("LOCALS|", "10 t13a .", "10")
+        self.feedLine(": t13b LOCALS| x | 5 TO x x ;")
+        ansTest("LOCALS| TO", "0 t13b .", "5")
+        self.feedLine(": t13c {: a b | c :} b . a . ;")
+        ansTest("{: order", "3 4 t13c", "4 3")
+        self.feedLine(": t13d LOCALS| r | 3 0 DO I r + TO r LOOP r ;")
+        ansTest("LOCALS in DO", "1 t13d .", "4")
+        ansTest("ENVIRONMENT? LOCALS", "S\" LOCALS\" ENVIRONMENT? .", "-1")
+        ansTest("ENVIRONMENT? #LOCALS", "S\" #LOCALS\" ENVIRONMENT? DROP .", "32")
+
         // Core Ext Tier 2: :NONAME ACTION-OF MARKER SAVE-INPUT RESTORE-INPUT SOURCE-ID S" REFILL
         ansTest(":NONAME", "VARIABLE t7n1 :NONAME 1234 ; t7n1 ! t7n1 @ EXECUTE .", "1234")
         ansTest("ACTION-OF", "DEFER t7d : t7a1 42 ; ' t7a1 IS t7d ' t7d ACTION-OF EXECUTE .", "42")

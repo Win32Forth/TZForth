@@ -326,6 +326,7 @@ public final class TZForth {
         var inPos: Cell
         var inputQueue: [UInt8]
         var loopControlStack: [Cell]
+        var localFramesDepth: Int
     }
     private var exceptionFrames: [ExceptionFrame] = []
     /// Set by THROW while unwinding to an active CATCH; checked by innerThread / execute.
@@ -334,6 +335,17 @@ public final class TZForth {
     private var lastAbortQuoteText: String = ""
     /// Depth of `[` … `]` compile-time interpret brackets (for SLITERAL et al.).
     private var bracketCompileDepth: Int = 0
+
+    // ANS Locals word set (13): compile-time names + run-time frame stack (re-entrant).
+    private static let MAX_LOCALS_PER_DEF = 32
+    private var localCompileNames: [String] = []
+    private var localCompileMap: [String: Int] = [:]
+    private var localCompileInitCount: Int = 0
+    private var localCompileInitReverse: Bool = false
+    private var localFrames: [[Cell]] = []
+    private var localInitID: Cell = 0
+    private var localFetchID: Cell = 0
+    private var localStoreID: Cell = 0
 
     // IDs for words used to emit setup code for DO/LOOP etc at compile time (for clean threaded DO...LOOP)
     private var swapID: Cell = 0
@@ -605,6 +617,9 @@ public final class TZForth {
         ("2LITERAL","( d -- )",           "compile double literal (immediate)"),
         ("2VALUE",  "( d -- ) name",      "create modifiable double value (TO)"),
         ("2ROT",    "( d1 d2 d3 -- d2 d3 d1 )", "rotate third double pair to top"),
+        ("(LOCAL)", "( c-addr u -- )",    "declare one local or end sequence (compile-only)"),
+        ("LOCALS|", "( -- ) names |",     "declare locals from stack args at run-time (immediate)"),
+        ("{:",      "( -- ) {: names | :}", "declare locals with {: args | vals -- outs :} syntax"),
         ("U.",      "( u -- )",           "print unsigned"),
         ("EMIT",    "( c -- )",           "emit character"),
         ("TYPE",    "( addr len -- )",    "type string"),
@@ -730,6 +745,7 @@ public final class TZForth {
 
     private var executeID: Cell = 0  // captured ID for EXECUTE so POSTPONE can emit LIT xt EXECUTE for immediates
     private var fetchID: Cell = 0    // ID for @
+    private var storeID: Cell = 0    // ID for !
     private var twoFetchID: Cell = 0 // ID for 2@ (2VALUE / TO detection)
     private var twoStoreID: Cell = 0 // ID for 2!
     private var sQuoteID: Cell = 0   // runtime for (S") used by S" to embed compact string literals that leave c-addr u
@@ -1284,6 +1300,85 @@ public final class TZForth {
         self.push(hi); self.comma()
     }
 
+    private func resetLocalCompileState() {
+        self.localCompileNames.removeAll(keepingCapacity: true)
+        self.localCompileMap.removeAll(keepingCapacity: true)
+        self.localCompileInitCount = 0
+        self.localCompileInitReverse = false
+    }
+
+    private func localNameKey(_ name: String) -> String {
+        name.uppercased()
+    }
+
+    private func validateLocalName(_ name: String) -> Bool {
+        if name.isEmpty { return false }
+        if name.hasSuffix(":") || name.hasSuffix("[") || name.hasSuffix("^") { return false }
+        if name.count == 1, let c = name.first, !c.isLetter { return false }
+        return true
+    }
+
+    private func beginLocalName(_ name: String) {
+        let key = self.localNameKey(name)
+        if !self.validateLocalName(name) {
+            self.tell("? invalid local name \(name)\n")
+            self.errorFlag = true
+            return
+        }
+        if self.localCompileNames.count >= Self.MAX_LOCALS_PER_DEF {
+            self.tell("? too many locals (max \(Self.MAX_LOCALS_PER_DEF))\n")
+            self.errorFlag = true
+            return
+        }
+        if self.localCompileNames.contains(where: { self.localNameKey($0) == key }) {
+            self.tell("? duplicate local \(name)\n")
+            self.errorFlag = true
+            return
+        }
+        self.localCompileNames.append(name)
+    }
+
+    private func finalizeLocalCompilation() {
+        let n = self.localCompileNames.count
+        guard n > 0 else { return }
+        for (i, name) in self.localCompileNames.enumerated() {
+            self.localCompileMap[self.localNameKey(name)] = i
+        }
+        self.push(self.litID); self.comma()
+        self.push(Cell(n)); self.comma()
+        self.push(self.litID); self.comma()
+        self.push(Cell(self.localCompileInitCount)); self.comma()
+        self.push(self.litID); self.comma()
+        self.push(self.localCompileInitReverse ? -1 : 0); self.comma()
+        self.push(self.localInitID); self.comma()
+    }
+
+    private func compileLocalFetch(_ index: Int) {
+        self.push(self.litID); self.comma()
+        self.push(Cell(index)); self.comma()
+        self.push(self.localFetchID); self.comma()
+    }
+
+    private func compileLocalStore(_ index: Int) {
+        self.push(self.litID); self.comma()
+        self.push(Cell(index)); self.comma()
+        self.push(self.localStoreID); self.comma()
+    }
+
+    private func endLocalFrame() {
+        if !self.localFrames.isEmpty {
+            self.localFrames.removeLast()
+        }
+    }
+
+    private func clearAllLocalFrames() {
+        self.localFrames.removeAll(keepingCapacity: true)
+    }
+
+    private func localIndexDuringCompile(_ name: String) -> Int? {
+        self.localCompileMap[self.localNameKey(name)]
+    }
+
     private func allocFileId() -> Int {
         let id = nextFileId
         nextFileId += 1
@@ -1728,6 +1823,9 @@ public final class TZForth {
     }
 
     private func findWord(_ name: String) -> Cell {
+        if self.readCell(self.STATE) != 0, self.localIndexDuringCompile(name) != nil {
+            return Cell(-1)  // sentinel: compiling local reference (not a real header)
+        }
         for wlID in searchOrder {
             let hdr = findWordInWordlist(wlID, name: name)
             if hdr != 0 { return hdr }
@@ -1764,6 +1862,8 @@ public final class TZForth {
         "STRING",
         "MEMORY-ALLOCATION",
         "DOUBLE",
+        "LOCALS",
+        "#LOCALS",
     ]
 
     /// ANS ENVIRONMENT? values for a query string, or nil if unsupported.
@@ -1779,8 +1879,10 @@ public final class TZForth {
             return [255, -1]
         case "WORDLISTS":
             return [Cell(MAX_VOCABS), -1]
-        case "FILE", "FILE-ACCESS", "FILE-EXT", "EXCEPTION", "STRING", "MEMORY-ALLOCATION", "DOUBLE":
+        case "FILE", "FILE-ACCESS", "FILE-EXT", "EXCEPTION", "STRING", "MEMORY-ALLOCATION", "DOUBLE", "LOCALS":
             return [-1]
+        case "#LOCALS":
+            return [Cell(Self.MAX_LOCALS_PER_DEF), -1]
         default:
             return nil
         }
@@ -2058,9 +2160,10 @@ public final class TZForth {
             self.ip = Int(self.currentCodeAddr) + 8
         }
 
-        // EXIT
+        // EXIT (also releases innermost locals frame when present)
         exitID = Cell(primitives.count)
         primitives.append {
+            self.endLocalFrame()
             self.ip = self.rpop()
         }
 
@@ -2127,7 +2230,10 @@ public final class TZForth {
         }
 
         // Now safe to define the rest
-        _ = register("EXIT") { /* already implemented above */ }
+        _ = register("EXIT") {
+            self.endLocalFrame()
+            self.ip = self.rpop()
+        }
 
         dupID = register("DUP")   { let v = self.pop(); self.push(v); self.push(v) }
         dropID = register("DROP")  { _ = self.pop() }
@@ -2251,7 +2357,7 @@ public final class TZForth {
             self.push( self.inputQueue.isEmpty ? 0 : -1 )
         }
 
-        _ = register("!")     { let addr = Int(self.pop()); let val = self.pop(); self.writeCell(addr, val) }
+        self.storeID = register("!") { let addr = Int(self.pop()); let val = self.pop(); self.writeCell(addr, val) }
         fetchID = register("@")     { let addr = Int(self.pop()); self.push(self.readCell(addr)) }
         _ = register("C!")    { let addr = Int(self.pop()); let val = self.pop(); self.writeByte(addr, UInt8(val & 0xff)) }
         _ = register("C@")    { let addr = Int(self.pop()); self.push(Cell(self.readByte(addr))) }
@@ -2545,6 +2651,7 @@ public final class TZForth {
             if name.isEmpty { self.tell("? : needs a name\n"); self.errorFlag = true; return }
 
             self.nonameCompile = false
+            self.resetLocalCompileState()
             self.createWord(name: name, immediate: false)
 
             // Compile DOCOL into the code field (as if user had done DOCOL , )
@@ -2563,6 +2670,7 @@ public final class TZForth {
         // Start an anonymous colon definition. At ; the xt (cfa) is left on the stack.
         _ = register(":NONAME") {
             self.nonameCompile = true
+            self.resetLocalCompileState()
             self.createWord(name: "", immediate: false)
             self.push(self.docolID); self.comma()
             let defsHeadCell = self.readCell(self.CURRENT)
@@ -2589,6 +2697,7 @@ public final class TZForth {
 
             self.writeCell(self.STATE, 0)
             self.loopControlStack.removeAll()  // clean any leftover from unbalanced loops in this def
+            self.resetLocalCompileState()
         }
 
         // RECURSE ( -- )  immediate: compile a call to the current definition (for recursion)
@@ -3584,6 +3693,103 @@ public final class TZForth {
         _ = register("GROWMEMORYMB") {
             let mb = Int(self.pop())
             _ = self.growMemoryToMegabytes(mb)
+        }
+
+        // === ANS Forth 2012 Locals word set (Section 13) ===
+
+        self.localInitID = register("(LOCAL-INIT)") {
+            let reverse = self.pop() != 0
+            let nInit = Int(self.pop())
+            let nLocals = Int(self.pop())
+            var frame = [Cell](repeating: 0, count: max(0, nLocals))
+            if reverse {
+                for i in stride(from: nInit - 1, through: 0, by: -1) where i < frame.count {
+                    frame[i] = self.pop()
+                }
+            } else {
+                for i in 0..<min(nInit, frame.count) {
+                    frame[i] = self.pop()
+                }
+            }
+            self.localFrames.append(frame)
+        }
+
+        self.localFetchID = register("(LOCAL@)") {
+            let idx = Int(self.pop())
+            guard let frame = self.localFrames.last, idx >= 0, idx < frame.count else {
+                self.tell("? (LOCAL@) out of range\n")
+                self.errorFlag = true
+                self.push(0)
+                return
+            }
+            self.push(frame[idx])
+        }
+
+        self.localStoreID = register("(LOCAL!)") {
+            let idx = Int(self.pop())
+            let val = self.pop()
+            guard !self.localFrames.isEmpty, idx >= 0, idx < self.localFrames[self.localFrames.count - 1].count else {
+                self.tell("? (LOCAL!) out of range\n")
+                self.errorFlag = true
+                return
+            }
+            self.localFrames[self.localFrames.count - 1][idx] = val
+        }
+
+        _ = register("(LOCAL)", immediate: true) {
+            if self.readCell(self.STATE) == 0 {
+                self.tell("? (LOCAL) undefined in interpret state\n")
+                self.errorFlag = true
+                return
+            }
+            let u = Int(self.pop())
+            let caddr = Int(self.pop())
+            if u == 0 {
+                self.finalizeLocalCompilation()
+            } else {
+                let name = self.stringFromAddr(caddr, u)
+                self.beginLocalName(name)
+            }
+        }
+
+        _ = register("LOCALS|", immediate: true) {
+            if self.readCell(self.STATE) == 0 {
+                self.tell("? LOCALS| undefined in interpret state\n")
+                self.errorFlag = true
+                return
+            }
+            self.resetLocalCompileState()
+            self.localCompileInitReverse = false
+            while !self.errorFlag {
+                let token = self.parseWord()
+                if token.isEmpty { break }
+                if token == "|" { break }
+                self.beginLocalName(token)
+            }
+            self.localCompileInitCount = self.localCompileNames.count
+            self.finalizeLocalCompilation()
+        }
+
+        _ = register("{:", immediate: true) {
+            if self.readCell(self.STATE) == 0 {
+                self.tell("? {: undefined in interpret state\n")
+                self.errorFlag = true
+                return
+            }
+            self.resetLocalCompileState()
+            self.localCompileInitReverse = true
+            var phase = 0  // 0=args, 1=vals, 2=skip to :}
+            while !self.errorFlag && !self.inputQueue.isEmpty {
+                let token = self.parseWord()
+                if token.isEmpty { break }
+                if token == ":}" { break }
+                if token == "|" { phase = 1; continue }
+                if token == "--" { phase = 2; continue }
+                if phase == 2 { continue }
+                self.beginLocalName(token)
+                if phase == 0 { self.localCompileInitCount += 1 }
+            }
+            self.finalizeLocalCompilation()
         }
 
         _ = register("ALIGN") {
@@ -4729,12 +4935,27 @@ public final class TZForth {
             self.writeCell(storageAddr, newXt)
         }
 
-        // TO ( n "<name>" -- ) / ( d "<name>" -- )  Core Ext + Double ext for 2VALUE
-        _ = register("TO", immediate: false) {
+        // TO ( n "<name>" -- ) / ( d "<name>" -- ) — immediate; VALUE, 2VALUE, and locals
+        _ = register("TO", immediate: true) {
             let name = self.parseWord()
             if name.isEmpty { self.tell("? TO needs a name\n"); self.errorFlag = true; return }
+
+            if let idx = self.localIndexDuringCompile(name) {
+                if self.readCell(self.STATE) == 0 {
+                    self.tell("? TO local undefined in interpret state\n")
+                    self.errorFlag = true
+                    return
+                }
+                self.compileLocalStore(idx)
+                return
+            }
+
             let hdr = self.findWord(name)
-            if hdr == 0 { self.tell("? TO ? " + name + "\n"); self.errorFlag = true; return }
+            if hdr == 0 || hdr == Cell(-1) {
+                self.tell("? TO ? " + name + "\n")
+                self.errorFlag = true
+                return
+            }
             let cfa = self.getCFA(hdr)
             let first = self.readCell(Int(cfa))
             guard first == self.docolID else {
@@ -4746,7 +4967,15 @@ public final class TZForth {
             }
             let storageAddr = Int(self.readCell(Int(cfa) + 16))
             let fourth = self.readCell(Int(cfa) + 24)
-            if fourth == self.twoFetchID {
+            if self.readCell(self.STATE) != 0 {
+                self.push(self.litID); self.comma(); self.push(Cell(storageAddr)); self.comma()
+                if fourth == self.twoFetchID {
+                    self.push(self.twoStoreID); self.comma()
+                } else {
+                    self.push(self.swapID); self.comma()
+                    self.push(self.storeID); self.comma()
+                }
+            } else if fourth == self.twoFetchID {
                 let dhi = self.pop()
                 let dlo = self.pop()
                 self.writeCell(storageAddr, dlo)
@@ -5157,7 +5386,19 @@ public final class TZForth {
             }
 
             let hdr = findWord(name)
-            if hdr != 0 {
+            if hdr == Cell(-1) {
+                if let idx = self.localIndexDuringCompile(name) {
+                    if self.readCell(self.STATE) != 0 {
+                        self.compileLocalFetch(idx)
+                    } else {
+                        self.tell("? local \(name) undefined in interpret state\n")
+                        self.errorFlag = true
+                    }
+                } else {
+                    self.tell("? \(name)\n")
+                    self.errorFlag = true
+                }
+            } else if hdr != 0 {
                 let cfa = getCFA(hdr)
                 let first = readCell(Int(cfa))
 
@@ -5504,7 +5745,8 @@ public final class TZForth {
             sourceBytes: sourceBytes,
             inPos: self.readCell(self.IN),
             inputQueue: self.inputQueue,
-            loopControlStack: self.loopControlStack
+            loopControlStack: self.loopControlStack,
+            localFramesDepth: self.localFrames.count
         )
     }
 
@@ -5523,6 +5765,9 @@ public final class TZForth {
         }
         self.inputQueue = frame.inputQueue
         self.loopControlStack = frame.loopControlStack
+        while self.localFrames.count > frame.localFramesDepth {
+            self.localFrames.removeLast()
+        }
         self.writeCell(self.STATE, frame.state)
         self.rspSet(frame.returnStackDepth)
         self.ip = frame.savedIp
@@ -5552,6 +5797,7 @@ public final class TZForth {
         } else {
             self.tell("? THROW \(n)\n")
         }
+        self.clearAllLocalFrames()
         self.resetRuntimeState()
         self.errorFlag = true
         self.throwActive = true
@@ -5921,6 +6167,7 @@ public final class TZForth {
         pendingEditURL = nil
         pendingLoadURL = nil
         loopControlStack.removeAll()
+        self.clearAllLocalFrames()
         self.exceptionFrames.removeAll()
         self.throwActive = false
         self.lastAbortQuoteText = ""
@@ -6018,6 +6265,7 @@ public final class TZForth {
         //    This + the per-operation checks below make the engine much harder to wedge.
         spSet(1)
         rspSet(1)
+        self.clearAllLocalFrames()
         let initialDict = rstackBase + RSTACK_SIZE * CELL_SIZE
         let safeDictStart = (kernelHere != 0 ? kernelHere : initialDict)
         let h = readCell(DP_ADDR)

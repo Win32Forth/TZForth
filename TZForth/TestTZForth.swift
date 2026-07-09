@@ -450,7 +450,7 @@ hello
     ansTest("?DUP", "0 ?DUP .", "0")
     ansTest("?DUP", "5 ?DUP . .", "5 5")
     ansTest("ROT", "1 2 3 ROT . . .", "1 3 2")
-    ansTest("NIP", "1 2 NIP .", "1")
+    ansTest("NIP", "1 2 NIP .", "2")
     ansTest("TUCK", "1 2 TUCK . . .", "2 1 2")
     ansTest("PICK", "10 20 30 1 PICK .", "20")  // 0=top, 1=next
     ansTest("ROLL", "10 20 30 1 ROLL . . .", "20 30 10")
@@ -581,13 +581,13 @@ hello
     let fincPath = finc.path
     let fwrPath = fwr.path
     ansTest("R/O OPEN-FILE", "S\" \(flinePath)\" R/O OPEN-FILE 0= .", "-1")
-    ansTest("FILE-SIZE", "S\" \(flinePath)\" R/O OPEN-FILE NIP FILE-SIZE DROP DROP .", "11")
-    ansTest("READ-LINE", "S\" \(flinePath)\" R/O OPEN-FILE NIP PAD 1+ SWAP 80 SWAP READ-LINE NIP NIP PAD 1+ SWAP TYPE CLOSE-FILE DROP", "alpha")
+    ansTest("FILE-SIZE", "S\" \(flinePath)\" R/O OPEN-FILE DROP FILE-SIZE DROP DROP .", "11")
+    ansTest("READ-LINE", "S\" \(flinePath)\" R/O OPEN-FILE DROP PAD 1+ SWAP 80 SWAP READ-LINE DROP DROP PAD 1+ SWAP TYPE CLOSE-FILE DROP", "alpha")
     ansTest("INCLUDED", "S\" \(fincPath)\" INCLUDED fincw .", "42")
     ansTest("ENVIRONMENT? FILE", "S\" FILE\" ENVIRONMENT? .", "-1")
     forth.feedLine("VARIABLE t8wf")
-    forth.feedLine(": t8wv S\" \(fwrPath)\" W/O CREATE-FILE NIP t8wf ! S\" hi\" t8wf @ WRITE-LINE DROP t8wf @ CLOSE-FILE DROP ;")
-    ansTest("WRITE-LINE", "t8wv S\" \(fwrPath)\" R/O OPEN-FILE NIP FILE-SIZE DROP DROP .", "3")
+    forth.feedLine(": t8wv S\" \(fwrPath)\" W/O CREATE-FILE DROP t8wf ! S\" hi\" t8wf @ WRITE-LINE DROP t8wf @ CLOSE-FILE DROP ;")
+    ansTest("WRITE-LINE", "t8wv S\" \(fwrPath)\" R/O OPEN-FILE DROP FILE-SIZE DROP DROP .", "3")
 
     print("TEST6 ANS core summary: \(ansPassed)/\(ansTotal) passed")
     if ansPassed != ansTotal {

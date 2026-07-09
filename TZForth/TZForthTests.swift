@@ -366,7 +366,7 @@ extension TZForth {
         ansTest("?DUP", "0 ?DUP .", "0")
         ansTest("?DUP", "5 ?DUP . .", "5 5")
         ansTest("ROT", "1 2 3 ROT . . .", "1 3 2")
-        ansTest("NIP", "1 2 NIP .", "1")
+        ansTest("NIP", "1 2 NIP .", "2")
         ansTest("TUCK", "1 2 TUCK . . .", "2 1 2")
         ansTest("PICK", "10 20 30 1 PICK .", "20")  // 0=top, 1=next
         ansTest("ROLL", "10 20 30 1 ROLL . . .", "20 30 10")

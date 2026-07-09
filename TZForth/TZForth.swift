@@ -2814,7 +2814,7 @@ public final class TZForth {
             self.push( rolled )
         }
         _ = register("TUCK") { let b = self.pop(); let a = self.pop(); self.push(b); self.push(a); self.push(b) }
-        _ = register("NIP") { _ = self.pop() }  // ( x1 x2 -- x1 ) discard top
+        _ = register("NIP") { let b = self.pop(); _ = self.pop(); self.push(b) }  // ( x1 x2 -- x2 )
 
         _ = register("2@") {
             let a = Int(self.pop())

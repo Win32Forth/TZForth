@@ -510,11 +510,9 @@ public final class TZForth {
         ("FIND",    "( c-addr -- c-addr 0 | xt 1 | xt -1 )", "find word from counted string (from WORD)"),
         ("FORGET",  "( -- ) name",        "forget name and all words defined after it"),
         ("FORGET-WORD", "( xt -- )",      "forget using xt ( ' NAME FORGET-WORD )"),
-        (">HEADER", "( cfa -- header )",  "find header for word with this code-field address (not primitive ID from ')"),
+        (">HEADER", "( cfa -- header )",  "find header for word with this code-field address"),
         (">LFA",    "( cfa -- lfa )",     "convert cfa to link field (alias for >HEADER)"),
-        (">NFA",    "( cfa -- nfa )",     "convert cfa to name field (flags+len byte; use NFA on a header)"),
-        ("HEADER'", "( -- ) name",        "parse name; push its dictionary header (link field addr)"),
-        ("CFA'",    "( -- ) name",        "parse name; push its code-field address"),
+        (">NFA",    "( cfa -- nfa )",     "convert cfa to name field (flags+len byte at header+8)"),
         ("ID.",     "( xt -- )",          "print the name of the word given its xt (robust, masks flags from count)"),
         ("VARIABLE","( -- ) name",        "create a variable"),
         ("CONSTANT","( n -- ) name",      "create a constant"),
@@ -2511,7 +2509,6 @@ public final class TZForth {
         // >HEADER ( cfa -- header )  Given a code field address, return the
         // start of its dictionary header (the link field address).  This is the
         // key primitive needed to implement proper linked-list dictionary walking.
-        // Note: ' on a primitive pushes its small execution ID, not the cfa — use HEADER' or CFA'.
         // The active user-facing FORGET is the parsing primitive below (FORGET NAME).
         // FORGET now also restores HERE to reclaim memory for the forgotten word(s).
         _ = register(">HEADER") {
@@ -2531,40 +2528,6 @@ public final class TZForth {
                 }
             }
             self.push(0)   // not found
-        }
-
-        // HEADER' ( -- ) name  — parse name, push dictionary header (0 if not found).
-        _ = register("HEADER'") {
-            let name = self.parseWord()
-            if name.isEmpty {
-                self.tell("? HEADER' needs a name\n")
-                self.errorFlag = true
-                return
-            }
-            let hdr = self.findWord(name)
-            if hdr == 0 {
-                self.tell("? \(name) ?\n")
-                self.errorFlag = true
-                return
-            }
-            self.push(hdr)
-        }
-
-        // CFA' ( -- ) name  — parse name, push code-field address (0 if not found).
-        _ = register("CFA'") {
-            let name = self.parseWord()
-            if name.isEmpty {
-                self.tell("? CFA' needs a name\n")
-                self.errorFlag = true
-                return
-            }
-            let hdr = self.findWord(name)
-            if hdr == 0 {
-                self.tell("? \(name) ?\n")
-                self.errorFlag = true
-                return
-            }
-            self.push(self.getCFA(hdr))
         }
 
         _ = register("]", immediate: false) { self.writeCell(self.STATE, 1) }
@@ -5367,8 +5330,8 @@ public final class TZForth {
         // very start of the header, so >HEADER is effectively >LFA).
         self.feedLine(": >LFA >HEADER ;")
 
-        // NFA / CFA convert a *header* address (from HEADER', LATEST, etc.).
-        // >NFA / >HEADER take a *code-field address* (cfa) — use CFA' or ' on colon defs.
+        // NFA / CFA convert a *header* address (from >HEADER, LATEST, etc.).
+        // >NFA / >HEADER take a *code-field address* (cfa).
         self.feedLine(": NFA ( hdr -- nfa ) 8 + ;")
         self.feedLine(": CFA ( hdr -- cfa ) DUP 8 + C@ 31 AND 1+ BEGIN DUP 7 AND WHILE 1+ REPEAT SWAP 8 + + ;")
         self.feedLine(": >NFA >HEADER 8 + ;   ( cfa -- nfa )")

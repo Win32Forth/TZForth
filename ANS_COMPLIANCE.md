@@ -2,7 +2,7 @@
 
 This document tracks implementation status of the 2012 ANS Forth Standard word sets in TZForth (Swift port of the lbForth model). Generated from codebase inspection (`TZForth/TZForth.swift`, `TestTZForth.swift`, `TZForthTests.swift`).
 
-Last update: String word set (17.6.1) complete — `COMPARE`, `SEARCH`, `SLITERAL`, `/STRING`, `-TRAILING`, `BLANK`, `CMOVE`, `CMOVE>`.
+Last update: Memory-Allocation word set (14) complete — `ALLOCATE`, `FREE`, `RESIZE`; TZForth extension `GROWMEMORYMB`.
 
 ## Summary
 
@@ -15,7 +15,8 @@ Last update: String word set (17.6.1) complete — `COMPARE`, `SEARCH`, `SLITERA
 | **File-Access (11)** | Substantial — 11.6.1 core words + `INCLUDE`/`INCLUDED`; no `REQUIRE`/`REQUIRED` |
 | **Exception (9)** | Complete — `CATCH`, `THROW`; Core `ABORT`/`ABORT"` delegate to `THROW -1`/`-2` |
 | **String (17)** | Complete — 17.6.1 (`COMPARE`, `SEARCH`, `SLITERAL`, `/STRING`, `-TRAILING`, `BLANK`, `CMOVE`, `CMOVE>`) |
-| **Other optional sets** | Mostly absent — Double, Float, Facility, Block, Locals, Memory-Allocation, Extended-Character, etc. |
+| **Memory-Allocation (14)** | Complete — 14.6.1 (`ALLOCATE`, `FREE`, `RESIZE`); extension `GROWMEMORYMB` |
+| **Other optional sets** | Mostly absent — Double, Float, Facility, Block, Locals, Extended-Character, etc. |
 
 FTEST harness: run with `FTEST=1 swift /tmp/combined.swift` (concatenate `TZForth.swift`, `TZForthTests.swift`, `TestTZForth.swift`).
 
@@ -29,8 +30,8 @@ All Core words required for conformance are implemented. Notable details:
 - **PARSE** / **PARSE-NAME** return slices of **SOURCE**, not `STRING_BUFFER` or `PAD`.
 - Pictured numeric (`<#` … `#>`) uses a separate high-memory buffer, not `PAD`.
 - **POSTPONE** / **[COMPILE]** use captured `executeID` + emit `LIT`/`EXECUTE` for immediate words.
-- **ENVIRONMENT?** returns values for `CORE`, `CORE-EXT`, `/COUNTED-STRING` (255), `ADDRESS-UNIT-BITS`, `MAX-CHAR`, `SEARCH-ORDER`, `WORDLISTS` (8), `FILE`, `FILE-ACCESS`, `FILE-EXT`, `EXCEPTION`, `STRING`. **`.ENVIRONMENT`** lists all supported queries.
-- Memory: 1 MB dictionary region; low fixed layout `SOURCE` (1024) → `STRING_BUFFER` (4096) → `PAD` (1024) → data/return stacks; **UNUSED** / **.FREE** report free dictionary bytes.
+- **ENVIRONMENT?** returns values for `CORE`, `CORE-EXT`, `/COUNTED-STRING` (255), `ADDRESS-UNIT-BITS`, `MAX-CHAR`, `SEARCH-ORDER`, `WORDLISTS` (8), `FILE`, `FILE-ACCESS`, `FILE-EXT`, `EXCEPTION`, `STRING`, `MEMORY-ALLOCATION`. **`.ENVIRONMENT`** lists all supported queries.
+- Memory: **1 MB** default linear region (growable via **`GROWMEMORYMB`**); low fixed layout `SOURCE` (1024) → `STRING_BUFFER` (4096) → `PAD` (1024) → data/return stacks; **UNUSED** / **.FREE** report free dictionary bytes up to the PNO buffer anchor.
 
 ### Low-memory map (implementation-defined)
 
@@ -156,9 +157,32 @@ FTEST covers `ABORT`/`ABORT"` with and without `CATCH`, including REPL recovery 
 
 Not yet wired: automatic `THROW` of standard codes (-3…-75) from every ambiguous condition (division by zero still uses `errorFlag` + message).
 
+## Memory-Allocation (14) — Complete
+
+ANS word set 14.6.1 (heap allocate / free / resize). Heap grows **downward** from the PNO buffer (top-anchored); dictionary grows upward from `HERE`. `UNUSED` reflects the gap between `HERE` and the heap/PNO anchor.
+
+| Word | Stack / notes |
+|------|----------------|
+| `ALLOCATE` | `( u -- a-addr ior )` — allocate `u` bytes; `ior` 0 = success, 1 = failure |
+| `FREE` | `( a-addr -- ior )` — return block to free list |
+| `RESIZE` | `( a-addr u -- a-addr' ior )` — resize block; may move; shrink leaves tail on free list |
+
+`ENVIRONMENT?` answers `MEMORY-ALLOCATION`. FTEST covers allocate/free/resize, grow, and rule violations.
+
+### TZForth extension: `GROWMEMORYMB`
+
+`( n -- )` — grow the linear memory array to **n megabytes** (minimum 1, maximum 64). Rules:
+
+- **Once per session** — second call aborts with `? GROWMEMORYMB already used (once per session)`
+- **No shrink** — `n` must exceed current size
+- **Before `ALLOCATE`** — not permitted after any `ALLOCATE` use in the session
+- **Early use** — intended shortly after startup (including during `FLOAD`); sets `errorFlag` and prints message on violation
+
+Default memory at startup: **1 MB**.
+
 ## TZForth-specific extensions (non-ANS)
 
-`FLOAD`, `EDIT`, `CHDIR`, `DIR`, `FILE-ECHO`, `DEBUG-ON`/`DEBUG-OFF`, `RESET`, `CLS`, `BYE`, `ANS-VALIDATE`, `.ENVIRONMENT`, `FORGET-WORD`, `>LFA`, `>HEADER`, `>NFA`, `ID.`, `\\` (block comment to `{`), `\\S`, `DP`, high-level `HERE` (`DP @`), `ERASE` (`0 FILL`), etc.
+`FLOAD`, `EDIT`, `CHDIR`, `DIR`, `FILE-ECHO`, `DEBUG-ON`/`DEBUG-OFF`, `RESET`, `CLS`, `BYE`, `ANS-VALIDATE`, `.ENVIRONMENT`, `FORGET-WORD`, `>LFA`, `>HEADER`, `>NFA`, `ID.`, `\\` (block comment to `{`), `\\S`, `DP`, high-level `HERE` (`DP @`), `ERASE` (`0 FILL`), `GROWMEMORYMB`, etc.
 
 ## Missing optional / future word sets
 
@@ -169,7 +193,6 @@ Not implemented (no current plan unless requested):
 - **Facility** (`AT-XY`, `TIME&DATE`, …)
 - **Block**
 - **Locals**
-- **Memory-Allocation** (`ALLOCATE`, `FREE`, `RESIZE`)
 - **Extended-Character**
 - Full **Programming-Tools** (`LOCATE`, `COMPILE`, `REQUIRE`, …)
 

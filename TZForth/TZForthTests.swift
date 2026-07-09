@@ -506,6 +506,43 @@ extension TZForth {
         ansTest("SLITERAL", "t17sl TYPE", "hello")
         ansTest("ENVIRONMENT? STRING", "S\" STRING\" ENVIRONMENT? .", "-1")
 
+        // Memory-Allocation (14): GROWMEMORYMB first (once per session), then ALLOCATE FREE RESIZE
+        ansTest("GROWMEMORYMB grow", "4 GROWMEMORYMB UNUSED 3000000 > .", "-1")
+        ansTest("ALLOCATE", "64 ALLOCATE DROP DUP 42 SWAP ! DUP @ .", "42")
+        ansTest("ALLOCATE ior", "128 ALLOCATE NIP 0= .", "-1")
+        ansTest("FREE", "64 ALLOCATE DROP DUP FREE 0= .", "-1")
+        ansTest("RESIZE grow", "64 ALLOCATE DROP DUP 128 RESIZE NIP 0= .", "-1")
+        ansTest("GROWMEMORYMB already used", "2 GROWMEMORYMB", "already used")
+        ansTest("ENVIRONMENT? MEMORY-ALLOCATION", "S\" MEMORY-ALLOCATION\" ENVIRONMENT? .", "-1")
+        do {
+            let fAfterAlloc = TZForth()
+            var out = ""
+            fAfterAlloc.onOutput = { out += $0 }
+            fAfterAlloc.feedLine("64 ALLOCATE DROP DROP")
+            out = ""
+            fAfterAlloc.feedLine("4 GROWMEMORYMB")
+            ansTotal += 1
+            if out.contains("not allowed after ALLOCATE") {
+                ansPassed += 1
+                results += "TEST6 GROWMEMORYMB after ALLOCATE: pass\n"
+            } else {
+                results += "TEST6 GROWMEMORYMB after ALLOCATE: FAIL got '\(out.trimmingCharacters(in: .whitespacesAndNewlines))'\n"
+            }
+        }
+        do {
+            let fShrink = TZForth()
+            var out = ""
+            fShrink.onOutput = { out += $0 }
+            fShrink.feedLine("1 GROWMEMORYMB")
+            ansTotal += 1
+            if out.contains("cannot shrink memory") {
+                ansPassed += 1
+                results += "TEST6 GROWMEMORYMB shrink: pass\n"
+            } else {
+                results += "TEST6 GROWMEMORYMB shrink: FAIL got '\(out.trimmingCharacters(in: .whitespacesAndNewlines))'\n"
+            }
+        }
+
         // Core Ext Tier 2: :NONAME ACTION-OF MARKER SAVE-INPUT RESTORE-INPUT SOURCE-ID S" REFILL
         ansTest(":NONAME", "VARIABLE t7n1 :NONAME 1234 ; t7n1 ! t7n1 @ EXECUTE .", "1234")
         ansTest("ACTION-OF", "DEFER t7d : t7a1 42 ; ' t7a1 IS t7d ' t7d ACTION-OF EXECUTE .", "42")

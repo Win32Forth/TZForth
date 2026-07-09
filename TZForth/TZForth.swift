@@ -58,7 +58,9 @@ public final class TZForth {
 
     // MARK: - Configuration
 
-    private let MEM_SIZE = 1024 * 1024   // 1 MB dictionary / heap region
+    private static let DEFAULT_MEMORY_BYTES = 1024 * 1024   // 1 MB default dictionary / heap region
+    private static let MAX_MEMORY_BYTES = 64 * 1024 * 1024  // 64 MB cap for GROWMEMORYMB
+    private static let HEAP_HEADER_BYTES = 8
     private let STACK_SIZE = 256         // data stack depth (cells)
     private let RSTACK_SIZE = 256        // return stack depth (cells)
     /// Fixed low-memory layout: SOURCE, STRING_BUFFER (parse scratch ring), PAD (user only), then stacks.
@@ -442,6 +444,10 @@ public final class TZForth {
         ("-TRAILING","( c-addr u -- c-addr' u' )", "remove trailing spaces"),
         ("SEARCH",  "( c-addr1 u1 c-addr2 u2 -- c-addr3 u3 flag )", "search for substring"),
         ("SLITERAL","( c-addr u -- )",    "compile string literal (immediate; run-time c-addr u)"),
+        ("ALLOCATE","( u -- a-addr ior )","allocate u bytes from heap (ior 0 = success)"),
+        ("FREE",    "( a-addr -- ior )",  "free heap block at a-addr"),
+        ("RESIZE",  "( a-addr u -- a-addr ior )", "resize heap block to u bytes"),
+        ("GROWMEMORYMB","( n -- )",       "grow linear memory to n MB (once per session; no shrink; before ALLOCATE)"),
         ("ALIGN",   "( -- )",             "align DP to cell boundary"),
         ("ALIGNED", "( addr -- addr' )",  "next aligned address"),
         (">BODY",   "( xt -- addr )",     "data field of a CREATEd word"),
@@ -692,6 +698,13 @@ public final class TZForth {
     private var pnoBufferAddr: Int = 0
     private var pnoPtr: Int = 0
 
+    // ANS Memory-Allocation heap (grows downward from PNO buffer) + GROWMEMORYMB state
+    private var heapBump: Int = 0
+    private var usedHeapBlocks: [Int: Int] = [:]
+    private var freeHeapBlocks: [(addr: Int, size: Int)] = []
+    private var allocateEverUsed: Bool = false
+    private var growMemoryAttempted: Bool = false
+
     private var executeID: Cell = 0  // captured ID for EXECUTE so POSTPONE can emit LIT xt EXECUTE for immediates
     private var fetchID: Cell = 0    // ID for @
     private var sQuoteID: Cell = 0   // runtime for (S") used by S" to embed compact string literals that leave c-addr u
@@ -702,7 +715,7 @@ public final class TZForth {
     // MARK: - Init
 
     public init() {
-        memory = Array(repeating: 0, count: MEM_SIZE)
+        memory = Array(repeating: 0, count: Self.DEFAULT_MEMORY_BYTES)
 
         // Layout fixed buffers (SOURCE, STRING_BUFFER, PAD) then data/return stacks above PAD.
         stackBase = (PAD_BUFFER + PAD_BUFFER_SIZE + 7) & ~7
@@ -743,9 +756,7 @@ public final class TZForth {
         // Initial logical cwd (host may override via setup or after scoped chdirs)
         logicalCurrentDirectory = FileManager.default.currentDirectoryPath
 
-        // Pictured numeric output buffer (high in mem, away from growing dictionary)
-        pnoBufferAddr = MEM_SIZE - PNO_BUFFER_SIZE
-        pnoPtr = pnoBufferAddr + PNO_BUFFER_SIZE
+        self.repositionPnoAndHeap()
 
         // === Strong diagnostic after registration ===
         print("=== TZForth INIT DIAGNOSTICS ===")
@@ -1489,7 +1500,7 @@ public final class TZForth {
     /// Bytes from HERE (DP) to the dictionary limit (below the pictured-numeric buffer).
     private func dictionaryFreeBytes() -> Cell {
         let here = readCell(DP_ADDR)
-        let limit = pnoBufferAddr > 0 ? pnoBufferAddr : (MEM_SIZE - PNO_BUFFER_SIZE)
+        let limit = pnoBufferAddr > 0 ? pnoBufferAddr : (memory.count - PNO_BUFFER_SIZE)
         return Cell(max(0, limit - here))
     }
 
@@ -1647,6 +1658,7 @@ public final class TZForth {
         "FILE-ACCESS",
         "FILE-EXT",
         "STRING",
+        "MEMORY-ALLOCATION",
     ]
 
     /// ANS ENVIRONMENT? values for a query string, or nil if unsupported.
@@ -1662,7 +1674,7 @@ public final class TZForth {
             return [255, -1]
         case "WORDLISTS":
             return [Cell(MAX_VOCABS), -1]
-        case "FILE", "FILE-ACCESS", "FILE-EXT", "EXCEPTION", "STRING":
+        case "FILE", "FILE-ACCESS", "FILE-EXT", "EXCEPTION", "STRING", "MEMORY-ALLOCATION":
             return [-1]
         default:
             return nil
@@ -1698,6 +1710,143 @@ public final class TZForth {
             }
         }
         return (hayCaddr, hayLen, false)
+    }
+
+    private func alignAddressUnits(_ n: Int) -> Int {
+        (n + self.CELL_SIZE - 1) & ~(self.CELL_SIZE - 1)
+    }
+
+    private func repositionPnoAndHeap() {
+        self.pnoBufferAddr = self.memory.count - self.PNO_BUFFER_SIZE
+        self.pnoPtr = self.pnoBufferAddr + self.PNO_BUFFER_SIZE
+        self.heapBump = self.pnoBufferAddr
+    }
+
+    private func heapFloorAddress() -> Int {
+        Int(self.readCell(self.DP_ADDR))
+    }
+
+    private func resetHeapState(clearAllocateFlag: Bool) {
+        self.usedHeapBlocks.removeAll(keepingCapacity: true)
+        self.freeHeapBlocks.removeAll(keepingCapacity: true)
+        self.heapBump = self.pnoBufferAddr
+        if clearAllocateFlag {
+            self.allocateEverUsed = false
+        }
+    }
+
+    private func memoryAllocationFailed(_ message: String) {
+        self.tell(message)
+        self.errorFlag = true
+    }
+
+    @discardableResult
+    private func growMemoryToMegabytes(_ mb: Int) -> Bool {
+        if self.growMemoryAttempted {
+            self.memoryAllocationFailed("? GROWMEMORYMB already used (once per session)\n")
+            return false
+        }
+        self.growMemoryAttempted = true
+
+        if self.allocateEverUsed {
+            self.memoryAllocationFailed("? GROWMEMORYMB not allowed after ALLOCATE\n")
+            return false
+        }
+        if mb < 1 {
+            self.memoryAllocationFailed("? GROWMEMORYMB needs at least 1 MB\n")
+            return false
+        }
+
+        let newSize = mb * 1024 * 1024
+        if newSize <= self.memory.count {
+            self.memoryAllocationFailed("? GROWMEMORYMB cannot shrink memory\n")
+            return false
+        }
+        if newSize > Self.MAX_MEMORY_BYTES {
+            self.memoryAllocationFailed("? GROWMEMORYMB exceeds maximum (\(Self.MAX_MEMORY_BYTES / (1024 * 1024)) MB)\n")
+            return false
+        }
+
+        self.memory.append(contentsOf: repeatElement(0, count: newSize - self.memory.count))
+        self.repositionPnoAndHeap()
+        return true
+    }
+
+    private func heapAllocateBytes(_ requested: Int) -> (addr: Int, ior: Cell) {
+        self.allocateEverUsed = true
+        if requested < 0 {
+            return (0, self.FILE_IO_ERROR)
+        }
+        let userSize = self.alignAddressUnits(requested)
+        if userSize == 0 && requested > 0 {
+            return (0, self.FILE_IO_ERROR)
+        }
+
+        if let idx = self.freeHeapBlocks.firstIndex(where: { $0.size >= userSize }) {
+            let block = self.freeHeapBlocks.remove(at: idx)
+            self.usedHeapBlocks[block.addr] = userSize
+            if block.size > userSize {
+                self.freeHeapBlocks.append((block.addr + userSize, block.size - userSize))
+            }
+            return (block.addr, self.FILE_IO_SUCCESS)
+        }
+
+        let total = Self.HEAP_HEADER_BYTES + userSize
+        let blockSize = self.alignAddressUnits(total)
+        let newBump = self.heapBump - blockSize
+        if newBump < self.heapFloorAddress() {
+            return (0, self.FILE_IO_ERROR)
+        }
+        self.heapBump = newBump
+        self.writeCell(newBump, Cell(userSize))
+        let userAddr = newBump + Self.HEAP_HEADER_BYTES
+        self.usedHeapBlocks[userAddr] = userSize
+        return (userAddr, self.FILE_IO_SUCCESS)
+    }
+
+    private func heapFreeBytes(_ userAddr: Int) -> Cell {
+        guard let size = self.usedHeapBlocks.removeValue(forKey: userAddr) else {
+            return self.FILE_IO_ERROR
+        }
+        let header = userAddr - Self.HEAP_HEADER_BYTES
+        if header < 0 || self.readCell(header) != Cell(size) {
+            return self.FILE_IO_ERROR
+        }
+        self.freeHeapBlocks.append((userAddr, size))
+        return self.FILE_IO_SUCCESS
+    }
+
+    private func heapResizeBytes(_ userAddr: Int, newRequested: Int) -> (addr: Int, ior: Cell) {
+        guard let oldSize = self.usedHeapBlocks[userAddr] else {
+            return (userAddr, self.FILE_IO_ERROR)
+        }
+        if newRequested < 0 {
+            return (userAddr, self.FILE_IO_ERROR)
+        }
+        let newSize = self.alignAddressUnits(newRequested)
+        if newSize == oldSize {
+            return (userAddr, self.FILE_IO_SUCCESS)
+        }
+        if newSize < oldSize {
+            self.usedHeapBlocks[userAddr] = newSize
+            self.writeCell(userAddr - Self.HEAP_HEADER_BYTES, Cell(newSize))
+            let tail = userAddr + newSize
+            let tailSize = oldSize - newSize
+            if tailSize > 0 {
+                self.freeHeapBlocks.append((tail, tailSize))
+            }
+            return (userAddr, self.FILE_IO_SUCCESS)
+        }
+        let grown = self.heapAllocateBytes(newSize)
+        if grown.ior != self.FILE_IO_SUCCESS {
+            return (userAddr, self.FILE_IO_ERROR)
+        }
+        let copyLen = min(oldSize, newSize)
+        for i in 0..<copyLen {
+            self.writeByte(grown.addr + i, self.readByte(userAddr + i))
+        }
+        _ = self.heapFreeBytes(userAddr)
+        return (grown.addr, self.FILE_IO_SUCCESS)
     }
 
     private func displayEnvironmentCatalog() {
@@ -1760,7 +1909,7 @@ public final class TZForth {
         //
         // We rely on proper LATEST maintenance + the alignment check + the
         // safety iteration limit instead.
-        return addr >= 0 && addr < MEM_SIZE
+        return addr >= 0 && addr < memory.count
     }
 
     private func getCFA(_ headerAddr: Cell) -> Cell {
@@ -3206,6 +3355,33 @@ public final class TZForth {
             self.push(hit.found ? -1 : 0)
         }
 
+        // === ANS Forth 2012 Memory-Allocation word set (Section 14) ===
+
+        _ = register("ALLOCATE") {
+            let u = Int(self.pop())
+            let result = self.heapAllocateBytes(u)
+            self.push(Cell(result.addr))
+            self.push(result.ior)
+        }
+
+        _ = register("FREE") {
+            let addr = Int(self.pop())
+            self.push(self.heapFreeBytes(addr))
+        }
+
+        _ = register("RESIZE") {
+            let u = Int(self.pop())
+            let addr = Int(self.pop())
+            let result = self.heapResizeBytes(addr, newRequested: u)
+            self.push(Cell(result.addr))
+            self.push(result.ior)
+        }
+
+        _ = register("GROWMEMORYMB") {
+            let mb = Int(self.pop())
+            _ = self.growMemoryToMegabytes(mb)
+        }
+
         _ = register("ALIGN") {
             var h = self.readCell(self.DP_ADDR)
             while (h & 7) != 0 { h += 1 }
@@ -4431,7 +4607,7 @@ public final class TZForth {
             let fileId = Int(self.pop())
             let u1 = Int(self.pop())
             let caddr = Int(self.pop())
-            guard u1 >= 0, u1 <= self.MEM_SIZE,
+            guard u1 >= 0, u1 <= self.memory.count,
                   var entry = self.openFiles[fileId], entry.isOpen, self.famAllowsRead(entry.fam) else {
                 self.push(0); self.push(self.FILE_IO_ERROR); return
             }
@@ -4450,7 +4626,7 @@ public final class TZForth {
             let fileId = Int(self.pop())
             let u1 = Int(self.pop())
             let caddr = Int(self.pop())
-            guard u1 >= 0, u1 <= self.MEM_SIZE,
+            guard u1 >= 0, u1 <= self.memory.count,
                   var entry = self.openFiles[fileId], entry.isOpen, self.famAllowsWrite(entry.fam) else {
                 self.push(0); self.push(self.FILE_IO_ERROR); return
             }
@@ -5496,6 +5672,7 @@ public final class TZForth {
 
         // Full dictionary reset to initial state (user words + their data space gone).
         restoreKernelDictionary()
+        self.resetHeapState(clearAllocateFlag: true)
 
         // Leave IP wherever it is; the next feedLine will start fresh parsing from
         // whatever input arrives next. (A real high-level QUIT now exists via bootstrap.)
@@ -5572,7 +5749,7 @@ public final class TZForth {
         let initialDict = rstackBase + RSTACK_SIZE * CELL_SIZE
         let safeDictStart = (kernelHere != 0 ? kernelHere : initialDict)
         let h = readCell(DP_ADDR)
-        if h < safeDictStart || h > MEM_SIZE - 1024 {
+        if h < safeDictStart || h > memory.count - 1024 {
             writeCell(DP_ADDR, safeDictStart)
         }
         let b = readCell(BASE)
@@ -5615,7 +5792,7 @@ public final class TZForth {
         let initialDict = rstackBase + RSTACK_SIZE * CELL_SIZE
         let safeDictStart = (kernelHere != 0 ? kernelHere : initialDict)
         let h = readCell(DP_ADDR)
-        if h < safeDictStart || h >= MEM_SIZE - 1024 {
+        if h < safeDictStart || h >= memory.count - 1024 {
             writeCell(DP_ADDR, safeDictStart)
         }
         // If the dictionary chain looks completely broken, reset the FORTH head (LATEST cell) to kernel

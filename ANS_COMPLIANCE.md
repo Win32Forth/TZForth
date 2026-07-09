@@ -2,7 +2,7 @@
 
 This document tracks implementation status of the 2012 ANS Forth Standard word sets in TZForth (Swift port of the lbForth model). Generated from codebase inspection (`TZForth/TZForth.swift`, `TestTZForth.swift`, `TZForthTests.swift`).
 
-Last update: after Core Ext Tier 2 batch (`:NONAME`, `ACTION-OF`, `MARKER`, `SAVE-INPUT`, `RESTORE-INPUT`, `SOURCE-ID`, `S\"`, `REFILL`) and prior Tier 1 words.
+Last update: after File-Access word set 11 (`OPEN-FILE`, `READ-LINE`, `INCLUDE-FILE`, `INCLUDED`, …) plus Core Ext Tier 2 and prior Tier 1 words.
 
 ## Summary
 
@@ -12,7 +12,8 @@ Last update: after Core Ext Tier 2 batch (`:NONAME`, `ACTION-OF`, `MARKER`, `SAV
 | **Core Ext (6.2)** | Complete — all standard Core Ext words implemented |
 | **Search-Order (16)** | Substantial — `WORDLIST`, `GET/SET-ORDER`, `GET/SET-CURRENT`, `FORTH-WORDLIST`, plus `VOCABULARY`, `FORTH`, `DEFINITIONS`, `ALSO`, `ONLY`, `ORDER` |
 | **Programming-Tools** | Partial — `SEE`, `HELP`, `WORDS`, `FORGET`, `>HEADER`, `>NFA`, `ID.`, `ANS-VALIDATE`; no `LOCATE`, `COMPILE`, `NEEDS`, `REQUIRED` |
-| **Optional sets** | Mostly absent — Double, Float, File-Access, Exception, String, Block, Locals, Memory-Allocation, etc. |
+| **File-Access (11)** | Substantial — 11.6.1 core words + `INCLUDE`/`INCLUDED`; no `REQUIRE`/`REQUIRED` |
+| **Other optional sets** | Mostly absent — Double, Float, Exception, String, Block, Locals, Memory-Allocation, etc. |
 
 FTEST harness: run with `FTEST=1 swift /tmp/combined.swift` (concatenate `TZForth.swift`, `TZForthTests.swift`, `TestTZForth.swift`).
 
@@ -49,6 +50,38 @@ All Core words required for conformance are implemented. Notable details:
 
 `VOCABULARY`, `FORTH`, `DEFINITIONS`, `ALSO`, `ONLY`, `ORDER`, `WORDS` (optional filter). `FORTH` is default; new vocabs start empty; lookup falls back to `FORTH` for system words.
 
+## File-Access (11) — Substantial
+
+ANS optional word set 11.6.1 (file operations) and key 11.6.2 extensions are implemented on top of the host filesystem. Files are held in memory while open; `CLOSE-FILE` and `FLUSH-FILE` write dirty buffers back to disk.
+
+### Access methods and I/O results
+
+| Constant | Value | Meaning |
+|----------|-------|---------|
+| `R/O` | 1 | read-only |
+| `W/O` | 2 | write-only |
+| `R/W` | 3 | read/write |
+| `BIN` | 8 | OR with base fam (binary; line translation suppressed for `READ-LINE`/`WRITE-LINE`) |
+| I/O success | 0 | `ior` on success |
+| I/O error | 1 | `ior` on failure |
+
+### Implemented words
+
+`OPEN-FILE`, `CLOSE-FILE`, `CREATE-FILE`, `DELETE-FILE`, `RENAME-FILE`, `READ-FILE`, `WRITE-FILE`, `READ-LINE`, `WRITE-LINE`, `FILE-POSITION`, `FILE-SIZE`, `REPOSITION-FILE`, `RESIZE-FILE`, `FILE-STATUS`, `FLUSH-FILE`, `INCLUDE-FILE`, `INCLUDED`, `INCLUDE` (immediate).
+
+### Integration with input and loading
+
+- **`REFILL`** — when interpreting from an open file (`interpreterInputFileId` ≥ 2), refills `SOURCE` from that file; returns false at EOF.
+- **`(`** — multi-line parenthesized comments span file lines (refills when `)` not found on current line).
+- **`INCLUDE-FILE` / `INCLUDED` / `INCLUDE`** — line-at-a-time interpret loop; `SOURCE-ID` is the fileid (≥ 10 for newly opened files; host `FLOAD` uses id `1`).
+- **`ENVIRONMENT?`** — returns true for `FILE`, `FILE-ACCESS`, `FILE-EXT`.
+
+### Not implemented (File-Access extensions)
+
+- **`REQUIRE` / `REQUIRED`** — load-once tracking (Programming-Tools / File-Access ext; needs separate load registry).
+
+Host extension **`FLOAD`** remains available alongside ANS `INCLUDED` / `INCLUDE-FILE`.
+
 ## TZForth-specific extensions (non-ANS)
 
 `FLOAD`, `EDIT`, `CHDIR`, `DIR`, `FILE-ECHO`, `DEBUG-ON`/`DEBUG-OFF`, `RESET`, `CLS`, `BYE`, `ANS-VALIDATE`, `FORGET-WORD`, `>LFA`, `>HEADER`, `>NFA`, `ID.`, `\\` (block comment to `{`), `\\S`, `DP`, high-level `HERE` (`DP @`), `ERASE` (`0 FILL`), etc.
@@ -59,7 +92,6 @@ Not implemented (no current plan unless requested):
 
 - **Double** (`D+`, `D.`, `2CONSTANT`, …)
 - **Float**
-- **File-Access** (`INCLUDE-FILE`, `READ-LINE`, `OPEN-FILE`, …) — `FLOAD` is a host extension, not ANS File-Access
 - **Exception** (`CATCH`, `THROW`)
 - **String** (`COMPARE`, `SEARCH`, …)
 - **Block**
@@ -69,7 +101,7 @@ Not implemented (no current plan unless requested):
 
 ## Recommendations
 
-- TZForth is highly functional for classic Forth sources, REPL, sandboxed `FLOAD`/`EDIT`/`CHDIR`, and ANS Core + Core Ext conformance testing.
-- Next logical steps (if desired): File-Access words atop existing `FLOAD`, Exception (`CATCH`/`THROW`), or vocabulary polish to hide kernel internals.
+- TZForth is highly functional for classic Forth sources, REPL, sandboxed `FLOAD`/`EDIT`/`CHDIR`, ANS Core + Core Ext conformance testing, and ANS File-Access file I/O / `INCLUDED`.
+- Next logical steps (if desired): `REQUIRE`/`REQUIRED`, Exception (`CATCH`/`THROW`), or vocabulary polish to hide kernel internals.
 
 For full standard details, see the official 2012 ANS Forth document (sections 6.1, 6.2, and optional word sets in chapters 7–18).

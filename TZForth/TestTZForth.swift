@@ -561,6 +561,16 @@ hello
     ansTest("ALSO ONLY ORDER", "ONLY ALSO FORTH ORDER", "Search order: FORTH FORTH")
     ansTest("ALSO search", "ONLY ALSO FORTH 1 2 + .", "3")
 
+    // Core Ext Tier 2: :NONAME ACTION-OF MARKER SAVE-INPUT RESTORE-INPUT SOURCE-ID S\" REFILL
+    ansTest(":NONAME", "VARIABLE t7n1 :NONAME 1234 ; t7n1 ! t7n1 @ EXECUTE .", "1234")
+    ansTest("ACTION-OF", "DEFER t7d : t7a1 42 ; ' t7a1 IS t7d ' t7d ACTION-OF EXECUTE .", "42")
+    ansTest("MARKER", "MARKER t7m1 : t7w1 11 ; : t7w2 22 ; t7m1 t7w1 .", "? t7w1")
+    ansTest("SOURCE-ID terminal", "SOURCE-ID .", "-1")
+    ansTest("REFILL", "REFILL 0= .", "-1")
+    ansTest("SAVE-INPUT RESTORE-INPUT", "SAVE-INPUT S\" 222 .\" EVALUATE RESTORE-INPUT 0= . 333 .", "0 333")
+    ansTest("S\\\"", ": t7sq S\\\" hello\" TYPE ; t7sq", "hello")
+    ansTest("S\\\" escapes", ": t7sq2 S\\\" a\\\\b\" TYPE ; t7sq2", "a\\b")
+
     print("TEST6 ANS core summary: \(ansPassed)/\(ansTotal) passed")
     if ansPassed != ansTotal {
         print("WARNING: some ANS 2012 core tests failed — review against standard stack effects.")

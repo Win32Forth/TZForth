@@ -209,6 +209,28 @@ public final class TZForth {
     private var sourceLoadStop = false
     private var loadNesting = 0
 
+    /// True while compiling a :NONAME definition (; leaves xt on stack).
+    private var nonameCompile = false
+
+    /// Nesting depth of nested EVALUATE (for SOURCE-ID and SAVE-INPUT tagging).
+    private var evaluateNesting = 0
+
+    /// Identifier for the current input source (SOURCE-ID): -1 terminal, 0 evaluate, 1 file.
+    private var currentSourceId: Cell = -1
+
+    /// Saved input states for SAVE-INPUT / RESTORE-INPUT (opaque handles on data stack).
+    private struct InputSnapshot {
+        var sourceId: Cell
+        var inPos: Cell
+        var sourceLen: Int
+        var sourceBytes: [UInt8]
+        var queue: [UInt8]
+    }
+    private var inputSnapshots: [InputSnapshot] = []
+
+    /// Runtime primitive for MARKER restore (pops storage addr from stack).
+    private var markerRestoreID: Cell = 0
+
     // Primitive dispatch table: ID -> implementation
     private var primitives: [(() -> Void)?] = []
 
@@ -521,6 +543,14 @@ public final class TZForth {
         ("OF",      "( x x -- | x )",     "CASE of branch (immediate)"),
         ("ENDOF",   "( -- )",             "end of OF, branch to ENDCASE (immediate)"),
         ("ENDCASE", "( -- )",             "end CASE, resolve branches (immediate)"),
+        (":NONAME", "( C: -- colon-sys ) ( -- xt )", "start anonymous colon definition; ; leaves xt"),
+        ("ACTION-OF","( xt1 -- xt2 )",    "current execution token of a deferred word (like DEFER@)"),
+        ("MARKER",  "( -- ) name",        "create a restore point for dictionary and search order"),
+        ("SAVE-INPUT","( -- x1 ... xn n )","save current input source state for RESTORE-INPUT"),
+        ("RESTORE-INPUT","( x1 ... xn n -- flag )","restore input source; flag true if failed"),
+        ("SOURCE-ID","( -- id )",         "input source id (-1 terminal, 0 evaluate, 1 file)"),
+        ("S\\\"",   "( -- )",             "compile escaped \"-delimited string (leaves c-addr u at run-time)"),
+        ("REFILL",  "( -- flag )",        "attempt to refill the input buffer; flag true if successful"),
 
         // New for FLOAD / EDIT / file helpers (cwd + dialog driven by host for sandbox friendliness)
         ("\\",      "( -- )",             "comment to end of line (immediate)"),
@@ -810,6 +840,13 @@ public final class TZForth {
         }
         self.currentSourceLen = n
         self.writeCell(self.IN, 0)
+        if self.evaluateNesting > 0 {
+            self.currentSourceId = 0
+        } else if self.loadNesting > 0 {
+            self.currentSourceId = 1
+        } else {
+            self.currentSourceId = -1
+        }
 
         for b in line.utf8 { inputQueue.append(b) }
         inputQueue.append(10) // \n
@@ -1832,6 +1869,7 @@ public final class TZForth {
             let name = self.parseWord()
             if name.isEmpty { self.tell("? : needs a name\n"); self.errorFlag = true; return }
 
+            self.nonameCompile = false
             self.createWord(name: name, immediate: false)
 
             // Compile DOCOL into the code field (as if user had done DOCOL , )
@@ -1846,14 +1884,33 @@ public final class TZForth {
             self.writeCell(self.STATE, 1)
         }
 
-        _ = register(";", immediate: true) {
-            self.push(self.exitID); self.comma()
-
-            // Unhide
+        // :NONAME ( C: -- colon-sys ) ( -- xt )  Core Ext
+        // Start an anonymous colon definition. At ; the xt (cfa) is left on the stack.
+        _ = register(":NONAME") {
+            self.nonameCompile = true
+            self.createWord(name: "", immediate: false)
+            self.push(self.docolID); self.comma()
             let defsHeadCell = self.readCell(self.CURRENT)
             let l = self.readCell(defsHeadCell)
             let fl = self.readByte(Int(l) + 8)
-            self.writeByte(Int(l) + 8, fl & ~self.FLAG_HIDDEN)
+            self.writeByte(Int(l) + 8, fl | self.FLAG_HIDDEN)
+            self.writeCell(self.STATE, 1)
+        }
+
+        _ = register(";", immediate: true) {
+            self.push(self.exitID); self.comma()
+
+            // Unhide (named definitions only; :NONAME stays hidden)
+            let defsHeadCell = self.readCell(self.CURRENT)
+            let l = self.readCell(defsHeadCell)
+            let fl = self.readByte(Int(l) + 8)
+            if self.nonameCompile {
+                let xt = self.getCFA(l)
+                self.push(xt)
+                self.nonameCompile = false
+            } else {
+                self.writeByte(Int(l) + 8, fl & ~self.FLAG_HIDDEN)
+            }
 
             self.writeCell(self.STATE, 0)
             self.loopControlStack.removeAll()  // clean any leftover from unbalanced loops in this def
@@ -1965,6 +2022,12 @@ public final class TZForth {
                 let _ = self.rpop()
             }
             self.ip = 0
+        }
+
+        // (MARKER-RESTORE) — internal runtime for MARKER words (storage addr on stack).
+        markerRestoreID = register("(MARKER-RESTORE)") {
+            let storage = Int(self.pop())
+            self.applyMarkerRestore(storage: storage)
         }
 
         // === Structured control flow (loops + conditionals) ===
@@ -2267,6 +2330,7 @@ public final class TZForth {
             let savedQueue = self.inputQueue
             let savedIN = self.readCell(self.IN)
             let savedSourceLen = self.currentSourceLen
+            let savedSourceId = self.currentSourceId
             var savedSource: [UInt8] = []
             for i in 0..<savedSourceLen {
                 savedSource.append(self.readByte(self.SOURCE_BUFFER + i))
@@ -2282,10 +2346,14 @@ public final class TZForth {
             for i in 0..<self.currentSourceLen {
                 self.writeByte(self.SOURCE_BUFFER + i, self.readByte(caddr + i))
             }
+            self.evaluateNesting += 1
+            self.currentSourceId = 0
             self.runInterpreter()
+            self.evaluateNesting -= 1
             // if error during eval, leave errorFlag for outer to see (like in load)
             self.inputQueue = savedQueue
             self.writeCell(self.IN, savedIN)
+            self.currentSourceId = savedSourceId
             // restore previous source buffer
             self.currentSourceLen = savedSourceLen
             for i in 0..<savedSourceLen {
@@ -2677,6 +2745,62 @@ public final class TZForth {
         _ = register("SOURCE") {
             self.push( Cell( self.SOURCE_BUFFER ) )
             self.push( Cell( self.currentSourceLen ) )
+        }
+
+        // SOURCE-ID ( -- id )  Core Ext — -1 terminal, 0 evaluate string, 1 file (FLOAD).
+        _ = register("SOURCE-ID") {
+            self.push(self.currentSourceId)
+        }
+
+        // SAVE-INPUT ( -- x1 ... xn n )  Core Ext
+        // Pushes: >IN, source-id, opaque snapshot handle, and count 3.
+        _ = register("SAVE-INPUT") {
+            var sourceBytes: [UInt8] = []
+            for i in 0..<self.currentSourceLen {
+                sourceBytes.append(self.readByte(self.SOURCE_BUFFER + i))
+            }
+            let snap = InputSnapshot(
+                sourceId: self.currentSourceId,
+                inPos: self.readCell(self.IN),
+                sourceLen: self.currentSourceLen,
+                sourceBytes: sourceBytes,
+                queue: self.inputQueue
+            )
+            let handle = Cell(self.inputSnapshots.count)
+            self.inputSnapshots.append(snap)
+            self.push(self.readCell(self.IN))
+            self.push(self.currentSourceId)
+            self.push(handle)
+            self.push(3)
+        }
+
+        // RESTORE-INPUT ( x1 ... xn n -- flag )  Core Ext — flag true if restore failed.
+        _ = register("RESTORE-INPUT") {
+            let n = Int(self.pop())
+            var args: [Cell] = []
+            for _ in 0..<n { args.insert(self.pop(), at: 0) }
+            guard n == 3,
+                  Int(args[2]) >= 0 && Int(args[2]) < self.inputSnapshots.count else {
+                self.push(-1) // failed
+                return
+            }
+            let snap = self.inputSnapshots[Int(args[2])]
+            if snap.sourceId != self.currentSourceId || args[1] != snap.sourceId {
+                self.push(-1)
+                return
+            }
+            self.writeCell(self.IN, args[0])
+            self.currentSourceLen = snap.sourceLen
+            for i in 0..<snap.sourceLen {
+                self.writeByte(self.SOURCE_BUFFER + i, snap.sourceBytes[i])
+            }
+            self.inputQueue = snap.queue
+            self.push(0) // success (flag false)
+        }
+
+        // REFILL ( -- flag )  Core Ext — line-oriented engine: no mid-source refill; returns false.
+        _ = register("REFILL") {
+            self.push(0)
         }
 
         // PAD ( -- addr )  Transient scratch (WORD/S"/C"/." parse, user strings, etc.).
@@ -3078,6 +3202,35 @@ public final class TZForth {
             if count % 8 != 0 { self.putkey(10) }
         }
 
+        // MARKER ( "name" -- )  Core Ext — save dict/search-order landmark; execution restores state.
+        _ = register("MARKER") {
+            let name = self.parseWord()
+            if name.isEmpty { self.tell("? MARKER needs a name\n"); self.errorFlag = true; return }
+            let savedHere = self.readCell(self.DP_ADDR)
+            let savedCurrent = self.readCell(self.CURRENT)
+            let n = self.searchOrder.count
+            var heads: [Cell] = []
+            var wls: [Cell] = []
+            for wl in self.searchOrder {
+                wls.append(wl)
+                heads.append(self.readCell(wl))
+            }
+            self.createWord(name: name, immediate: false)
+            self.push(self.docolID); self.comma()
+            self.push(self.litID); self.comma()
+            let litSlot = self.readCell(self.DP_ADDR)
+            self.push(0); self.comma()
+            self.push(self.markerRestoreID); self.comma()
+            self.push(self.exitID); self.comma()
+            let storageAddr = self.readCell(self.DP_ADDR)
+            self.writeCell(Int(litSlot), storageAddr)
+            self.writeCellHere(savedHere)
+            self.writeCellHere(savedCurrent)
+            self.writeCellHere(Cell(n))
+            for h in heads { self.writeCellHere(h) }
+            for wl in wls { self.writeCellHere(wl) }
+        }
+
         _ = register("FORGET") {
             // The user-facing, classic "FORGET NAME" parsing word.
             // (The high-level >LFA-based version is available as FORGET-WORD for teaching.)
@@ -3433,6 +3586,22 @@ public final class TZForth {
             }
         }
 
+        // S\"  immediate — escaped string; compile-only per ANS (interpret undefined).
+        _ = register("S\\\"", immediate: true) {
+            if self.readCell(self.STATE) == 0 {
+                self.tell("? S\\\" is compile-only\n")
+                self.errorFlag = true
+                return
+            }
+            let (saddr, len) = self.parseEscapedStringToBuffer()
+            self.push(self.sQuoteID); self.comma()
+            self.writeByteHere(UInt8(len))
+            for i in 0..<len {
+                self.writeByteHere(self.readByte(saddr + i))
+            }
+            self.alignHere()
+        }
+
         // Simple CONSTANT (enough for education)
         _ = register("CONSTANT") {
             let name = self.parseWord()
@@ -3524,6 +3693,27 @@ public final class TZForth {
                 self.tell("? DEFER! target is not a supported defer or value\n"); self.errorFlag = true; return
             }
             self.writeCell(storageAddr, newXt)
+        }
+
+        // ACTION-OF ( xt1 -- xt2 )  Core Ext — synonym for DEFER@ (current defer action).
+        _ = register("ACTION-OF") {
+            let deferXt = self.pop()
+            if deferXt < Cell(self.MAX_BUILTIN_ID) {
+                self.tell("? ACTION-OF on a primitive\n"); self.errorFlag = true; return
+            }
+            let cfa = Int(deferXt)
+            let first = self.readCell(cfa)
+            var storageAddr: Int = 0
+            if first == self.docolID {
+                let second = self.readCell(cfa + 8)
+                if second != self.litID { self.push(0); return }
+                storageAddr = Int( self.readCell(cfa + 16) )
+            } else if first == self.createRuntimeID || first == self.dodoesID {
+                storageAddr = Int( self.readCell(cfa + 8) )
+            } else {
+                self.push(0); return
+            }
+            self.push( self.readCell(storageAddr) )
         }
 
         // DEFER@ ( xt1 -- xt2 )  Core Ext
@@ -3969,6 +4159,89 @@ public final class TZForth {
         }
         self.writeByte(self.PAD_BUFFER + 1 + len, 0)
         return Cell(self.PAD_BUFFER)
+    }
+
+    /// Parse an ANS S\" escaped string into PAD. Returns (char-addr, length).
+    private func parseEscapedStringToBuffer() -> (Cell, Int) {
+        // Skip opening double-quote (ascii or smart)
+        while !self.inputQueue.isEmpty {
+            if !self.consumeDelim(34) { break }
+        }
+
+        var collected: [UInt8] = []
+        while !self.inputQueue.isEmpty {
+            let b = self.inputQueue.first!
+            if self.peekIsDelim(34) || b == 34 {
+                _ = self.consumeDelim(34)
+                break
+            }
+            if b == 10 || b == 13 { break }
+            let ch = self.consumeInput()!
+            if ch == 92 { // backslash escape
+                guard let next = self.consumeInput() else { break }
+                switch next {
+                case 97: collected.append(7)   // \a BEL
+                case 98: collected.append(8)   // \b BS
+                case 101: collected.append(27) // \e ESC
+                case 102: collected.append(12) // \f FF
+                case 108: collected.append(10) // \l LF
+                case 109: collected.append(13); collected.append(10) // \m CR/LF
+                case 110: collected.append(10) // \n newline (LF here)
+                case 113, 34: collected.append(34) // \q or \"
+                case 114: collected.append(13) // \r CR
+                case 116: collected.append(9)  // \t tab
+                case 118: collected.append(11) // \v VT
+                case 122: break                // \z NUL (no char)
+                case 92: collected.append(92)  // \\
+                case 120: // \xHH
+                    var hex = ""
+                    for _ in 0..<2 {
+                        guard let hb = self.consumeInput() else { break }
+                        hex.append(Character(UnicodeScalar(hb)))
+                    }
+                    if hex.count == 2, let val = UInt8(hex, radix: 16) {
+                        collected.append(val)
+                    }
+                default:
+                    collected.append(next)
+                }
+            } else {
+                collected.append(ch)
+            }
+        }
+
+        let len = min(collected.count, self.PAD_MAX_COUNTED_CHARS)
+        self.writeByte(self.PAD_BUFFER, UInt8(len))
+        for (i, b) in collected.prefix(len).enumerated() {
+            self.writeByte(self.PAD_BUFFER + 1 + i, b)
+        }
+        self.writeByte(self.PAD_BUFFER + 1 + len, 0)
+        return (Cell(self.PAD_BUFFER + 1), len)
+    }
+
+    /// Restore dictionary and search order from a MARKER storage block.
+    private func applyMarkerRestore(storage: Int) {
+        let savedHere = self.readCell(storage)
+        let savedCurrent = self.readCell(storage + 8)
+        let n = Int(self.readCell(storage + 16))
+        if savedHere < self.kernelHere {
+            self.tell("? MARKER cannot restore past kernel\n")
+            self.errorFlag = true
+            return
+        }
+        let headsBase = storage + 24
+        let wlsBase = headsBase + n * self.CELL_SIZE
+        var newOrder: [Cell] = []
+        for i in 0..<n {
+            let head = self.readCell(headsBase + i * self.CELL_SIZE)
+            let wl = self.readCell(wlsBase + i * self.CELL_SIZE)
+            self.writeCell(Int(wl), head)
+            newOrder.append(wl)
+        }
+        self.searchOrder = newOrder
+        self.writeCell(self.CURRENT, savedCurrent)
+        self.writeCell(self.DP_ADDR, savedHere)
+        self.validateAndRepairSystemState()
     }
 
     private func execute(cfa: Cell, firstCell: Cell) {

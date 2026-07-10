@@ -1993,6 +1993,8 @@ public final class TZForth {
     }
 
     private func createWord(name: String, immediate: Bool) {
+        // Dictionary headers must be cell-aligned (Hayes core.fr: HERE 1 ALLOT then CONSTANT).
+        alignHere()
         let newLatest = readCell(DP_ADDR)
 
         // link field (previous head in current defs vocab)

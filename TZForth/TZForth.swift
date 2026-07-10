@@ -3100,8 +3100,11 @@ public final class TZForth {
         // push the data address.
         createRuntimeID = register("(CREATE)") {
             let dataAddr = self.readCell(self.currentCodeAddr + 8)
-            self.ip += 8
             self.push(dataAddr)
+            // Compiled CFA calls push a return address; resume the caller after pushing addr.
+            if self.dispatchedFromInnerThread && self.rspGet() > 1 {
+                self.ip = Int(self.rpop())
+            }
         }
 
         // (DOES) -- runtime for CREATE ... DOES> children.
@@ -5555,7 +5558,6 @@ public final class TZForth {
             let dataAddr = self.readCell(self.DP_ADDR) + 16
             self.push(self.createRuntimeID); self.comma()
             self.push(dataAddr); self.comma()
-            self.push(self.exitID); self.comma()
             // DP_ADDR is now at the data field start. No extra ALLOT (unlike VARIABLE).
         }
 

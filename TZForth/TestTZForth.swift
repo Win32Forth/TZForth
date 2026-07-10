@@ -932,6 +932,8 @@ if ProcessInfo.processInfo.environment["HAYES"] == "1" {
     // Load via feedLine (FLOAD path). INCLUDED/REFILL mis-syncs >IN for Hayes ?~~ skips.
     let hayesFiles = [
         "prelimtest.fth", "tester.fr", "core.fr", "coreplustest.fth", "utilities.fth",
+        // tester.fr again: core tests can orphan the dictionary chain past #ERRORS.
+        "tester.fr",
         "errorreport.fth", "coreexttest.fth", "doubletest.fth", "exceptiontest.fth",
         "filetest.fth", "localstest.fth", "memorytest.fth", "toolstest.fth",
         "searchordertest.fth", "stringtest.fth",
@@ -950,7 +952,13 @@ if ProcessInfo.processInfo.environment["HAYES"] == "1" {
         }
     }
     if ok {
-        forth.feedLine("REPORT-ERRORS")
+        // Dictionary chain can be orphaned during long test loads; refresh error report words.
+        let errorReport = suiteSrc.appendingPathComponent("errorreport.fth")
+        if forth.loadFile(errorReport) {
+            forth.feedLine("REPORT-ERRORS")
+        } else {
+            ok = false
+        }
     }
     do {
         try collected.write(to: outFile, atomically: true, encoding: .utf8)

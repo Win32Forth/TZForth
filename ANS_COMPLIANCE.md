@@ -20,7 +20,7 @@ Last update: Programming-Tools — pre-ANS `COMPILE` documented as intentionally
 | **Locals (13)** | Complete — `(LOCAL)`, `LOCALS|`, `{:`; `TO` for locals; max 32 (`#LOCALS`) |
 | **Other optional sets** | Mostly absent — Float, Facility, Block, Extended-Character, etc. |
 
-FTEST harness: run with `FTEST=1 swift /tmp/combined.swift` (concatenate `TZForth.swift`, `TZForthTests.swift`, `TestTZForth.swift`). Current count: **247/247** TEST6 spot-checks plus block-comment / FLOAD harness tests.
+FTEST harness: run with `FTEST=1 swift /tmp/combined.swift` (concatenate `TZForth.swift`, `TZForthTests.swift`, `TestTZForth.swift`). Current count: **249/249** TEST6 spot-checks plus block-comment / FLOAD harness tests.
 
 ## Core (6.1) — Complete
 
@@ -283,7 +283,7 @@ Example: `' DUP >HEADER 32 DUMP` · `' DUP H.` · `' DUP >XID .` → `8`.
 
 ## TZForth-specific extensions (non-ANS)
 
-`FLOAD`, `EDIT`, `CHDIR`, `DIR`, `FILE-ECHO`, `DEBUG-ON`/`DEBUG-OFF`, `RESET`, `CLS`, `BYE`, `ANS-VALIDATE`, `.ENVIRONMENT`, `.INCLUDED` (list `INCLUDED-NAMES` registry), `LOCATE` (SEE alias), `FORGET-WORD`, `>LFA`, `>HEADER`, `>NFA`, `>XID`, `ID.`, `H.` (unsigned hex print, ignores `BASE`), `\\` (block comment to `{`), `\\S`, `DP`, high-level `HERE` (`DP @`), `ERASE` (`0 FILL`), `GROWMEMORYMB`, etc.
+`FLOAD`, `EDIT`, `CHDIR`, `DIR`, `FILE-ECHO`, `DEBUG-ON`/`DEBUG-OFF`, `RESET`, `CLS`, `BYE`, `ANS-VALIDATE`, `.ENVIRONMENT`, `.INCLUDED` (list `INCLUDED-NAMES` registry), `CATCH-EVALUATE` (interpret-friendly `EVALUATE` + `CATCH`), `LOCATE` (SEE alias), `FORGET-WORD`, `>LFA`, `>HEADER`, `>NFA`, `>XID`, `ID.`, `H.` (unsigned hex print, ignores `BASE`), `\\` (block comment to `{`), `\\S`, `DP`, high-level `HERE` (`DP @`), `ERASE` (`0 FILL`), `GROWMEMORYMB`, etc.
 
 ## Missing optional / future word sets
 

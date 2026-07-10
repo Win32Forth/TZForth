@@ -733,6 +733,8 @@ extension TZForth {
         ansTest("CATCH div-by-zero", "1 0 t9div .", "-9")
         self.feedLine(": t9undef S\" no-such-word-tzforth-xyz\" ['] EVALUATE CATCH ;")
         ansTest("CATCH undefined word", "t9undef .", "-13")
+        ansTest("CATCH EVALUATE tick", "S\" no-such-word-tzforth-xyz\" ' EVALUATE CATCH .", "-13")
+        ansTest("CATCH-EVALUATE", "S\" no-such-word-tzforth-xyz\" CATCH-EVALUATE .", "-13")
         self.feedLine(": t9under ['] drop CATCH ;")
         ansTest("CATCH stack underflow", "t9under .", "-3")
 

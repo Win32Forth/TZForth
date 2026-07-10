@@ -195,12 +195,25 @@ Recommend: Phase 2+ for compile control; Phase 1 focuses on **interpret and run-
 
 ```forth
 : t-div  ['] / catch ;
-t-div 1 0 t-div .   → -9
+1 0 t-div .          → -9
 
-: t-undef  ['] no-such-word-xyz catch ;
+: t-undef  S" no-such-word" ['] EVALUATE CATCH ;
 t-undef .            → -13
+```
 
-: t-under  ['] drop catch ;
+**REPL (interpret state) — do not use `[']` (compile-only):**
+
+```forth
+S" no-such-word" ' EVALUATE CATCH .     → -13
+S" no-such-word" CATCH-EVALUATE .        → -13   (TZForth helper)
+```
+
+Typing `no-such-word` alone at the REPL is **uncaught** — you will still see `? no-such-word` (then reset). That is expected; wrap evaluation in `CATCH` as above.
+
+`['] name` only works **while compiling** a `:` definition. `: foo ['] bar CATCH ;` fails at compile time if `bar` is missing.
+
+```forth
+: t-under  ['] drop CATCH ;
 t-under .            → -3
 ```
 

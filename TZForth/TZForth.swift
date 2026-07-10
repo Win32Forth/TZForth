@@ -504,6 +504,7 @@ public final class TZForth {
         ("ABORT",   "( -- )",             "THROW -1 (catchable; prints Aborted! if uncaught)"),
         ("ABORT\"", "( flag \"text\" -- )", "if flag, type message and THROW -2 (immediate)"),
         ("CATCH",   "( xt -- n )",        "execute xt; push 0 or throw code"),
+        ("CATCH-EVALUATE","( c-addr u -- n )", "EVALUATE string; push 0 or throw code (TZForth)"),
         ("THROW",   "( n -- )",           "raise exception n (0 is no-op)"),
         ("ACCEPT",  "( c-addr +n1 -- +n2 )", "read up to n1 chars from input into buffer"),
         ("<#",      "( -- )",             "begin pictured numeric output"),
@@ -3356,7 +3357,8 @@ public final class TZForth {
             self.currentSourceId = 0
             self.runInterpreter()
             self.evaluateNesting -= 1
-            // if error during eval, leave errorFlag for outer to see (like in load)
+            // Propagate caught THROW to enclosing CATCH (do not convert to errorFlag).
+            // Uncaught throws already set errorFlag via handleUnhandledThrow.
             self.inputQueue = savedQueue
             self.writeCell(self.IN, savedIN)
             self.currentSourceId = savedSourceId
@@ -3370,25 +3372,23 @@ public final class TZForth {
         // CATCH ( xt -- n | i*x n )  ANS Exception — execute xt; 0 on success, throw code otherwise.
         _ = register("CATCH") {
             let xt = self.pop()
-            let stackDepth = self.spGet()
-            let savedIp = self.ip
-            self.exceptionFrames.append(self.captureExceptionFrame(dataStackDepth: stackDepth, savedIp: savedIp))
-            self.throwActive = false
-            if xt < Cell(self.MAX_BUILTIN_ID) {
-                self.execute(cfa: xt, firstCell: xt)
-            } else {
-                let cfa = xt
-                let firstCell = self.readCell(Int(cfa))
-                self.execute(cfa: cfa, firstCell: firstCell)
+            self.performCatch(xt: xt)
+        }
+
+        // CATCH-EVALUATE ( c-addr u -- n )  TZForth — interpret-friendly CATCH around EVALUATE.
+        // Use instead of ['] EVALUATE CATCH (which requires compile state for [']).
+        // Equivalent interpret phrase: S" text" ' EVALUATE CATCH
+        _ = register("CATCH-EVALUATE") {
+            let u = Int(self.pop())
+            let caddr = Int(self.pop())
+            let hdr = self.findWord("EVALUATE")
+            if hdr == 0 {
+                self.kernelThrow(StdThrow.undefinedWord, message: "? EVALUATE ?")
+                return
             }
-            if !self.throwActive {
-                if let frame = self.exceptionFrames.popLast() {
-                    self.rspSet(frame.returnStackDepth)
-                }
-                self.ip = savedIp
-                self.push(0)
-            }
-            self.throwActive = false
+            self.push(Cell(caddr))
+            self.push(Cell(u))
+            self.performCatch(xt: self.getCFA(hdr))
         }
 
         // THROW ( n -- )  ANS Exception — 0 is no-op; non-zero unwinds to nearest CATCH.
@@ -5903,12 +5903,12 @@ public final class TZForth {
                     if self.readCell(self.STATE) != 0 {
                         self.compileLocalFetch(idx)
                     } else {
-                        self.tell("? local \(name) undefined in interpret state\n")
-                        self.errorFlag = true
+                        self.kernelThrow(StdThrow.undefinedWord, message: "? local \(name) undefined in interpret state")
+                        if throwActive { break }
                     }
                 } else {
-                    self.tell("? \(name)\n")
-                    self.errorFlag = true
+                    self.kernelThrow(StdThrow.undefinedWord, message: "? \(name)")
+                    if throwActive { break }
                 }
             } else if hdr != 0 {
                 let cfa = getCFA(hdr)
@@ -5929,10 +5929,7 @@ public final class TZForth {
                 } else {
                     // Execute
                     execute(cfa: cfa, firstCell: first)
-                    if throwActive {
-                        if !errorFlag { errorFlag = true }
-                        break
-                    }
+                    if throwActive { break }
                     if waitingForKey {
                         // A blocking input word (currently only KEY) has suspended.
                         // Break out of the line interpreter so control returns to the UI.
@@ -5961,6 +5958,7 @@ public final class TZForth {
                 } else {
                     let msg = readCell(STATE) != 0 ? "? \(name) ?  (while compiling)" : "? \(name)"
                     kernelThrow(StdThrow.undefinedWord, message: msg)
+                    if throwActive { break }
                 }
             }
         }
@@ -6283,6 +6281,28 @@ public final class TZForth {
         self.ip = frame.savedIp
         self.waitingForKey = false
         self.exitReq = false
+    }
+
+    /// ANS CATCH core — execute xt under an exception frame; 0 or throw code on stack.
+    private func performCatch(xt: Cell) {
+        let stackDepth = self.spGet()
+        let savedIp = self.ip
+        self.exceptionFrames.append(self.captureExceptionFrame(dataStackDepth: stackDepth, savedIp: savedIp))
+        self.throwActive = false
+        if xt < Cell(self.MAX_BUILTIN_ID) {
+            self.execute(cfa: xt, firstCell: xt)
+        } else {
+            let firstCell = self.readCell(Int(xt))
+            self.execute(cfa: xt, firstCell: firstCell)
+        }
+        if !self.throwActive {
+            if let frame = self.exceptionFrames.popLast() {
+                self.rspSet(frame.returnStackDepth)
+            }
+            self.ip = savedIp
+            self.push(0)
+        }
+        self.throwActive = false
     }
 
     /// Raise a standard (or user) throw from kernel code. Caught → CATCH receives code only.

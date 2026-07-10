@@ -130,6 +130,8 @@ When a **caught** throw occurs during compilation (`STATE=1`), `CATCH` restores 
 
 When an throw is **uncaught**, `handleUnhandledThrow` → `resetRuntimeState()` still abandons compile mode (same as today).
 
+**FTEST:** immediate `t9cei` wraps `EVALUATE CATCH` during an open `: t9cpart`; immediate `t9cspi` prints `t9cst @` (= `1`) still during compile; `789 ;` completes the definition and `t9cpart .` runs.
+
 ---
 
 ## Phase 3 — Defining words, dictionary, search order ✅

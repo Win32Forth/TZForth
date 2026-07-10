@@ -836,6 +836,26 @@ hello
     ansTest("CATCH SEE undefined", "S\" SEE nosuchtzforthxyz\" CATCH-EVALUATE .", "-13")
     ansTest("CATCH SYNONYM undefined", "S\" SYNONYM newsyn nosuchtzforthxyz\" CATCH-EVALUATE .", "-13")
 
+    // Caught throw during compile: STATE stays 1 and open : definition can finish with ;
+    resetTest()
+    forth.feedLine("VARIABLE t9cst")
+    forth.feedLine(": t9cei ['] EVALUATE CATCH STATE @ t9cst ! ; IMMEDIATE")
+    forth.feedLine(": t9cspi t9cst @ . ; IMMEDIATE")
+    forth.feedLine(": t9cpart")
+    collected = ""
+    forth.feedLine("S\" nosuch-tzforth-compile-xyz\" t9cei t9cspi")
+    let compileStateOne = collected.contains("1")
+    forth.feedLine("789 ;")
+    forth.feedLine("t9cpart .")
+    ansTotal += 1
+    let cstOut = collected.trimmingCharacters(in: .whitespacesAndNewlines)
+    if compileStateOne && cstOut.contains("789") {
+        ansPassed += 1
+        print("TEST6 CATCH compile STATE preserve: pass")
+    } else {
+        print("TEST6 CATCH compile STATE preserve: FAIL compileState=\(compileStateOne) out='\(cstOut)' (expected 1 during compile, 789 at run)")
+    }
+
     print("TEST6 ANS core summary: \(ansPassed)/\(ansTotal) passed")
     if ansPassed != ansTotal {
         print("WARNING: some ANS 2012 core tests failed — review against standard stack effects.")

@@ -751,6 +751,26 @@ extension TZForth {
         ansTest("CATCH SEE undefined", "S\" SEE nosuchtzforthxyz\" CATCH-EVALUATE .", "-13")
         ansTest("CATCH SYNONYM undefined", "S\" SYNONYM newsyn nosuchtzforthxyz\" CATCH-EVALUATE .", "-13")
 
+        // Caught throw during compile: STATE stays 1 and open : definition can finish with ;
+        resetTest()
+        self.feedLine("VARIABLE t9cst")
+        self.feedLine(": t9cei ['] EVALUATE CATCH STATE @ t9cst ! ; IMMEDIATE")
+        self.feedLine(": t9cspi t9cst @ . ; IMMEDIATE")
+        self.feedLine(": t9cpart")
+        collected = ""
+        self.feedLine("S\" nosuch-tzforth-compile-xyz\" t9cei t9cspi")
+        let compileStateOne = collected.contains("1")
+        self.feedLine("789 ;")
+        self.feedLine("t9cpart .")
+        ansTotal += 1
+        let cstOut = collected.trimmingCharacters(in: .whitespacesAndNewlines)
+        if compileStateOne && cstOut.contains("789") {
+            ansPassed += 1
+            results += "TEST6 CATCH compile STATE preserve: pass\n"
+        } else {
+            results += "TEST6 CATCH compile STATE preserve: FAIL compileState=\(compileStateOne) out='\(cstOut)' (expected 1 during compile, 789 at run)\n"
+        }
+
         results += "TEST6 ANS core summary: \(ansPassed)/\(ansTotal) passed\n"
         if ansPassed != ansTotal {
             results += "WARNING: some ANS 2012 core tests failed — review against standard stack effects.\n"

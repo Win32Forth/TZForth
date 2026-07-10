@@ -2,7 +2,7 @@
 
 This document maps TZForth’s internal `errorFlag` error path to ANS Forth 2012 standard `THROW` codes (Exception word set §9.3.1). It is the implementation guide for replacing `tell("? …")` + `errorFlag = true` with catchable `kernelThrow(code, message:)`.
 
-**Status:** **Migration complete** (Phases 1–4). Kernel faults use `kernelThrow`; only `handleUnhandledThrow` and `recoverFromError` set `errorFlag` (uncaught throws + FLOAD load-abort). TZForth extensions: **`.ERROR`** (spaced message for a CATCH code), **`CATCH-EVALUATE`**, synchronous named **`FLOAD`** via host `onPerformNamedLoad`.
+**Status:** **Migration complete** (Phases 1–5). Kernel faults use `kernelThrow`; only `handleUnhandledThrow` and `recoverFromError` set `errorFlag` (uncaught throws + FLOAD load-abort). TZForth extensions: **`.ERROR`** (spaced message for a CATCH code), **`CATCH-EVALUATE`**, synchronous named **`FLOAD`** via host `onPerformNamedLoad`. Mid-file load/include errors are **CATCH-able** (specific codes -3…-74; closed file -67).
 
 **Reference:** [ANS THROW](https://forth-standard.org/standard/exception/THROW), §9.3.1 throw codes, §9.3.5 exception handling.
 
@@ -74,7 +74,7 @@ TZForth assigns **-40 and below** only where no standard code fits; prefer -3…
 private func kernelThrow(_ code: Cell, message: String? = nil)
 ```
 
-- **`StdThrow`** enum in `TZForth.swift` — named constants for -3…-17, -20, -68, -74 (and delivery for -1/-2).
+- **`StdThrow`** enum in `TZForth.swift` — named constants for -3…-17, -20, -67, -68, -70, -74 (and delivery for -1/-2).
 - **`lastKernelThrowMessage`** — full REPL line for uncaught display (e.g. `"? Division by zero"`).
 - **`innerThread`** — `if throwActive { break }` after each primitive (required for CATCH inside colon words).
 
@@ -107,8 +107,8 @@ Same pattern for other **parsing** words: `['] included catch`, `['] include-fil
 |------|--------|
 | -8, -11, -12 | No double-literal / alignment faults on those paths yet |
 | -60…-65 | Float word set not implemented |
-| -66, -67, -69…-73, -75 | File-access via `ior`; only -68/-74 used for kernel INCLUDE/FLOAD paths |
-| -40… | Reserved for user `THROW` |
+| -66, -69…-73, -75 | File-access via `ior`; kernel paths use -67/-68/-70/-74 |
+| -40…-59 | User `THROW` range (first code -40) |
 
 ---
 
@@ -192,6 +192,41 @@ When an throw is **uncaught**, `handleUnhandledThrow` → `resetRuntimeState()` 
 
 ---
 
+## Phase 5 — User throws, closed file, catchable load abort ✅
+
+| Code | Use | Notes |
+|------|-----|-------|
+| -40 | User `THROW` | Any negative user code works; `.ERROR` falls back to `? THROW n` unless registered |
+| -67 | Closed `fileid` on `INCLUDE-FILE` | `CLOSE-FILE` keeps a closed stub so closed ≠ invalid (-68) |
+| -70 | Mid-file load/include abort | Line faults stay **specific** (-13, -9, …) when `CATCH` is active; -70 is the load-level I/O abort code |
+
+### Catchable mid-file errors
+
+`feedLine` calls `recoverFromError` only when `errorFlag` is set (uncaught faults). A caught `kernelThrow` during `FLOAD` / `INCLUDE-FILE` leaves `throwActive` set and the throw code on the stack — e.g.:
+
+```forth
+: safe-fload  ['] fload catch ?dup if  ." load failed:" .error  else  drop  then ;
+S" fload myfile.fth" CATCH-EVALUATE .    \ -13 if myfile has an undefined word
+```
+
+`loadFileContents` returns `false` on mid-file abort (no longer treats partial load as success). `performNamedFload` does not mis-report `-74` when the file was found but a line failed.
+
+**FTEST:** `-40` user throw; `-70` catch; `CATCH-EVALUATE` on `fload` bad file → -13; closed `INCLUDE-FILE` → -67.
+
+### ANS-VALIDATE exception suite (Phase 5b)
+
+Beyond per-code spot checks, FTEST / `ANS-VALIDATE` also cover:
+
+| Test | What it verifies |
+|------|------------------|
+| Nested CATCH propagate | Inner `THROW` unwinds to outer `CATCH`; stack depths restored |
+| Nested CATCH inner absorbs | Inner `CATCH` gets code; outer sees `0` |
+| `CATCH-EVALUATE` / `S" fload …" evaluate catch` | Mid-file fault returns specific code (-13); same as README `safe-fload` via evaluate |
+| `INCLUDE-FILE` mid-file | Open file with bad line; `CATCH` on include returns -13 |
+| `.ERROR` -67 / -70 / -74 | Spaced messages for file-access throw codes |
+
+---
+
 ## Implementation checklist (per site)
 
 When converting `errorFlag = true` → `kernelThrow`:
@@ -247,8 +282,8 @@ t-under .            → -3
 
 - [x] All §9.3.1 codes -3…-17 mapped or explicitly exempted (see **Codes not mapped**); file-access -68/-74 for kernel paths
 - [x] `grep errorFlag = true` only `handleUnhandledThrow` + `recoverFromError` (2 sites in `TZForth.swift`)
-- [x] FTEST **263/263**; `ANS_COMPLIANCE.md` Exception section revised
-- [ ] `ANS-VALIDATE` / Hayes-style exception suite (future enhancement)
+- [x] FTEST **273/273** (273 ans spot-checks); `ANS_COMPLIANCE.md` Exception section revised
+- [x] `ANS-VALIDATE` exception suite (mirrors FTEST CATCH/THROW; nested CATCH, safe-fload, mid-include, `.ERROR` file codes)
 
 ---
 
@@ -272,5 +307,7 @@ t-under .            → -3
 | 2 | Done | CATCH compile-only (-14), invalid address (-7) |
 | 3 | Done | CATCH FORGET/CREATE/SEE/SYNONYM; compile `STATE` preserve |
 | 4 | Done | CATCH FLOAD (-74), INCLUDE-FILE (-68), INCLUDED (-74); `.ERROR` |
+| 5 | Done | User -40; closed file -67; catchable mid-FLOAD (-13); -70 |
+| 5b | Done | Nested CATCH; safe-fload; mid-INCLUDE-FILE; `.ERROR` file codes |
 
 **FTEST:** `FTEST=1 swift /tmp/combined.swift` (concatenate `TZForth.swift`, `TZForthTests.swift`, `TestTZForth.swift`).

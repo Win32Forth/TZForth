@@ -2,7 +2,7 @@
 
 This document tracks implementation status of the 2012 ANS Forth Standard word sets in TZForth (Swift port of the lbForth model). Generated from codebase inspection (`TZForth/TZForth.swift`, `TestTZForth.swift`, `TZForthTests.swift`).
 
-Last update: Exception — THROW migration complete (Phases 1–4); `.ERROR`, synchronous catchable `FLOAD`, FTEST 263/263.
+Last update: Exception — THROW migration complete (Phases 1–5b); `.ERROR`, catchable mid-`FLOAD`/`INCLUDE-FILE`, FTEST 273/273.
 
 ## Summary
 
@@ -163,9 +163,9 @@ ANS word set 9.6.1 and extensions 9.6.2 (`ABORT`/`ABORT"` as `THROW` aliases).
 
 Unhandled `THROW` with no active `CATCH`: `-1` → print `Aborted!`, reset stacks/input, REPL ready for next line; `-2` → type stored `ABORT"` text then reset; other codes → `? …` from `lastKernelThrowMessage` then reset. Caught throws push **only the numeric code** (no message on stack).
 
-FTEST covers `ABORT`/`ABORT"` with and without `CATCH`, standard kernel codes, compile `STATE` preservation, and file faults.
+FTEST / `ANS-VALIDATE` cover `ABORT`/`ABORT"` with and without `CATCH`, standard kernel codes, compile `STATE` preservation, file faults, nested `CATCH`, `['] fload catch` (safe-fload), mid-file `INCLUDE-FILE`, user **-40**, and `.ERROR` for file codes.
 
-**Standard THROW codes (Phases 1–4, complete):** Runtime (-3…-9), memory (-7), compile-only (-14), control (-15/-16), limits (-17), search order (-20), names (-10), undefined (-13), dictionary misuse (-20), file-access (-68, -74). **`OPEN-FILE`** and related words still return **`ior`** on the stack (ANS file-access). Named **`FLOAD`** loads synchronously (`onPerformNamedLoad` in the app) so parsing words can be wrapped with `['] fload catch`. Full map: **`THROW_CODES.md`**.
+**Standard THROW codes (Phases 1–5, complete):** Runtime (-3…-9), memory (-7), compile-only (-14), control (-15/-16), limits (-17), search order (-20), names (-10), undefined (-13), dictionary misuse (-20), file-access (-67 closed file, -68 invalid file-id, -70 I/O abort, -74 not found). User range from **-40**. **`OPEN-FILE`** and related words still return **`ior`** on the stack (ANS file-access). Named **`FLOAD`** loads synchronously (`onPerformNamedLoad` in the app) so parsing words can be wrapped with `['] fload catch`. Mid-file line errors propagate the **specific** fault code to the enclosing `CATCH`. Full map: **`THROW_CODES.md`**.
 
 Catchable named load example:
 

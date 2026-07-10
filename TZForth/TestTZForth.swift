@@ -99,6 +99,7 @@ if ProcessInfo.processInfo.environment["FTEST"] == "1" {
     let freq2 = tmp.appendingPathComponent("required-helper2_\(suffix).fth")
     let freq3 = tmp.appendingPathComponent("required-helper3_\(suffix).fth")
     let freq4 = tmp.appendingPathComponent("required-helper4_\(suffix).fth")
+    let fbad = tmp.appendingPathComponent("load-bad_\(suffix).fth")
 
     // Note: in Swift literals, \\\\ produces two backslash chars in the string (for the \\ word in Forth source)
     let blockSrc = """
@@ -153,6 +154,7 @@ hello
         try "1+\n".write(to: freq2, atomically: true, encoding: String.Encoding.utf8)
         try "1+\n".write(to: freq3, atomically: true, encoding: String.Encoding.utf8)
         try "\n".write(to: freq4, atomically: true, encoding: String.Encoding.utf8)
+        try "nosuch-tzforth-loaderr-xyz\n999 .\n".write(to: fbad, atomically: true, encoding: String.Encoding.utf8)
     } catch {
         print("TEST write fail: \(error)")
         exit(1)
@@ -842,6 +844,28 @@ hello
     forth.feedLine(": t4inc S\" nosuch-tzforth-missing.fth\" ['] INCLUDED CATCH ;")
     ansTest("CATCH INCLUDED missing", "t4inc .", "-74")
 
+    // THROW Phase 5: -40 user, -67 closed file, catchable mid-file load abort (-13 / -70)
+    ansTest("THROW user -40", ": t4u40 -40 throw ; : t4c40 ['] t4u40 catch ; t4c40 .", "-40")
+    ansTest("CATCH THROW -70", ": t470 -70 throw ; : t4c70 ['] t470 catch ; t4c70 .", "-70")
+    _ = fm.changeCurrentDirectoryPath(tmp.path)
+    forth.logicalCurrentDirectory = tmp.path
+    ansTest("CATCH FLOAD mid-file", "S\" fload \(fbad.lastPathComponent)\" CATCH-EVALUATE .", "-13")
+    forth.feedLine("VARIABLE t4fid")
+    forth.feedLine(": t4closed s\" \(fincPath)\" r/o open-file drop t4fid ! t4fid @ close-file drop t4fid @ ['] include-file catch ;")
+    ansTest("CATCH INCLUDE-FILE closed", "t4closed .", "-67")
+
+    // THROW Phase 5b: nested CATCH, safe-fload, mid-include, .ERROR file codes
+    forth.feedLine(": t5in 99 throw ; : t5mid ['] t5in execute ; : t5out 1 2 ['] t5mid catch ;")
+    ansTest("CATCH nested propagate", "t5out . . .", "99 2 1")
+    forth.feedLine(": t5in2 99 throw ; : t5mid2 ['] t5in2 catch drop ; : t5out2 1 ['] t5mid2 catch ;")
+    ansTest("CATCH inner absorbs", "t5out2 . .", "0 1")
+    forth.feedLine("VARIABLE t5fid")
+    forth.feedLine(": t5inc s\" \(fbad.path)\" r/o open-file drop t5fid ! t5fid @ ['] include-file catch ;")
+    ansTest("CATCH INCLUDE-FILE mid-file", "t5inc .", "-13")
+    ansTest(".ERROR closed file", "-67 .ERROR", "? Operation on closed file")
+    ansTest(".ERROR file I/O", "-70 .ERROR", "? File I/O exception")
+    ansTest(".ERROR not found", "-74 .ERROR", "? File not found")
+
     print("TEST6 ANS core summary: \(ansPassed)/\(ansTotal) passed")
     if ansPassed != ansTotal {
         print("WARNING: some ANS 2012 core tests failed — review against standard stack effects.")
@@ -856,6 +880,7 @@ hello
     try? fm.removeItem(at: freq2)
     try? fm.removeItem(at: freq3)
     try? fm.removeItem(at: freq4)
+    try? fm.removeItem(at: fbad)
     try? fm.removeItem(at: fwr)
     try? fm.removeItem(atPath: frenamedPath)
 

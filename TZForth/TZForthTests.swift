@@ -68,6 +68,7 @@ extension TZForth {
         let freq2 = tmp.appendingPathComponent("ansval_req2_\(suffix).fth")
         let freq3 = tmp.appendingPathComponent("ansval_req3_\(suffix).fth")
         let freq4 = tmp.appendingPathComponent("ansval_req4_\(suffix).fth")
+        let fbad = tmp.appendingPathComponent("ansval_loadbad_\(suffix).fth")
 
         do {
             try self.testBlockSrc.write(to: fblock, atomically: true, encoding: String.Encoding.utf8)
@@ -81,6 +82,7 @@ extension TZForth {
             try "1+\n".write(to: freq2, atomically: true, encoding: String.Encoding.utf8)
             try "1+\n".write(to: freq3, atomically: true, encoding: String.Encoding.utf8)
             try "\n".write(to: freq4, atomically: true, encoding: String.Encoding.utf8)
+            try "nosuch-tzforth-loaderr-xyz\n999 .\n".write(to: fbad, atomically: true, encoding: String.Encoding.utf8)
         } catch {
             results += "TEST write fail: \(error)\n"
             self.onOutput = originalOnOutput
@@ -381,6 +383,7 @@ extension TZForth {
         ansTest("C! C@", "65 t6mem C! t6mem C@ .", "65")
         ansTest("+!", "0 t6mem ! 5 t6mem +! t6mem @ .", "5")
         ansTest("FILL", "t6mem 3 65 FILL t6mem C@ .", "65")
+        ansTest("DUMP", "t6mem 3 65 FILL t6mem 3 DUMP", "41 41 41")
         ansTest("MOVE", "t6mem 8 + 3 66 FILL t6mem 16 + 3 0 FILL t6mem 8 + t6mem 16 + 3 MOVE t6mem 16 + C@ .", "66")
         ansTest(",", "42 , 43 .", "43")
         // ALLOT tested indirectly via , behavior
@@ -757,6 +760,28 @@ extension TZForth {
         self.feedLine(": t4inc S\" nosuch-tzforth-missing.fth\" ['] INCLUDED CATCH ;")
         ansTest("CATCH INCLUDED missing", "t4inc .", "-74")
 
+        // THROW Phase 5: -40 user, -67 closed file, catchable mid-file load abort
+        ansTest("THROW user -40", ": t4u40 -40 throw ; : t4c40 ['] t4u40 catch ; t4c40 .", "-40")
+        ansTest("CATCH THROW -70", ": t470 -70 throw ; : t4c70 ['] t470 catch ; t4c70 .", "-70")
+        _ = fm.changeCurrentDirectoryPath(tmp.path)
+        self.logicalCurrentDirectory = tmp.path
+        ansTest("CATCH FLOAD mid-file", "S\" fload \(fbad.lastPathComponent)\" CATCH-EVALUATE .", "-13")
+        self.feedLine("VARIABLE t4fid")
+        self.feedLine(": t4closed s\" \(fincPath)\" r/o open-file drop t4fid ! t4fid @ close-file drop t4fid @ ['] include-file catch ;")
+        ansTest("CATCH INCLUDE-FILE closed", "t4closed .", "-67")
+
+        // THROW Phase 5b: nested CATCH, safe-fload, mid-include, .ERROR file codes
+        self.feedLine(": t5in 99 throw ; : t5mid ['] t5in execute ; : t5out 1 2 ['] t5mid catch ;")
+        ansTest("CATCH nested propagate", "t5out . . .", "99 2 1")
+        self.feedLine(": t5in2 99 throw ; : t5mid2 ['] t5in2 catch drop ; : t5out2 1 ['] t5mid2 catch ;")
+        ansTest("CATCH inner absorbs", "t5out2 . .", "0 1")
+        self.feedLine("VARIABLE t5fid")
+        self.feedLine(": t5inc s\" \(fbad.path)\" r/o open-file drop t5fid ! t5fid @ ['] include-file catch ;")
+        ansTest("CATCH INCLUDE-FILE mid-file", "t5inc .", "-13")
+        ansTest(".ERROR closed file", "-67 .ERROR", "? Operation on closed file")
+        ansTest(".ERROR file I/O", "-70 .ERROR", "? File I/O exception")
+        ansTest(".ERROR not found", "-74 .ERROR", "? File not found")
+
         results += "TEST6 ANS core summary: \(ansPassed)/\(ansTotal) passed\n"
         if ansPassed != ansTotal {
             results += "WARNING: some ANS 2012 core tests failed — review against standard stack effects.\n"
@@ -771,6 +796,7 @@ extension TZForth {
         try? fm.removeItem(at: fline)
         try? fm.removeItem(at: finc)
         try? fm.removeItem(at: fwr)
+        try? fm.removeItem(at: fbad)
         try? fm.removeItem(atPath: frenamedPath)
 
         // Restore dict to exactly the state before this ANS-VALIDATE run. All the test-only

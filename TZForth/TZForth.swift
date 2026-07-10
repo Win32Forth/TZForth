@@ -125,6 +125,8 @@ public final class TZForth {
     private var commandAddress: Int = 0
 
     var errorFlag = false   // internal (module-visible) so host can check after named load for bookmark decisions
+    /// Set when FLOAD / INCLUDE-FILE stops interpreting before EOF due to a line error.
+    private var midFileLoadAborted = false
     private var exitReq = false
 
     // Debug output control (per-line state + stack dump after each feedLine)
@@ -364,9 +366,10 @@ public final class TZForth {
         static let invalidToken: Cell = -16
         static let nestingLimit: Cell = -17
         static let illegalArgument: Cell = -20
+        static let closedFile: Cell = -67
+        static let invalidFileId: Cell = -68
         static let fileIOError: Cell = -70
         static let fileNotFound: Cell = -74
-        static let invalidFileId: Cell = -68
     }
     /// Depth of `[` … `]` compile-time interpret brackets (for SLITERAL et al.).
     private var bracketCompileDepth: Int = 0
@@ -1065,7 +1068,9 @@ public final class TZForth {
 
         runInterpreter()
 
-        if errorFlag || (throwActive && exceptionFrames.isEmpty) {
+        // Only recover on unhandled faults (errorFlag). Caught THROW leaves throwActive set
+        // but must not reset stacks — e.g. ['] fload CATCH during a mid-file line error.
+        if errorFlag {
             recoverFromError()
         }
 
@@ -1185,7 +1190,7 @@ public final class TZForth {
         } else {
             ok = self.loadFileContents(url, registerSpec: spec)
         }
-        if !ok && !self.throwActive {
+        if !ok && !self.throwActive && !self.midFileLoadAborted {
             self.throwFileNotFound("? FLOAD could not read '\(url.lastPathComponent)' (not found or unreadable)")
         }
     }
@@ -1221,12 +1226,14 @@ public final class TZForth {
                 self.loadNesting += 1
                 self.sourceLoadStop = false
                 self.inSlashSlashComment = false
+                self.midFileLoadAborted = false
                 defer {
                     if self.loadNesting > 0 { self.loadNesting -= 1 }
                     self.sourceLoadStop = false
                     self.inSlashSlashComment = false
                 }
 
+                var loadCompleted = true
                 for raw in rawLines {
                     // Re-evaluate echoOn on every line so that FILE-ECHO ON (or OFF) executed
                     // from earlier lines in *this* file take effect for subsequent lines.
@@ -1244,12 +1251,26 @@ public final class TZForth {
                         if self.sourceLoadStop {
                             break
                         }
+                        if self.throwActive {
+                            self.midFileLoadAborted = true
+                            loadCompleted = false
+                            break
+                        }
                         if errorFlag {
                             tell("? FLOAD aborted after error in \(target.lastPathComponent)\n")
                             errorFlag = false
+                            self.midFileLoadAborted = true
+                            loadCompleted = false
+                            if !self.exceptionFrames.isEmpty {
+                                self.throwFileIOError("? FLOAD aborted after error in \(target.lastPathComponent)")
+                            }
                             break
                         }
                     }
+                }
+                guard loadCompleted else {
+                    self.pendingFloadSpec = ""
+                    return false
                 }
                 let specToRegister = registerSpec ?? self.pendingFloadSpec
                 if !specToRegister.isEmpty {
@@ -1504,8 +1525,20 @@ public final class TZForth {
             }
         }
         entry.isOpen = false
-        openFiles.removeValue(forKey: fileId)
+        openFiles[fileId] = entry
         return FILE_IO_SUCCESS
+    }
+
+    /// Distinguish never-allocated fileid (-68) from CLOSE-FILE'd id (-67).
+    private enum FileIdStatus {
+        case invalid
+        case closed
+        case open
+    }
+
+    private func fileIdStatus(_ fileId: Int) -> FileIdStatus {
+        guard let entry = openFiles[fileId] else { return .invalid }
+        return entry.isOpen ? .open : .closed
     }
 
     private func activeInterpreterFileId() -> Int? {
@@ -1591,9 +1624,15 @@ public final class TZForth {
     }
 
     private func includeFileInterpret(_ fileId: Int, closeWhenDone: Bool) {
-        guard openFiles[fileId]?.isOpen == true else {
+        switch self.fileIdStatus(fileId) {
+        case .invalid:
             self.throwInvalidFileId("? INCLUDE-FILE: invalid fileid")
             return
+        case .closed:
+            self.throwClosedFile("? INCLUDE-FILE: operation on closed file")
+            return
+        case .open:
+            break
         }
         pushInputSourceFrame()
         interpreterInputFileId = Cell(fileId)
@@ -1607,9 +1646,23 @@ public final class TZForth {
                 _ = closeFileEntry(fileId, flush: false)
             }
         }
+        self.midFileLoadAborted = false
         while refillFromFile(fileId) {
             runInterpreter()
-            if throwActive || errorFlag || sourceLoadStop { break }
+            if sourceLoadStop { break }
+            if throwActive {
+                self.midFileLoadAborted = true
+                break
+            }
+            if errorFlag {
+                self.midFileLoadAborted = true
+                self.tell("? INCLUDE-FILE aborted after error in file \(fileId)\n")
+                self.errorFlag = false
+                if !self.exceptionFrames.isEmpty {
+                    self.throwFileIOError("? INCLUDE-FILE aborted after error in file \(fileId)")
+                }
+                break
+            }
         }
     }
 
@@ -4435,7 +4488,7 @@ public final class TZForth {
         // - If no name given, sets fileLoadRequested so host can show dialog.
         _ = register("FLOAD") {
             self.validateAndRepairSystemState()
-            let spec = self.parseWord()
+            let spec = self.parseWordForHostParsing()
             if spec.isEmpty {
                 self.fileLoadRequested = true
                 self.onFileLoadRequested?()
@@ -5710,6 +5763,7 @@ public final class TZForth {
         _ = register("INCLUDE-FILE") {
             let fileId = Int(self.pop())
             self.includeFileInterpret(fileId, closeWhenDone: true)
+            if self.throwActive { return }
         }
 
         _ = register("INCLUDED") {
@@ -5909,7 +5963,11 @@ public final class TZForth {
                         self.push(cfa); self.comma()
                     }
                 } else {
-                    // Execute
+                    // Execute — realign queue so parsing words inside xt (FLOAD under CATCH, etc.)
+                    // can see tokens after the word just parsed (e.g. `safe-fload myfile.fth`).
+                    if !compiling {
+                        self.realignInputQueueFromSource()
+                    }
                     execute(cfa: cfa, firstCell: first)
                     if throwActive { break }
                     if waitingForKey {
@@ -5963,6 +6021,70 @@ public final class TZForth {
         // Do not clear errorFlag or do stack/STATE recovery here.
         // The caller (feedLine) will see errorFlag and call recoverFromError(),
         // which does a complete job (drain queue + abort partial definitions + reset).
+    }
+
+    /// Rebuild the byte queue from SOURCE at >IN (unparsed tail of the current line).
+    private func realignInputQueueFromSource() {
+        let pos = Int(self.readCell(self.IN))
+        guard pos <= self.currentSourceLen else { return }
+        self.inputQueue.removeAll(keepingCapacity: true)
+        for i in pos..<self.currentSourceLen {
+            self.inputQueue.append(self.readByte(self.SOURCE_BUFFER + i))
+        }
+        if self.inputQueue.last != 10 {
+            self.inputQueue.append(10)
+        }
+    }
+
+    /// When the byte queue is empty but >IN has not reached SOURCE end, refill the queue
+    /// from SOURCE. Needed for parsing words (FLOAD, EDIT, …) invoked via EXECUTE/CATCH
+    /// while the outer line still has unparsed tokens (e.g. `safe-fload myfile.fth`).
+    private func syncInputQueueFromSourceIfNeeded() {
+        let pos = Int(self.readCell(self.IN))
+        guard pos < self.currentSourceLen else { return }
+        guard self.inputQueue.isEmpty else { return }
+        self.realignInputQueueFromSource()
+    }
+
+    /// Parse the next word from SOURCE at >IN (used when the byte queue is empty).
+    private func parseWordFromSourceAtIn() -> String {
+        var pos = Int(self.readCell(self.IN))
+        while pos < self.currentSourceLen {
+            let b = self.readByte(self.SOURCE_BUFFER + pos)
+            if b > 32 { break }
+            pos += 1
+        }
+        if pos >= self.currentSourceLen {
+            self.writeCell(self.IN, Cell(pos))
+            return ""
+        }
+        var word: [UInt8] = []
+        while pos < self.currentSourceLen {
+            let b = self.readByte(self.SOURCE_BUFFER + pos)
+            if b <= 32 { break }
+            word.append(b)
+            pos += 1
+        }
+        self.writeCell(self.IN, Cell(pos))
+        var result = String(bytes: word, encoding: .utf8) ?? ""
+        if !result.isEmpty {
+            result = result.map { ch -> Character in
+                switch ch {
+                case "\u{2018}", "\u{2019}", "\u{201A}", "\u{201B}", "`", "\u{00B4}": return "'"
+                default: return ch
+                }
+            }.reduce(into: "") { $0.append($1) }
+        }
+        return result
+    }
+
+    /// Parse the next name for TZForth parsing words (FLOAD, EDIT, …) that may run
+    /// under EXECUTE/CATCH while the rest of the REPL line remains in SOURCE.
+    private func parseWordForHostParsing() -> String {
+        self.syncInputQueueFromSourceIfNeeded()
+        let fromQueue = self.parseWord()
+        if !fromQueue.isEmpty { return fromQueue }
+        return self.parseWordFromSourceAtIn()
     }
 
     private func parseWord() -> String {
@@ -6216,6 +6338,7 @@ public final class TZForth {
     }
 
     private func captureExceptionFrame(dataStackDepth: Cell, savedIp: Int) -> ExceptionFrame {
+        self.syncInputQueueFromSourceIfNeeded()
         var sourceBytes: [UInt8] = []
         for i in 0..<self.currentSourceLen {
             sourceBytes.append(self.readByte(self.SOURCE_BUFFER + i))
@@ -6268,6 +6391,7 @@ public final class TZForth {
     private func performCatch(xt: Cell) {
         let stackDepth = self.spGet()
         let savedIp = self.ip
+        self.syncInputQueueFromSourceIfNeeded()
         self.exceptionFrames.append(self.captureExceptionFrame(dataStackDepth: stackDepth, savedIp: savedIp))
         self.throwActive = false
         if xt < Cell(self.MAX_BUILTIN_ID) {
@@ -6316,9 +6440,10 @@ public final class TZForth {
         case StdThrow.invalidToken: return "? invalid execution token"
         case StdThrow.nestingLimit: return "? nesting limit exceeded"
         case StdThrow.illegalArgument: return "? illegal argument"
+        case StdThrow.closedFile: return "? Operation on closed file"
+        case StdThrow.invalidFileId: return "? Invalid file-id"
         case StdThrow.fileIOError: return "? File I/O exception"
         case StdThrow.fileNotFound: return "? File not found"
-        case StdThrow.invalidFileId: return "? Invalid file-id"
         default: return nil
         }
     }
@@ -6366,6 +6491,14 @@ public final class TZForth {
 
     private func throwInvalidFileId(_ message: String) {
         kernelThrow(StdThrow.invalidFileId, message: message)
+    }
+
+    private func throwClosedFile(_ message: String) {
+        kernelThrow(StdThrow.closedFile, message: message)
+    }
+
+    private func throwFileIOError(_ message: String) {
+        kernelThrow(StdThrow.fileIOError, message: message)
     }
 
     /// ANS THROW / ABORT delivery. n=0 is a no-op. Caught throws restore the CATCH frame.
@@ -6806,6 +6939,7 @@ public final class TZForth {
         self.inSlashSlashComment = false
         self.sourceLoadStop = false
         self.loadNesting = 0
+        self.midFileLoadAborted = false
         // pictured state
         self.pnoPtr = self.pnoBufferAddr + self.PNO_BUFFER_SIZE
         writeCell(IN, 0)

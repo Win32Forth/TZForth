@@ -434,6 +434,18 @@ extension TZForth {
         ansTest("DEPTH", "1 2 3 DEPTH .", "3")
         ansTest("[']", ": t6p ['] DUP ; ' DUP t6p = .", "-1")
 
+        // Programming-Tools (ANS 15)
+        ansTest("?", "42 t6mem ! t6mem ?", "42")
+        ansTest("NAME>STRING", "' DUP >HEADER DUP NAME>STRING TYPE", "DUP")
+        ansTest("NAME>INTERPRET", "' DUP >HEADER DUP NAME>INTERPRET ' DUP = .", "-1")
+        ansTest("TRAVERSE-WORDLIST", "VARIABLE t6tr : t6tw DROP 1 t6tr ! ; 0 t6tr ! ' t6tw GET-CURRENT TRAVERSE-WORDLIST t6tr @ .", "1")
+        ansTest("SYNONYM", "SYNONYM T6DUP DUP : t6syn 5 T6DUP 1+ ; t6syn .", "6")
+        ansTest("[DEFINED]", ": t6def [DEFINED] DUP DUP [THEN] ; 5 t6def . .", "5 5")
+        ansTest("[UNDEFINED]", ": t6undef [UNDEFINED] NOPE 99 [THEN] ; t6undef .", "99")
+        ansTest("N>R NR>", "10 20 2 N>R NR> . .", "20 10")
+        ansTest("AHEAD", ": t6ah AHEAD 111 THEN 222 ; t6ah .", "222")
+        ansTest("NAME>COMPILE xt", "' DUP >HEADER DUP NAME>COMPILE ' DUP >HEADER DUP NAME>INTERPRET = .", "0")
+
         // TYPE COUNT WORD (more coverage)
         ansTest("COUNT TYPE via WORD", "32 WORD HELLO COUNT TYPE", "HELLO")
 

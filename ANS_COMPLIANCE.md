@@ -2,7 +2,7 @@
 
 This document tracks implementation status of the 2012 ANS Forth Standard word sets in TZForth (Swift port of the lbForth model). Generated from codebase inspection (`TZForth/TZForth.swift`, `TestTZForth.swift`, `TZForthTests.swift`).
 
-Last update: dictionary introspection (`'`/`FIND` → CFA, `>HEADER`, `>NFA`, `>XID`, `ID.`), ANS `DUMP` (hex bytes), extension `H.`.
+Last update: Programming-Tools (`?`, `NAME>STRING`, `NAME>INTERPRET`, `NAME>COMPILE`, `TRAVERSE-WORDLIST`, `SYNONYM`, `[DEFINED]`, `[UNDEFINED]`, `N>R`, `NR>`, `CS-PICK`, `CS-ROLL`, `AHEAD`, `EDITOR`/`ASSEMBLER` vocabs; assembler words stubbed).
 
 ## Summary
 
@@ -11,7 +11,7 @@ Last update: dictionary introspection (`'`/`FIND` → CFA, `>HEADER`, `>NFA`, `>
 | **Core (6.1)** | Complete — all required words implemented with FTEST coverage |
 | **Core Ext (6.2)** | Complete — all standard Core Ext words implemented |
 | **Search-Order (16)** | Complete — 16.6.1 + 16.6.2; `SEARCH-WORDLIST`, `ENVIRONMENT?` `WORDLISTS` (8) |
-| **Programming-Tools** | Partial — `SEE`, `HELP`, `WORDS`, `FORGET`, `DUMP`, `.S`, `ANS-VALIDATE`; no `LOCATE`, `COMPILE`, `NEEDS`, `REQUIRED`, `NAME>STRING`, `TRAVERSE-WORDLIST` |
+| **Programming-Tools** | Partial — core + extensions above; assembler `CODE`/`[IF]` stubbed; no `LOCATE`, `COMPILE`, `NEEDS`, `REQUIRED` |
 | **File-Access (11)** | Substantial — 11.6.1 core words + `INCLUDE`/`INCLUDED`; no `REQUIRE`/`REQUIRED` |
 | **Exception (9)** | Complete — `CATCH`, `THROW`; Core `ABORT`/`ABORT"` delegate to `THROW -1`/`-2` |
 | **String (17)** | Complete — 17.6.1 (`COMPARE`, `SEARCH`, `SLITERAL`, `/STRING`, `-TRAILING`, `BLANK`, `CMOVE`, `CMOVE>`) |
@@ -221,12 +221,25 @@ ANS words implemented from 15.6.1 / extensions:
 | Word | Notes |
 |------|-------|
 | `.S` | Data stack dump |
+| `?` | `( addr -- )` — display `@ addr` |
 | `DUMP` | `( addr u -- )` — hex dump of **u address units (bytes)**; 16 per line, uppercase hex, ASCII gutter |
 | `SEE` | Decompile / list word |
 | `WORDS` | List dictionary (optional vocab filter) |
 | `FORGET` | Parse name; truncate dictionary from that word forward |
+| `NAME>STRING` | `( nt -- c-addr u )` — **nt** = header address (link field); transient buffer |
+| `NAME>INTERPRET` | `( nt -- xt )` — xt is cfa |
+| `NAME>COMPILE` | `( nt -- xt )` — immediate → cfa; non-immediate → hidden compile stub |
+| `TRAVERSE-WORDLIST` | `( xt wid -- )` — skips hidden / empty-name entries |
+| `SYNONYM` | `( "new" "old" -- )` — execution + compilation delegate to oldname |
+| `[DEFINED]` / `[UNDEFINED]` | Compile-time existence tests (immediate) |
+| `N>R` / `NR>` | Block transfer between data and return stacks |
+| `CS-PICK` / `CS-ROLL` | Control-flow stack = data stack during compilation |
+| `AHEAD` | Unconditional forward branch placeholder (with `THEN`) |
+| `EDITOR` / `ASSEMBLER` | Empty vocabularies (Search-Order stubs) |
 
-Not implemented: `LOCATE`, `COMPILE`, `NEEDS`, `REQUIRED`, `NAME>INTERPRET`, `NAME>COMPILE`, `NAME>STRING`, `TRAVERSE-WORDLIST`, assembler words (`CODE`, `[IF]`, …).
+`[IF]` / `[ELSE]` / `[THEN]` also satisfy Core Ext conditional compilation. Stubbed (error at use): `CODE`, `;CODE`.
+
+Not implemented: `LOCATE`, `COMPILE`, `NEEDS`, `REQUIRED`.
 
 ## Dictionary introspection (fig-style extensions)
 

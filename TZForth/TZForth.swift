@@ -297,6 +297,8 @@ public final class TZForth {
     private var createRuntimeID: Cell = 0
     private var dodoesID: Cell = 0
     private var doesPatchID: Cell = 0
+    private var synonymID: Cell = 0
+    private var compileCfaID: Cell = 0
 
     // Used by (CREATE) and (DOES) runtimes so they can locate their data/does fields
     // relative to the code cell being executed, even for top-level execution.
@@ -525,6 +527,24 @@ public final class TZForth {
         ("FALSE",   "( -- 0 )",           "false flag"),
         ("BL",      "( -- 32 )",          "blank character (space)"),
         ("DUMP",    "( addr u -- )",      "hex dump u bytes from addr (16 per line, ASCII gutter)"),
+        ("?",       "( addr -- )",        "display the value stored at addr"),
+        ("NAME>STRING", "( nt -- c-addr u )", "copy name token name to buffer (valid until next NAME>STRING)"),
+        ("NAME>INTERPRET", "( nt -- xt )", "execution token for name token nt (header address)"),
+        ("NAME>COMPILE", "( nt -- xt )",   "compilation token for name token nt"),
+        ("TRAVERSE-WORDLIST", "( xt wid -- )", "execute xt for each name token in wordlist wid"),
+        ("SYNONYM", "( \"new\" \"old\" -- )", "create newname as synonym of oldname"),
+        ("[DEFINED]", "( \"name\" -- )",   "compile TRUE if name exists (immediate)"),
+        ("[UNDEFINED]", "( \"name\" -- )", "compile TRUE if name does not exist (immediate)"),
+        ("N>R",     "( n -- )",           "move n items from data stack to return stack"),
+        ("NR>",     "( -- )",             "restore items moved by N>R"),
+        ("CS-PICK", "( u -- )",           "pick uth control-flow-stack item during compilation (immediate)"),
+        ("CS-ROLL", "( u -- )",           "roll uth control-flow-stack item during compilation (immediate)"),
+        ("AHEAD",   "( -- )",             "unresolved forward branch (immediate; use with THEN)"),
+        ("CODE",    "( -- ) name",        "start assembler definition (not implemented)"),
+        (";CODE",   "( -- )",             "end assembler definition (not implemented)"),
+        ("[IF]",    "( flag -- )",        "conditional compilation (immediate; Core Ext)"),
+        ("[ELSE]",  "( -- )",             "else branch for [IF] (immediate)"),
+        ("[THEN]",  "( -- )",             "end [IF] (immediate)"),
         (".(",      "( -- )",             "print text until ) immediately (immediate)"),
         (".\"",     "( -- )",             "print text until \" (immediate)"),
         ("(",       "( -- )",             "comment until ) (immediate)"),
@@ -1845,10 +1865,75 @@ public final class TZForth {
     /// First cell at a CFA when it is a kernel primitive dispatch ID; nil for colon/CREATE words.
     private func primitiveID(atCFA cfa: Cell) -> Cell? {
         let first = readCell(Int(cfa))
-        if first < Cell(MAX_BUILTIN_ID) && first != docolID && first != createRuntimeID && first != dodoesID {
+        if first < Cell(MAX_BUILTIN_ID) && first != docolID && first != createRuntimeID && first != dodoesID && first != synonymID {
             return first
         }
         return nil
+    }
+
+    /// Emit a compile-time reference to xt (cfa), following SYNONYM indirection.
+    private func emitCompileReference(xt: Cell) {
+        var target = xt
+        var safety = 0
+        while safety < 32 {
+            safety += 1
+            let first = readCell(Int(target))
+            if first == synonymID {
+                target = readCell(Int(target) + 8)
+                continue
+            }
+            if let id = primitiveID(atCFA: target) {
+                push(id); comma()
+            } else if target < Cell(MAX_BUILTIN_ID) && target != docolID {
+                push(target); comma()
+            } else {
+                push(target); comma()
+            }
+            return
+        }
+        tell("? SYNONYM chain too deep\n")
+        errorFlag = true
+    }
+
+    /// Anonymous xt (no dictionary header) that compiles a fixed target cfa when executed.
+    private func makeCompileXT(forTargetCfa target: Cell) -> Cell {
+        let cfa = readCell(DP_ADDR)
+        writeCellHere(docolID)
+        writeCellHere(litID)
+        writeCellHere(target)
+        writeCellHere(compileCfaID)
+        writeCellHere(exitID)
+        return cfa
+    }
+
+    /// u=0 is TOS on the data stack.
+    private func peekStackItem(_ u: Int) -> Cell {
+        let depth = Int(spGet() - 1)
+        if u < 0 || u >= depth { return 0 }
+        return readCell(stackBase + (depth - 1 - u) * CELL_SIZE)
+    }
+
+    private enum ConditionalSkipResult { case then, elseBranch, error }
+
+    /// Skip conditional-compilation source until a matching `[THEN]` or (when allowed) `[ELSE]`.
+    private func skipConditionalBranch(stopAtElse: Bool) -> ConditionalSkipResult {
+        var depth = 1
+        while !inputQueue.isEmpty && !errorFlag {
+            let word = parseWord()
+            if word.isEmpty { continue }
+            let w = word.uppercased()
+            if w == "[IF]" {
+                depth += 1
+            } else if w == "[THEN]" {
+                depth -= 1
+                if depth == 0 { return .then }
+            } else if w == "[ELSE]" && depth == 1 && stopAtElse {
+                return .elseBranch
+            }
+        }
+        tell("? [IF] unresolved conditional compilation\n")
+        errorFlag = true
+        return .error
     }
 
     private static let environmentQueryCatalog: [String] = [
@@ -1868,6 +1953,7 @@ public final class TZForth {
         "DOUBLE",
         "LOCALS",
         "#LOCALS",
+        "PROGRAMMING-TOOLS",
     ]
 
     /// ANS ENVIRONMENT? values for a query string, or nil if unsupported.
@@ -1883,7 +1969,7 @@ public final class TZForth {
             return [255, -1]
         case "WORDLISTS":
             return [Cell(MAX_VOCABS), -1]
-        case "FILE", "FILE-ACCESS", "FILE-EXT", "EXCEPTION", "STRING", "MEMORY-ALLOCATION", "DOUBLE", "LOCALS":
+        case "FILE", "FILE-ACCESS", "FILE-EXT", "EXCEPTION", "STRING", "MEMORY-ALLOCATION", "DOUBLE", "LOCALS", "PROGRAMMING-TOOLS":
             return [-1]
         case "#LOCALS":
             return [Cell(Self.MAX_LOCALS_PER_DEF), -1]
@@ -2611,13 +2697,14 @@ public final class TZForth {
                 return
             }
             let xt = self.pop()
-            if let id = self.primitiveID(atCFA: xt) {
-                self.push(id); self.comma()
-            } else if xt < Cell(self.MAX_BUILTIN_ID) && xt != self.docolID {
-                self.push(xt); self.comma()
-            } else {
-                self.push(xt); self.comma()
-            }
+            self.emitCompileReference(xt: xt)
+        }
+
+        // (COMPILE-CFA) ( xt -- )  internal — compile reference to xt (used by NAME>COMPILE stubs).
+        // Internal — only reached from NAME>COMPILE stubs; always emits a compile reference.
+        self.compileCfaID = register("(COMPILE-CFA)") {
+            let xt = self.pop()
+            self.emitCompileReference(xt: xt)
         }
 
         // POSTPONE name  (immediate)  Append the compilation semantics of the next word.
@@ -4547,6 +4634,239 @@ public final class TZForth {
             }
         }
 
+        // ? ( addr -- )  ANS Programming-Tools — display value at addr.
+        _ = register("?") {
+            let addr = Int(self.pop())
+            let n = self.readCell(addr)
+            let b = self.readCell(self.BASE)
+            self.tell(self.formatNumber(n, base: b, signed: true))
+            self.putkey(32)
+        }
+
+        // NAME>STRING ( nt -- c-addr u )  nt is the header address (link field).
+        _ = register("NAME>STRING") {
+            let nt = Int(self.pop())
+            let flagsLen = self.readByte(nt + 8)
+            let len = Int(flagsLen & self.MASK_NAMELENGTH)
+            let slot = self.allocateStringBufferSlot()
+            for i in 0..<len {
+                self.writeByte(slot + i, self.readByte(nt + 9 + i))
+            }
+            self.push(Cell(slot))
+            self.push(Cell(len))
+        }
+
+        // NAME>INTERPRET ( nt -- xt )  xt is the cfa.
+        _ = register("NAME>INTERPRET") {
+            let nt = self.pop()
+            self.push(self.getCFA(nt))
+        }
+
+        // NAME>COMPILE ( nt -- xt )  immediate → cfa; non-immediate → hidden compile stub.
+        _ = register("NAME>COMPILE") {
+            let nt = self.pop()
+            let cfa = self.getCFA(nt)
+            let flagsLen = self.readByte(Int(nt) + 8)
+            if (flagsLen & self.FLAG_IMMEDIATE) != 0 {
+                self.push(cfa)
+            } else {
+                self.push(self.makeCompileXT(forTargetCfa: cfa))
+            }
+        }
+
+        // TRAVERSE-WORDLIST ( xt wid -- )
+        _ = register("TRAVERSE-WORDLIST") {
+            let wid = Int(self.pop())
+            let xt = self.pop()
+            var link = self.readCell(wid)
+            var safety = 0
+            while link != 0 && safety < 10000 {
+                safety += 1
+                if !self.isValidDictionaryLink(link) { break }
+                let flagsLen = self.readByte(Int(link) + 8)
+                if (flagsLen & self.FLAG_HIDDEN) != 0 {
+                    link = self.readCell(link)
+                    continue
+                }
+                let namelen = Int(flagsLen & self.MASK_NAMELENGTH)
+                if namelen == 0 {
+                    link = self.readCell(link)
+                    continue
+                }
+                self.push(link)
+                let savedIp = self.ip
+                let savedRsp = self.rspGet()
+                let first = self.readCell(Int(xt))
+                self.execute(cfa: xt, firstCell: first)
+                self.ip = savedIp
+                self.rspSet(savedRsp)
+                if self.throwActive || self.errorFlag { return }
+                link = self.readCell(link)
+            }
+        }
+
+        // SYNONYM ( "newname" "oldname" -- )
+        self.synonymID = register("(SYNONYM)") {
+            let target = self.readCell(Int(self.currentCodeAddr) + 8)
+            let first = self.readCell(Int(target))
+            self.execute(cfa: target, firstCell: first)
+        }
+
+        _ = register("SYNONYM") {
+            let newName = self.parseWord()
+            let oldName = self.parseWord()
+            if newName.isEmpty || oldName.isEmpty {
+                self.tell("? SYNONYM needs newname and oldname\n")
+                self.errorFlag = true
+                return
+            }
+            let hdr = self.findWord(oldName)
+            if hdr == 0 {
+                self.tell("? SYNONYM ? \(oldName)\n")
+                self.errorFlag = true
+                return
+            }
+            let oldCfa = self.getCFA(hdr)
+            let oldFlags = self.readByte(Int(hdr) + 8)
+            let isImm = (oldFlags & self.FLAG_IMMEDIATE) != 0
+            self.createWord(name: newName, immediate: isImm)
+            self.writeCellHere(self.synonymID)
+            self.writeCellHere(oldCfa)
+            self.writeCellHere(self.exitID)
+        }
+
+        // [DEFINED] ( "<spaces>name" -- )  immediate — skip following text if name absent.
+        _ = register("[DEFINED]", immediate: true) {
+            let compiling = self.readCell(self.STATE) != 0 || self.bracketCompileDepth > 0
+            if !compiling {
+                self.tell("? [DEFINED] only while compiling\n")
+                self.errorFlag = true
+                return
+            }
+            let name = self.parseWord()
+            if self.findWord(name) == 0 {
+                _ = self.skipConditionalBranch(stopAtElse: true)
+            }
+        }
+
+        // [UNDEFINED] ( "<spaces>name" -- )  immediate — skip following text if name present.
+        _ = register("[UNDEFINED]", immediate: true) {
+            let compiling = self.readCell(self.STATE) != 0 || self.bracketCompileDepth > 0
+            if !compiling {
+                self.tell("? [UNDEFINED] only while compiling\n")
+                self.errorFlag = true
+                return
+            }
+            let name = self.parseWord()
+            if self.findWord(name) != 0 {
+                _ = self.skipConditionalBranch(stopAtElse: true)
+            }
+        }
+
+        // N>R ( n -- ) / NR> ( -- )  Programming-Tools stack block transfer.
+        _ = register("N>R") {
+            let n = Int(self.pop())
+            if n < 0 {
+                self.tell("? N>R negative count\n")
+                self.errorFlag = true
+                return
+            }
+            var items: [Cell] = []
+            for _ in 0..<n { items.append(self.pop()) }
+            for item in items { self.rpush(item) }
+            self.rpush(Cell(n))
+        }
+
+        _ = register("NR>") {
+            let rs = self.rspGet()
+            if rs < 2 {
+                self.tell("? NR> return stack underflow\n")
+                self.errorFlag = true
+                return
+            }
+            let n = Int(self.rpop())
+            if n < 0 || rs - 1 < Cell(n) {
+                self.tell("? NR> mismatch with N>R\n")
+                self.errorFlag = true
+                return
+            }
+            for _ in 0..<n { self.push(self.rpop()) }
+        }
+
+        // CS-PICK / CS-ROLL — control-flow stack is the data stack during compilation.
+        _ = register("CS-PICK", immediate: true) {
+            if self.readCell(self.STATE) == 0 {
+                self.tell("? CS-PICK only while compiling\n")
+                self.errorFlag = true
+                return
+            }
+            let u = Int(self.pop())
+            let picked = self.peekStackItem(u)
+            self.push(picked)
+        }
+
+        _ = register("CS-ROLL", immediate: true) {
+            if self.readCell(self.STATE) == 0 {
+                self.tell("? CS-ROLL only while compiling\n")
+                self.errorFlag = true
+                return
+            }
+            let u = Int(self.pop())
+            if u <= 0 { return }
+            var saved: [Cell] = []
+            for _ in 0...u { saved.append(self.pop()) }
+            let rolled = saved[u]
+            for i in (0..<u).reversed() { self.push(saved[i]) }
+            self.push(rolled)
+        }
+
+        // AHEAD ( -- )  unconditional forward branch placeholder (resolved by THEN).
+        _ = register("AHEAD", immediate: true) {
+            if self.readCell(self.STATE) == 0 {
+                self.tell("? AHEAD only while compiling\n")
+                self.errorFlag = true
+                return
+            }
+            self.push(self.branchID); self.comma()
+            let placeholderAddr = self.readCell(self.DP_ADDR)
+            self.push(0); self.comma()
+            self.push(placeholderAddr)
+        }
+
+        // Assembler words — stubs (no machine-code assembler in TZForth yet).
+        _ = register("CODE") {
+            self.tell("? CODE assembler not implemented\n")
+            self.errorFlag = true
+        }
+        _ = register(";CODE") {
+            self.tell("? ;CODE assembler not implemented\n")
+            self.errorFlag = true
+        }
+        // [IF] / [ELSE] / [THEN] — Core Ext conditional compilation (also listed under Programming-Tools assembler).
+        _ = register("[IF]", immediate: true) {
+            let compiling = self.readCell(self.STATE) != 0 || self.bracketCompileDepth > 0
+            if !compiling {
+                self.tell("? [IF] undefined in interpret state\n")
+                self.errorFlag = true
+                return
+            }
+            if self.pop() == 0 {
+                _ = self.skipConditionalBranch(stopAtElse: true)
+            }
+        }
+        _ = register("[ELSE]", immediate: true) {
+            let compiling = self.readCell(self.STATE) != 0 || self.bracketCompileDepth > 0
+            if !compiling {
+                self.tell("? [ELSE] undefined in interpret state\n")
+                self.errorFlag = true
+                return
+            }
+            _ = self.skipConditionalBranch(stopAtElse: false)
+        }
+        _ = register("[THEN]", immediate: true) {
+            // end marker — no-op
+        }
+
         // .(  immediate — print characters until )
         _ = register(".(", immediate: true) {
             while !self.inputQueue.isEmpty {
@@ -5362,6 +5682,8 @@ public final class TZForth {
         // Executing a vocab prepends its word list to the search order.
         // WORDLIST uses the CREATE data field as the list head; DROP discards the duplicate wid.
         self.feedLine(": VOCABULARY CREATE WORDLIST DROP DOES> PUSH-ORDER ;")
+        self.feedLine("VOCABULARY EDITOR")
+        self.feedLine("VOCABULARY ASSEMBLER")
 
         // file-echo variable (user can do: file-echo ON   or   file-echo OFF ).
         // Controls whether FLOAD echoes each source line to the console as it loads.
@@ -5434,8 +5756,10 @@ public final class TZForth {
                 let immediate = (readByte(Int(hdr) + 8) & FLAG_IMMEDIATE) != 0
 
                 if compiling && !immediate {
-                    // Compile either the small ID or the address
-                    if first < Cell(MAX_BUILTIN_ID) && first != docolID {
+                    if first == synonymID {
+                        let target = readCell(Int(cfa) + 8)
+                        emitCompileReference(xt: target)
+                    } else if first < Cell(MAX_BUILTIN_ID) && first != docolID {
                         self.push(first); self.comma()
                     } else {
                         self.push(cfa); self.comma()

@@ -31,7 +31,7 @@ The REPL console is fully working (see TZForth/ConsoleView.swift + TZForth.swift
 - `FILE-ECHO`, `DEBUG-ON/OFF`, `\S`, `."`, `WORD`, `COUNT`, `STATE` (addr), `BASE` (affects parse+print), `RESET` (full kernel dict restore), etc.
 - Classic load semantics: `FILE-ECHO ON` at top of .fth takes effect for that load; `\S` aborts remainder of *that* file only; compile errors mid-load abort the rest of the file and leave REPL clean/interpreting; no per-line OK spam during loads.
 
-Automated tests (`FTEST=1`; see `TestTZForth.swift` header) cover load/comment harnesses plus **228** ANS Core/Core-Ext spot-checks (dictionary, file I/O, locals, double, memory, `DUMP`, `H.`, `>XID`, etc.). In-app: `ANS-VALIDATE`.
+Automated tests (`FTEST=1`; see `TestTZForth.swift` header) cover load/comment harnesses plus **238** ANS Core/Core-Ext spot-checks (dictionary, file I/O, locals, double, memory, Programming-Tools, `DUMP`, `H.`, `>XID`, etc.). In-app: `ANS-VALIDATE`.
 
 ## Sandbox and FLOAD (important for loading your own Forthing.fth etc.)
 

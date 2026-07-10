@@ -532,6 +532,8 @@ hello
     ansTest("NAME>INTERPRET", "' DUP >HEADER DUP NAME>INTERPRET ' DUP = .", "-1")
     ansTest("TRAVERSE-WORDLIST", "VARIABLE t6tr : t6tw DROP 1 t6tr ! ; 0 t6tr ! ' t6tw GET-CURRENT TRAVERSE-WORDLIST t6tr @ .", "1")
     ansTest("SYNONYM", "SYNONYM T6DUP DUP : t6syn 5 T6DUP 1+ ; t6syn .", "6")
+    forth.feedLine(": tloc 99 ;")
+    ansTest("LOCATE", "LOCATE tloc", "LIT 99")
     ansTest("[DEFINED]", ": t6def [DEFINED] DUP DUP [THEN] ; 5 t6def . .", "5 5")
     ansTest("[UNDEFINED]", ": t6undef [UNDEFINED] NOPE 99 [THEN] ; t6undef .", "99")
     ansTest("N>R NR>", "10 20 2 N>R NR> . .", "20 10")

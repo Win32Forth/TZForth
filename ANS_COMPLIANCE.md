@@ -11,7 +11,7 @@ Last update: File-Access `REQUIRE`/`REQUIRED` with `INCLUDED-NAMES` registry; `I
 | **Core (6.1)** | Complete — all required words implemented with FTEST coverage |
 | **Core Ext (6.2)** | Complete — all standard Core Ext words implemented |
 | **Search-Order (16)** | Complete — 16.6.1 + 16.6.2; `SEARCH-WORDLIST`, `ENVIRONMENT?` `WORDLISTS` (8) |
-| **Programming-Tools** | Partial — core + extensions above; assembler `CODE`/`[IF]` stubbed; no `LOCATE`, `COMPILE`, `NEEDS` |
+| **Programming-Tools** | Partial — core + extensions above; assembler `CODE`/`[IF]` stubbed; `LOCATE` (SEE alias); no `COMPILE`, `NEEDS` |
 | **File-Access (11)** | Substantial — 11.6.1 core words + `INCLUDE`/`INCLUDED` + `REQUIRE`/`REQUIRED` |
 | **Exception (9)** | Complete — `CATCH`, `THROW`; Core `ABORT`/`ABORT"` delegate to `THROW -1`/`-2` |
 | **String (17)** | Complete — 17.6.1 (`COMPARE`, `SEARCH`, `SLITERAL`, `/STRING`, `-TRAILING`, `BLANK`, `CMOVE`, `CMOVE>`) |
@@ -20,7 +20,7 @@ Last update: File-Access `REQUIRE`/`REQUIRED` with `INCLUDED-NAMES` registry; `I
 | **Locals (13)** | Complete — `(LOCAL)`, `LOCALS|`, `{:`; `TO` for locals; max 32 (`#LOCALS`) |
 | **Other optional sets** | Mostly absent — Float, Facility, Block, Extended-Character, etc. |
 
-FTEST harness: run with `FTEST=1 swift /tmp/combined.swift` (concatenate `TZForth.swift`, `TZForthTests.swift`, `TestTZForth.swift`). Current count: **243/243** TEST6 spot-checks plus block-comment / FLOAD harness tests.
+FTEST harness: run with `FTEST=1 swift /tmp/combined.swift` (concatenate `TZForth.swift`, `TZForthTests.swift`, `TestTZForth.swift`). Current count: **244/244** TEST6 spot-checks plus block-comment / FLOAD harness tests.
 
 ## Core (6.1) — Complete
 
@@ -242,10 +242,11 @@ ANS words implemented from 15.6.1 / extensions:
 | `CS-PICK` / `CS-ROLL` | Control-flow stack = data stack during compilation |
 | `AHEAD` | Unconditional forward branch placeholder (with `THEN`) |
 | `EDITOR` / `ASSEMBLER` | Empty vocabularies (Search-Order stubs) |
+| `LOCATE` | `( -- name )` — TZForth extension; **alias of `SEE`** (decompile from memory, not source-file context) |
 
 `[IF]` / `[ELSE]` / `[THEN]` also satisfy Core Ext conditional compilation. Stubbed (error at use): `CODE`, `;CODE`.
 
-Not implemented: `LOCATE`, `COMPILE`, `NEEDS`.
+Not implemented: `COMPILE`, `NEEDS`. Gforth-style source-file `LOCATE` (retained buffers, file:line) is a future enhancement.
 
 ## Dictionary introspection (fig-style extensions)
 
@@ -266,7 +267,7 @@ Example: `' DUP >HEADER 32 DUMP` · `' DUP H.` · `' DUP >XID .` → `8`.
 
 ## TZForth-specific extensions (non-ANS)
 
-`FLOAD`, `EDIT`, `CHDIR`, `DIR`, `FILE-ECHO`, `DEBUG-ON`/`DEBUG-OFF`, `RESET`, `CLS`, `BYE`, `ANS-VALIDATE`, `.ENVIRONMENT`, `.INCLUDED` (list `INCLUDED-NAMES` registry), `FORGET-WORD`, `>LFA`, `>HEADER`, `>NFA`, `>XID`, `ID.`, `H.` (unsigned hex print, ignores `BASE`), `\\` (block comment to `{`), `\\S`, `DP`, high-level `HERE` (`DP @`), `ERASE` (`0 FILL`), `GROWMEMORYMB`, etc.
+`FLOAD`, `EDIT`, `CHDIR`, `DIR`, `FILE-ECHO`, `DEBUG-ON`/`DEBUG-OFF`, `RESET`, `CLS`, `BYE`, `ANS-VALIDATE`, `.ENVIRONMENT`, `.INCLUDED` (list `INCLUDED-NAMES` registry), `LOCATE` (SEE alias), `FORGET-WORD`, `>LFA`, `>HEADER`, `>NFA`, `>XID`, `ID.`, `H.` (unsigned hex print, ignores `BASE`), `\\` (block comment to `{`), `\\S`, `DP`, high-level `HERE` (`DP @`), `ERASE` (`0 FILL`), `GROWMEMORYMB`, etc.
 
 ## Missing optional / future word sets
 
@@ -276,7 +277,7 @@ Not implemented (no current plan unless requested):
 - **Facility** (`AT-XY`, `TIME&DATE`, …)
 - **Block**
 - **Extended-Character**
-- Full **Programming-Tools** (`LOCATE`, `COMPILE`, …)
+- Full **Programming-Tools** (`COMPILE`, Gforth-style source `LOCATE`, …)
 
 ## Recommendations
 

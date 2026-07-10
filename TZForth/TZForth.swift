@@ -509,6 +509,7 @@ public final class TZForth {
         // Dictionary & System
         ("WORDS",   "( -- )",             "list all words (kernel alpha, then user in order)"),
         ("SEE",     "( -- name )",        "decompile a word"),
+        ("LOCATE",  "( -- name )",        "alias of SEE — decompile word definition"),
         ("HELP",    "( -- ) name",        "show help for a word"),
         ("' ",      "( -- xt ) name",     "tick: get execution token of name"),
         ("EXECUTE", "( xt -- )",          "execute the word with the given xt"),
@@ -4647,23 +4648,11 @@ public final class TZForth {
         }
 
         _ = register("SEE") {
-            self.validateAndRepairSystemState()
-            let name = self.parseWord().uppercased()
-            if name.isEmpty {
-                self.tell("SEE <name>\n")
-                return
-            }
-            let hdr = self.findWord(name)
-            if hdr == 0 {
-                self.tell("? \(name) ?\n")
-                return
-            }
+            self.seeWord(self.parseWord(), usageWord: "SEE")
+        }
 
-            self.printDecompiled(name: name, hdr: hdr)
-            // Make SEE also a synonym of the combined HELP: append help info if available
-            if let info = Self.primitiveHelp[name] {
-                self.tell("\(name)  \(info.stack)  \(info.desc)\n")
-            }
+        _ = register("LOCATE") {
+            self.seeWord(self.parseWord(), usageWord: "LOCATE")
         }
 
         // === Additional utility words from old GrokForth style ===
@@ -6411,6 +6400,25 @@ public final class TZForth {
         if safety >= SAFETY_LIMIT && !errorFlag {
             tell("? Execution limit exceeded (possible infinite loop or very deep recursion)\n")
             errorFlag = true
+        }
+    }
+
+    /// SEE / LOCATE — parse name, decompile definition, append HELP line if available.
+    private func seeWord(_ rawName: String, usageWord: String) {
+        self.validateAndRepairSystemState()
+        let name = rawName.uppercased()
+        if name.isEmpty {
+            self.tell("\(usageWord) <name>\n")
+            return
+        }
+        let hdr = self.findWord(name)
+        if hdr == 0 {
+            self.tell("? \(name) ?\n")
+            return
+        }
+        self.printDecompiled(name: name, hdr: hdr)
+        if let info = Self.primitiveHelp[name] {
+            self.tell("\(name)  \(info.stack)  \(info.desc)\n")
         }
     }
 

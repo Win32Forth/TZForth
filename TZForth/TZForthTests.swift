@@ -743,6 +743,7 @@ extension TZForth {
         ansTest(".ERROR div-by-zero", "1 0 ' / CATCH .ERROR", "? Division by zero")
         ansTest(".ERROR success silent", "0 .ERROR 1 .", "1")
         ansTest(".ERROR abort code", "-1 .ERROR", "Aborted!")
+        ansTest(".ERROR inline spaced", ".\" before\" 1 0 ' / CATCH .ERROR .\" after\"", "before ? Division by zero after")
 
         results += "TEST6 ANS core summary: \(ansPassed)/\(ansTotal) passed\n"
         if ansPassed != ansTotal {

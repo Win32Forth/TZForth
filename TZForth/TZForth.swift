@@ -2115,6 +2115,13 @@ public final class TZForth {
         return nil
     }
 
+    /// IP at which to start threading a word's CFA (skip DOCOL marker only).
+    private func threadedEntryIP(forCFA cfa: Cell) -> Int {
+        let addr = Int(cfa)
+        if self.readCell(addr) == self.docolID { return addr + 8 }
+        return addr
+    }
+
     /// Emit a compile-time reference to xt (cfa), following SYNONYM indirection.
     private func emitCompileReference(xt: Cell) {
         var target = xt
@@ -2945,13 +2952,8 @@ public final class TZForth {
             let hdr = self.findWord(name)
             if hdr == 0 { self.kernelThrow(StdThrow.undefinedWord, message: "? [COMPILE] ? " + name); return }
             let cfa = self.getCFA(hdr)
-            let first = self.readCell(Int(cfa))
             // Always emit a reference (ignore the target's IMMEDIATE flag)
-            if first < Cell(self.MAX_BUILTIN_ID) && first != self.docolID {
-                self.push(first); self.comma()
-            } else {
-                self.push(cfa); self.comma()
-            }
+            self.emitCompileReference(xt: cfa)
         }
 
         // COMPILE, ( xt -- )  Core Ext. Compile the given xt (cfa from ') as if found while compiling.
@@ -2982,24 +2984,15 @@ public final class TZForth {
             let hdr = self.findWord(name)
             if hdr == 0 { self.kernelThrow(StdThrow.undefinedWord, message: "? POSTPONE ? " + name); return }
             let cfa = self.getCFA(hdr)
-            let first = self.readCell(Int(cfa))
             let isImm = (self.readByte(Int(hdr) + 8) & self.FLAG_IMMEDIATE) != 0
             if isImm {
                 // Postpone the *execution* semantics: when this def runs, execute the (imm) word.
                 self.push(self.litID); self.comma()
-                if first < Cell(self.MAX_BUILTIN_ID) && first != self.docolID {
-                    self.push(first); self.comma()
-                } else {
-                    self.push(cfa); self.comma()
-                }
+                self.emitCompileReference(xt: cfa)
                 self.push(self.executeID); self.comma()
             } else {
                 // Normal compile of reference (compilation semantics for non-imm)
-                if first < Cell(self.MAX_BUILTIN_ID) && first != self.docolID {
-                    self.push(first); self.comma()
-                } else {
-                    self.push(cfa); self.comma()
-                }
+                self.emitCompileReference(xt: cfa)
             }
         }
 
@@ -3072,12 +3065,7 @@ public final class TZForth {
                 return
             }
             let cfa = self.getCFA(latest)
-            let first = self.readCell(Int(cfa))
-            if first < Cell(self.MAX_BUILTIN_ID) && first != self.docolID {
-                self.push(first); self.comma()
-            } else {
-                self.push(cfa); self.comma()
-            }
+            self.emitCompileReference(xt: cfa)
         }
 
         // A few more essentials
@@ -5567,6 +5555,7 @@ public final class TZForth {
             let dataAddr = self.readCell(self.DP_ADDR) + 16
             self.push(self.createRuntimeID); self.comma()
             self.push(dataAddr); self.comma()
+            self.push(self.exitID); self.comma()
             // DP_ADDR is now at the data field start. No extra ALLOT (unlike VARIABLE).
         }
 
@@ -6018,10 +6007,8 @@ public final class TZForth {
                     if first == synonymID {
                         let target = readCell(Int(cfa) + 8)
                         emitCompileReference(xt: target)
-                    } else if first < Cell(MAX_BUILTIN_ID) && first != docolID {
-                        self.push(first); self.comma()
                     } else {
-                        self.push(cfa); self.comma()
+                        emitCompileReference(xt: cfa)
                     }
                 } else {
                     // Execute — realign queue so parsing words inside xt (FLOAD under CATCH, etc.)
@@ -6665,7 +6652,7 @@ public final class TZForth {
             if firstCell == docolID {
                 // This is a colon definition. Push return address and start threading.
                 rpush(ip)
-                ip = Int(cfa) + 8   // skip the DOCOL cell
+                ip = self.threadedEntryIP(forCFA: cfa)
                 if ip < 0 || ip + 8 > memory.count {
                     throwInvalidToken("? Bad colon definition target (cfa=\(cfa))")
                 } else {
@@ -6735,11 +6722,9 @@ public final class TZForth {
                 throwInvalidToken("? Invalid executable token \(cell) (not a registered primitive; possible bad branch offset)")
                 break
             } else {
-                // Treat as address of another colon definition (threaded call).
-                // Jump directly past the DOCOL marker cell at the target CFA; the
-                // return frame was already pushed above (standard for this marker style).
+                // Threaded call to another word's CFA (colon, CREATE, or DOES> child).
                 rpush(ip)
-                ip = Int(cell) + 8
+                ip = self.threadedEntryIP(forCFA: cell)
                 if ip < 0 || ip + 8 > memory.count {
                     throwInvalidToken("? Bad threaded call target (ip=\(ip))")
                     break

@@ -60,6 +60,10 @@ extension TZForth {
         let fline = tmp.appendingPathComponent("ansval_line_\(suffix).txt")
         let finc = tmp.appendingPathComponent("ansval_inc_\(suffix).fth")
         let fwr = tmp.appendingPathComponent("ansval_wr_\(suffix).txt")
+        let freq1 = tmp.appendingPathComponent("ansval_req1_\(suffix).fth")
+        let freq2 = tmp.appendingPathComponent("ansval_req2_\(suffix).fth")
+        let freq3 = tmp.appendingPathComponent("ansval_req3_\(suffix).fth")
+        let freq4 = tmp.appendingPathComponent("ansval_req4_\(suffix).fth")
 
         do {
             try self.testBlockSrc.write(to: fblock, atomically: true, encoding: String.Encoding.utf8)
@@ -69,6 +73,10 @@ extension TZForth {
             try self.testDotqSrc.write(to: fdotq, atomically: true, encoding: String.Encoding.utf8)
             try "alpha\nbeta\n".write(to: fline, atomically: true, encoding: String.Encoding.utf8)
             try ": fincw 42 ;\n".write(to: finc, atomically: true, encoding: String.Encoding.utf8)
+            try "1+\n".write(to: freq1, atomically: true, encoding: String.Encoding.utf8)
+            try "1+\n".write(to: freq2, atomically: true, encoding: String.Encoding.utf8)
+            try "1+\n".write(to: freq3, atomically: true, encoding: String.Encoding.utf8)
+            try "\n".write(to: freq4, atomically: true, encoding: String.Encoding.utf8)
         } catch {
             results += "TEST write fail: \(error)\n"
             self.onOutput = originalOnOutput
@@ -618,6 +626,42 @@ extension TZForth {
         ansTest("READ-LINE", "S\" \(flinePath)\" R/O OPEN-FILE DROP PAD 1+ SWAP 80 SWAP READ-LINE DROP DROP PAD 1+ SWAP TYPE CLOSE-FILE DROP", "alpha")
         ansTest("FILE-STATUS", "S\" \(flinePath)\" R/O OPEN-FILE DROP DUP FILE-STATUS NIP 0= SWAP CLOSE-FILE DROP .", "-1")
         ansTest("INCLUDED", "S\" \(fincPath)\" INCLUDED fincw .", "42")
+
+        // REQUIRE / REQUIRED (ANS F.11.6.2.2144.50) — REQUIRE parses name from input (not S").
+        let freq1Base = freq1.lastPathComponent
+        let freq2Base = freq2.lastPathComponent
+        let freq3Base = freq3.lastPathComponent
+        let freq4Base = freq4.lastPathComponent
+        func resetIncludedNames() {
+            self.feedLine("0 INCLUDED-NAMES !")
+        }
+        resetIncludedNames()
+        _ = fm.changeCurrentDirectoryPath(tmp.path)
+        self.logicalCurrentDirectory = tmp.path
+        ansTest("REQUIRED once", "1 S\" \(freq1Base)\" REQUIRED REQUIRE \(freq1Base) .", "2")
+        resetIncludedNames()
+        ansTest("INCLUDED reload", "1 INCLUDE \(freq2Base) REQUIRE \(freq2Base) 1 S\" \(freq2Base)\" INCLUDED .", "2")
+        resetTest()
+        resetIncludedNames()
+        _ = fm.changeCurrentDirectoryPath(tmp.path)
+        self.logicalCurrentDirectory = tmp.path
+        self.feedLine("1 fload \(freq3Base)")
+        if let u = self.pendingLoadURL {
+            self.pendingLoadURL = nil
+            self.loadFile(u)
+        }
+        collected = ""
+        self.feedLine("S\" \(freq3Base)\" REQUIRED .")
+        ansTotal += 1
+        if collected.trimmingCharacters(in: .whitespacesAndNewlines).contains("2") {
+            ansPassed += 1
+            results += "TEST6 REQUIRED FLOAD register: pass\n"
+        } else {
+            results += "TEST6 REQUIRED FLOAD register: FAIL got '\(collected.trimmingCharacters(in: .whitespacesAndNewlines))' (expected 2)\n"
+        }
+        resetIncludedNames()
+        ansTest("INCLUDED-NAMES", "S\" \(freq4Base)\" REQUIRED INCLUDED-NAMES @ 0= .", "0")
+
         ansTest("ENVIRONMENT? FILE", "S\" FILE\" ENVIRONMENT? .", "-1")
         ansTest("CREATE-FILE", "S\" \(fwrPath)\" W/O CREATE-FILE 0= SWAP CLOSE-FILE DROP .", "-1")
         self.feedLine("VARIABLE t8hfid")

@@ -2,7 +2,7 @@
 
 This document tracks implementation status of the 2012 ANS Forth Standard word sets in TZForth (Swift port of the lbForth model). Generated from codebase inspection (`TZForth/TZForth.swift`, `TestTZForth.swift`, `TZForthTests.swift`).
 
-Last update: Programming-Tools (`?`, `NAME>STRING`, `NAME>INTERPRET`, `NAME>COMPILE`, `TRAVERSE-WORDLIST`, `SYNONYM`, `[DEFINED]`, `[UNDEFINED]`, `N>R`, `NR>`, `CS-PICK`, `CS-ROLL`, `AHEAD`, `EDITOR`/`ASSEMBLER` vocabs; assembler words stubbed).
+Last update: File-Access `REQUIRE`/`REQUIRED` with `INCLUDED-NAMES` registry; `INCLUDE`/`INCLUDED`/`FLOAD` register loaded specs.
 
 ## Summary
 
@@ -11,8 +11,8 @@ Last update: Programming-Tools (`?`, `NAME>STRING`, `NAME>INTERPRET`, `NAME>COMP
 | **Core (6.1)** | Complete — all required words implemented with FTEST coverage |
 | **Core Ext (6.2)** | Complete — all standard Core Ext words implemented |
 | **Search-Order (16)** | Complete — 16.6.1 + 16.6.2; `SEARCH-WORDLIST`, `ENVIRONMENT?` `WORDLISTS` (8) |
-| **Programming-Tools** | Partial — core + extensions above; assembler `CODE`/`[IF]` stubbed; no `LOCATE`, `COMPILE`, `NEEDS`, `REQUIRED` |
-| **File-Access (11)** | Substantial — 11.6.1 core words + `INCLUDE`/`INCLUDED`; no `REQUIRE`/`REQUIRED` |
+| **Programming-Tools** | Partial — core + extensions above; assembler `CODE`/`[IF]` stubbed; no `LOCATE`, `COMPILE`, `NEEDS` |
+| **File-Access (11)** | Substantial — 11.6.1 core words + `INCLUDE`/`INCLUDED` + `REQUIRE`/`REQUIRED` |
 | **Exception (9)** | Complete — `CATCH`, `THROW`; Core `ABORT`/`ABORT"` delegate to `THROW -1`/`-2` |
 | **String (17)** | Complete — 17.6.1 (`COMPARE`, `SEARCH`, `SLITERAL`, `/STRING`, `-TRAILING`, `BLANK`, `CMOVE`, `CMOVE>`) |
 | **Memory-Allocation (14)** | Complete — 14.6.1 (`ALLOCATE`, `FREE`, `RESIZE`); extension `GROWMEMORYMB` |
@@ -20,7 +20,7 @@ Last update: Programming-Tools (`?`, `NAME>STRING`, `NAME>INTERPRET`, `NAME>COMP
 | **Locals (13)** | Complete — `(LOCAL)`, `LOCALS|`, `{:`; `TO` for locals; max 32 (`#LOCALS`) |
 | **Other optional sets** | Mostly absent — Float, Facility, Block, Extended-Character, etc. |
 
-FTEST harness: run with `FTEST=1 swift /tmp/combined.swift` (concatenate `TZForth.swift`, `TZForthTests.swift`, `TestTZForth.swift`). Current count: **228/228** TEST6 spot-checks plus block-comment / FLOAD harness tests.
+FTEST harness: run with `FTEST=1 swift /tmp/combined.swift` (concatenate `TZForth.swift`, `TZForthTests.swift`, `TestTZForth.swift`). Current count: **242/242** TEST6 spot-checks plus block-comment / FLOAD harness tests.
 
 ## Core (6.1) — Complete
 
@@ -127,7 +127,7 @@ ANS optional word set 11.6.1 (file operations) and key 11.6.2 extensions are imp
 
 ### Implemented words
 
-`OPEN-FILE`, `CLOSE-FILE`, `CREATE-FILE`, `DELETE-FILE`, `RENAME-FILE`, `READ-FILE`, `WRITE-FILE`, `READ-LINE`, `WRITE-LINE`, `FILE-POSITION`, `FILE-SIZE`, `REPOSITION-FILE`, `RESIZE-FILE`, `FILE-STATUS`, `FLUSH-FILE`, `INCLUDE-FILE`, `INCLUDED`, `INCLUDE` (immediate).
+`OPEN-FILE`, `CLOSE-FILE`, `CREATE-FILE`, `DELETE-FILE`, `RENAME-FILE`, `READ-FILE`, `WRITE-FILE`, `READ-LINE`, `WRITE-LINE`, `FILE-POSITION`, `FILE-SIZE`, `REPOSITION-FILE`, `RESIZE-FILE`, `FILE-STATUS`, `FLUSH-FILE`, `INCLUDE-FILE`, `INCLUDED`, `INCLUDE` (immediate), `REQUIRE`, `REQUIRED`, `INCLUDED-NAMES` (variable).
 
 ### Integration with input and loading
 
@@ -136,9 +136,15 @@ ANS optional word set 11.6.1 (file operations) and key 11.6.2 extensions are imp
 - **`INCLUDE-FILE` / `INCLUDED` / `INCLUDE`** — line-at-a-time interpret loop; `SOURCE-ID` is the fileid (≥ 10 for newly opened files; host `FLOAD` uses id `1`).
 - **`ENVIRONMENT?`** — returns true for `FILE`, `FILE-ACCESS`, `FILE-EXT`.
 
-### Not implemented (File-Access extensions)
+### REQUIRE / REQUIRED / INCLUDED-NAMES
 
-- **`REQUIRE` / `REQUIRED`** — load-once tracking (Programming-Tools / File-Access ext; needs separate load registry).
+- **`INCLUDED-NAMES`** — kernel `VARIABLE` holding the head of a linked list of loaded spec strings (`next | str-addr | str-u` nodes on the heap). Inspectable via `@`.
+- **`REQUIRED`** — if spec `( c-addr u )` is absent from the list, `nameJoin` + load (same as sample `included`); if present, discard spec without loading.
+- **`REQUIRE`** — `PARSE-NAME` then `REQUIRED`.
+- **`INCLUDE` / `INCLUDED`** — always load; register spec via `nameJoin` before interpret (extended, not shadowed).
+- **Host `FLOAD`** — on successful load, registers the user's parse spec in the same list.
+
+Registry key is the **exact spec bytes** passed in, not a canonical path. **`MARKER` / `FORGET`** do not prune `INCLUDED-NAMES` (matches ANS reference sample limitation on systems with `MARKER`).
 
 Host extension **`FLOAD`** remains available alongside ANS `INCLUDED` / `INCLUDE-FILE`.
 
@@ -239,7 +245,7 @@ ANS words implemented from 15.6.1 / extensions:
 
 `[IF]` / `[ELSE]` / `[THEN]` also satisfy Core Ext conditional compilation. Stubbed (error at use): `CODE`, `;CODE`.
 
-Not implemented: `LOCATE`, `COMPILE`, `NEEDS`, `REQUIRED`.
+Not implemented: `LOCATE`, `COMPILE`, `NEEDS`.
 
 ## Dictionary introspection (fig-style extensions)
 
@@ -270,7 +276,7 @@ Not implemented (no current plan unless requested):
 - **Facility** (`AT-XY`, `TIME&DATE`, …)
 - **Block**
 - **Extended-Character**
-- Full **Programming-Tools** (`LOCATE`, `COMPILE`, `REQUIRE`, …)
+- Full **Programming-Tools** (`LOCATE`, `COMPILE`, …)
 
 ## Recommendations
 

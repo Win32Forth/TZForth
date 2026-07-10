@@ -288,6 +288,12 @@ public final class TZForth {
 
     // Address of the FILE-ECHO variable's data cell (populated at bootstrap).
     private var fileEchoAddr: Cell = 0
+    /// Address of the INCLUDED-NAMES variable's data cell (list head; 0 = empty).
+    private var includedNamesVarAddr: Cell = 0
+    /// User parse spec for the current named FLOAD (registered on successful load).
+    private var pendingFloadSpec: String = ""
+    /// Detect re-entrant REQUIRED/INCLUDED on the same spec (ANS ambiguous condition).
+    private var currentlyLoadingSpec: String? = nil
 
     // Low-level branch primitives (captured so high-level control words can compile them)
     private var branchID: Cell = 0
@@ -717,6 +723,9 @@ public final class TZForth {
         ("INCLUDE-FILE","( fileid -- )",   "interpret contents of open text file, then close it"),
         ("INCLUDED", "( c-addr u -- )",    "open and interpret named file, then close it"),
         ("INCLUDE", "( -- ) name",         "parse name and INCLUDED (immediate)"),
+        ("REQUIRED", "( c-addr u -- )",   "INCLUDED if file spec not yet in INCLUDED-NAMES list"),
+        ("REQUIRE", "( -- name )",        "PARSE-NAME REQUIRED (load once per spec string)"),
+        ("INCLUDED-NAMES", "( -- addr )", "variable: head of load-once name list (ANS REQUIRED registry)"),
         ("FILE-STATUS","( fileid -- fl ior )", "implementation-defined file status"),
         ("FLUSH-FILE","( fileid -- ior )",  "flush buffered file data to disk"),
         ("RENAME-FILE","( c-addr1 u1 c-addr2 u2 -- ior )", "rename file"),
@@ -1129,6 +1138,7 @@ public final class TZForth {
     }
 
     private func resolveAndLoadFile(spec: String) {
+        self.pendingFloadSpec = spec
         let url = resolvedURL(for: spec)
         // Defer actual load (and any .fth auto-fallback) to host + loadFileContents.
         // Host will scope + chdir + call loadFile.
@@ -1144,7 +1154,7 @@ public final class TZForth {
         self.pendingEditURL = url
     }
 
-    private func loadFileContents(_ url: URL) {
+    private func loadFileContents(_ url: URL, registerSpec: String? = nil) {
         // Support FLOAD auto .fth: if the provided url's leaf has no dot, try the literal
         // name first; if it doesn't exist, fall back to name + ".fth". This lets
         // "fload foo" work whether the file is "foo" or "foo.fth".
@@ -1204,11 +1214,19 @@ public final class TZForth {
                         }
                     }
                 }
+                let specToRegister = registerSpec ?? self.pendingFloadSpec
+                if !specToRegister.isEmpty {
+                    self.nameJoinSpec(specToRegister)
+                } else {
+                    self.nameJoinSpec(url.lastPathComponent)
+                }
+                self.pendingFloadSpec = ""
                 return  // success on this candidate
             } catch {
                 // try next candidate (literal then auto-.fth for bare FLOAD names)
             }
         }
+        self.pendingFloadSpec = ""
         // All candidates failed (or only one).
         let reportURL = candidates.last ?? url
         // Use a clean message; avoid embedding Cocoa's localizedDescription which
@@ -1563,15 +1581,104 @@ public final class TZForth {
         }
     }
 
+    // MARK: - INCLUDED-NAMES registry (ANS REQUIRE / REQUIRED)
+
+    private static let INCLUDED_NAMES_NODE_BYTES = 24  // 3 cells: next | str-addr | str-u
+
+    private func readIncludedNamesHead() -> Int {
+        guard self.includedNamesVarAddr != 0 else { return 0 }
+        return Int(self.readCell(self.includedNamesVarAddr))
+    }
+
+    private func writeIncludedNamesHead(_ addr: Int) {
+        guard self.includedNamesVarAddr != 0 else { return }
+        self.writeCell(self.includedNamesVarAddr, Cell(addr))
+    }
+
+    /// save-mem: copy u bytes from c-addr into heap-allocated storage.
+    private func saveMem(caddr: Int, u: Int) -> Int? {
+        guard u >= 0 else { return nil }
+        let (addr, ior) = self.heapAllocateBytes(u)
+        guard ior == self.FILE_IO_SUCCESS else { return nil }
+        for i in 0..<u {
+            self.writeByte(addr + i, self.readByte(caddr + i))
+        }
+        return addr
+    }
+
+    private func namePresent(caddr: Int, u: Int) -> Bool {
+        var node = self.readIncludedNamesHead()
+        while node != 0 {
+            let strAddr = Int(self.readCell(node + 8))
+            let strU = Int(self.readCell(node + 16))
+            if self.compareCharacterStrings(caddr1: caddr, u1: u, caddr2: strAddr, u2: strU) == 0 {
+                return true
+            }
+            node = Int(self.readCell(node))
+        }
+        return false
+    }
+
+    private func nameJoin(caddr: Int, u: Int) {
+        if self.namePresent(caddr: caddr, u: u) { return }
+        guard let strAddr = self.saveMem(caddr: caddr, u: u) else { return }
+        let (nodeAddr, ior) = self.heapAllocateBytes(Self.INCLUDED_NAMES_NODE_BYTES)
+        guard ior == self.FILE_IO_SUCCESS else { return }
+        self.writeCell(nodeAddr, Cell(self.readIncludedNamesHead()))
+        self.writeCell(nodeAddr + 8, Cell(strAddr))
+        self.writeCell(nodeAddr + 16, Cell(u))
+        self.writeIncludedNamesHead(nodeAddr)
+    }
+
+    private func nameJoinSpec(_ spec: String) {
+        let bytes = Array(spec.utf8)
+        guard !bytes.isEmpty else { return }
+        let slot = self.allocateStringBufferSlot()
+        for (i, b) in bytes.enumerated() {
+            self.writeByte(slot + i, b)
+        }
+        self.nameJoin(caddr: slot, u: bytes.count)
+    }
+
+    private func requiredFromSpec(_ caddr: Int, _ u: Int) {
+        if self.namePresent(caddr: caddr, u: u) { return }
+        self.includedFromSpec(caddr, u)
+    }
+
+    private func parseNameFromInput() -> (caddr: Int, u: Int) {
+        while !self.inputQueue.isEmpty {
+            let b = self.inputQueue.first!
+            if b > 32 { break }
+            if b == 10 || b == 13 { break }
+            _ = self.consumeInput()
+        }
+        let startPos = Int(self.readCell(self.IN))
+        var len = 0
+        while !self.inputQueue.isEmpty {
+            let b = self.inputQueue.first!
+            if b == 32 || b == 10 || b == 13 { break }
+            _ = self.consumeInput()
+            len += 1
+        }
+        return (self.SOURCE_BUFFER + startPos, len)
+    }
+
     private func includedFromSpec(_ caddr: Int, _ u: Int) {
-        let url = pathURLFromCounted(caddr, u)
-        let (fid, ior) = openFileAtPath(url.path, fam: FAM_RDONLY, create: false)
-        if ior != FILE_IO_SUCCESS {
-            tell("? INCLUDED could not open '\(url.lastPathComponent)'\n")
-            errorFlag = true
+        let spec = self.stringFromAddr(caddr, u)
+        if let loading = self.currentlyLoadingSpec, loading == spec {
             return
         }
-        includeFileInterpret(Int(fid), closeWhenDone: true)
+        self.currentlyLoadingSpec = spec
+        defer { self.currentlyLoadingSpec = nil }
+        self.nameJoin(caddr: caddr, u: u)
+        let url = self.pathURLFromCounted(caddr, u)
+        let (fid, ior) = self.openFileAtPath(url.path, fam: self.FAM_RDONLY, create: false)
+        if ior != self.FILE_IO_SUCCESS {
+            self.tell("? INCLUDED could not open '\(url.lastPathComponent)'\n")
+            self.errorFlag = true
+            return
+        }
+        self.includeFileInterpret(Int(fid), closeWhenDone: true)
     }
 
     // CHDIR support (used by the CHDIR word)
@@ -2070,7 +2177,6 @@ public final class TZForth {
     }
 
     private func heapAllocateBytes(_ requested: Int) -> (addr: Int, ior: Cell) {
-        self.allocateEverUsed = true
         if requested < 0 {
             return (0, self.FILE_IO_ERROR)
         }
@@ -3762,6 +3868,7 @@ public final class TZForth {
         // === ANS Forth 2012 Memory-Allocation word set (Section 14) ===
 
         _ = register("ALLOCATE") {
+            self.allocateEverUsed = true
             let u = Int(self.pop())
             let result = self.heapAllocateBytes(u)
             self.push(Cell(result.addr))
@@ -5614,6 +5721,22 @@ public final class TZForth {
             }
             self.includedFromSpec(slot, bytes.count)
         }
+
+        _ = register("REQUIRED") {
+            let u = Int(self.pop())
+            let caddr = Int(self.pop())
+            self.requiredFromSpec(caddr, u)
+        }
+
+        _ = register("REQUIRE") {
+            let (caddr, u) = self.parseNameFromInput()
+            if u == 0 {
+                self.tell("? REQUIRE needs a name\n")
+                self.errorFlag = true
+                return
+            }
+            self.requiredFromSpec(caddr, u)
+        }
     }
 
     private func flushFileEntry(_ fileId: Int) -> Cell {
@@ -5690,6 +5813,7 @@ public final class TZForth {
         // Created via the VARIABLE word so it appears in WORDS / SEE / FORGET etc.
         // Default is 0 (off) because the data cell lives in the zeroed memory area.
         self.feedLine("VARIABLE FILE-ECHO")
+        self.feedLine("VARIABLE INCLUDED-NAMES")
         self.feedLine(": ERASE 0 FILL ;")  // high-level so SEE shows source (0 FILL)
         self.feedLine(": HOLDS ( c-addr u -- ) BEGIN DUP WHILE 1- 2DUP + C@ HOLD REPEAT 2DROP ;")
         self.feedLine(": BUFFER: CREATE ALLOT ALIGN ;")
@@ -5709,6 +5833,16 @@ public final class TZForth {
             // Fallback (should never happen): allocate a cell now.
             self.fileEchoAddr = self.readCell(self.DP_ADDR)
             self.writeCell(self.DP_ADDR, self.fileEchoAddr + 8)
+        }
+
+        let hdrIn = self.findWord("INCLUDED-NAMES")
+        if hdrIn != 0 {
+            let cfa = self.getCFA(hdrIn)
+            if self.readCell(Int(cfa)) == self.docolID {
+                if self.readCell(Int(cfa) + 8) == self.litID {
+                    self.includedNamesVarAddr = self.readCell(Int(cfa) + 16)
+                }
+            }
         }
 
         // We can add more high-level words later by feeding source once we have WORD, FIND, etc.
@@ -6492,6 +6626,20 @@ public final class TZForth {
         }
         // If still 0 (shouldn't happen), FLOAD will just treat echo as off; safe.
 
+        self.includedNamesVarAddr = 0
+        let hdrIn = self.findWord("INCLUDED-NAMES")
+        if hdrIn != 0 {
+            let cfa = self.getCFA(hdrIn)
+            if self.readCell(Int(cfa)) == self.docolID {
+                if self.readCell(Int(cfa) + 8) == self.litID {
+                    self.includedNamesVarAddr = self.readCell(Int(cfa) + 16)
+                }
+            }
+        }
+        if self.includedNamesVarAddr != 0 {
+            self.writeCell(self.includedNamesVarAddr, 0)
+        }
+
         // Reset to FORTH vocabulary
         searchOrder = [LATEST]
         writeCell(CURRENT, LATEST)
@@ -6518,6 +6666,8 @@ public final class TZForth {
         fileEditRequested = false
         pendingEditURL = nil
         pendingLoadURL = nil
+        pendingFloadSpec = ""
+        currentlyLoadingSpec = nil
         loopControlStack.removeAll()
         self.clearAllLocalFrames()
         self.exceptionFrames.removeAll()
@@ -6544,6 +6694,9 @@ public final class TZForth {
         // Full dictionary reset to initial state (user words + their data space gone).
         restoreKernelDictionary()
         self.resetHeapState(clearAllocateFlag: true)
+        if self.includedNamesVarAddr != 0 {
+            self.writeCell(self.includedNamesVarAddr, 0)
+        }
 
         // Leave IP wherever it is; the next feedLine will start fresh parsing from
         // whatever input arrives next. (A real high-level QUIT now exists via bootstrap.)

@@ -91,6 +91,10 @@ if ProcessInfo.processInfo.environment["FTEST"] == "1" {
     let fline = tmp.appendingPathComponent("testline_\(suffix).txt")
     let finc = tmp.appendingPathComponent("testinc_\(suffix).fth")
     let fwr = tmp.appendingPathComponent("testwr_\(suffix).txt")
+    let freq1 = tmp.appendingPathComponent("required-helper1_\(suffix).fth")
+    let freq2 = tmp.appendingPathComponent("required-helper2_\(suffix).fth")
+    let freq3 = tmp.appendingPathComponent("required-helper3_\(suffix).fth")
+    let freq4 = tmp.appendingPathComponent("required-helper4_\(suffix).fth")
 
     // Note: in Swift literals, \\\\ produces two backslash chars in the string (for the \\ word in Forth source)
     let blockSrc = """
@@ -141,6 +145,10 @@ hello
         try dotqSrc.write(to: fdotq, atomically: true, encoding: String.Encoding.utf8)
         try "alpha\nbeta\n".write(to: fline, atomically: true, encoding: String.Encoding.utf8)
         try ": fincw 42 ;\n".write(to: finc, atomically: true, encoding: String.Encoding.utf8)
+        try "1+\n".write(to: freq1, atomically: true, encoding: String.Encoding.utf8)
+        try "1+\n".write(to: freq2, atomically: true, encoding: String.Encoding.utf8)
+        try "1+\n".write(to: freq3, atomically: true, encoding: String.Encoding.utf8)
+        try "\n".write(to: freq4, atomically: true, encoding: String.Encoding.utf8)
     } catch {
         print("TEST write fail: \(error)")
         exit(1)
@@ -703,6 +711,42 @@ hello
     ansTest("READ-LINE", "S\" \(flinePath)\" R/O OPEN-FILE DROP PAD 1+ SWAP 80 SWAP READ-LINE DROP DROP PAD 1+ SWAP TYPE CLOSE-FILE DROP", "alpha")
     ansTest("FILE-STATUS", "S\" \(flinePath)\" R/O OPEN-FILE DROP DUP FILE-STATUS NIP 0= SWAP CLOSE-FILE DROP .", "-1")
     ansTest("INCLUDED", "S\" \(fincPath)\" INCLUDED fincw .", "42")
+
+    // REQUIRE / REQUIRED (ANS F.11.6.2.2144.50) — REQUIRE parses name from input (not S").
+    let freq1Base = freq1.lastPathComponent
+    let freq2Base = freq2.lastPathComponent
+    let freq3Base = freq3.lastPathComponent
+    let freq4Base = freq4.lastPathComponent
+    func resetIncludedNames() {
+        forth.feedLine("0 INCLUDED-NAMES !")
+    }
+    resetIncludedNames()
+    _ = fm.changeCurrentDirectoryPath(tmp.path)
+    forth.logicalCurrentDirectory = tmp.path
+    ansTest("REQUIRED once", "1 S\" \(freq1Base)\" REQUIRED REQUIRE \(freq1Base) .", "2")
+    resetIncludedNames()
+    ansTest("INCLUDED reload", "1 INCLUDE \(freq2Base) REQUIRE \(freq2Base) 1 S\" \(freq2Base)\" INCLUDED .", "2")
+    resetTest()
+    resetIncludedNames()
+    _ = fm.changeCurrentDirectoryPath(tmp.path)
+    forth.logicalCurrentDirectory = tmp.path
+    forth.feedLine("1 fload \(freq3Base)")
+    if let u = forth.pendingLoadURL {
+        forth.pendingLoadURL = nil
+        forth.loadFile(u)
+    }
+    collected = ""
+    forth.feedLine("S\" \(freq3Base)\" REQUIRED .")
+    ansTotal += 1
+    if collected.trimmingCharacters(in: .whitespacesAndNewlines).contains("2") {
+        ansPassed += 1
+        print("TEST6 REQUIRED FLOAD register: pass")
+    } else {
+        print("TEST6 REQUIRED FLOAD register: FAIL got '\(collected.trimmingCharacters(in: .whitespacesAndNewlines))' (expected 2)")
+    }
+    resetIncludedNames()
+    ansTest("INCLUDED-NAMES", "S\" \(freq4Base)\" REQUIRED INCLUDED-NAMES @ 0= .", "0")
+
     ansTest("ENVIRONMENT? FILE", "S\" FILE\" ENVIRONMENT? .", "-1")
     ansTest("CREATE-FILE", "S\" \(fwrPath)\" W/O CREATE-FILE 0= SWAP CLOSE-FILE DROP .", "-1")
     forth.feedLine("VARIABLE t8hfid")
@@ -765,6 +809,10 @@ hello
     try? fm.removeItem(at: fstop)
     try? fm.removeItem(at: fline)
     try? fm.removeItem(at: finc)
+    try? fm.removeItem(at: freq1)
+    try? fm.removeItem(at: freq2)
+    try? fm.removeItem(at: freq3)
+    try? fm.removeItem(at: freq4)
     try? fm.removeItem(at: fwr)
     try? fm.removeItem(atPath: frenamedPath)
 

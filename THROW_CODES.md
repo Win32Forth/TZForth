@@ -2,7 +2,7 @@
 
 This document maps TZForth’s internal `errorFlag` error path to ANS Forth 2012 standard `THROW` codes (Exception word set §9.3.1). It is the implementation guide for replacing `tell("? …")` + `errorFlag = true` with catchable `kernelThrow(code, message:)`.
 
-**Status:** Phases 1–3 implemented. Phase 1: stack faults, div-by-zero, undefined word, `CATCH-EVALUATE`. Phase 2: memory bounds (-7), invalid tokens/branches (-16), compile-only control (-14), uncompleted `[IF]` (-15), execution limit (-17), search-order (-20). Phase 3: defining words (-10), dictionary lookup (-13), misuse (-20) for `:`/`CREATE`/`FORGET`/`MARKER`/`SYNONYM`/`VALUE`/`DEFER`/`IS`/`TO`, locals, `RECURSE`/`DOES>`, `SEE`/`HELP`. ~15 `errorFlag` sites remain for Phase 4 (file I/O, host/FLOAD, `N>R`/`CODE`/conditional interpret).
+**Status:** Phases 1–4 implemented. Phase 4: file-access throws (-68 invalid fileid, -74 file not found), synchronous named `FLOAD` with `onPerformNamedLoad` host callback, `GROWMEMORYMB`/`N>R`/`CODE`/conditional interpret (-14/-20). `errorFlag` remains only in `handleUnhandledThrow` and `recoverFromError` (FLOAD load-abort bookkeeping).
 
 **Reference:** [ANS THROW](https://forth-standard.org/standard/exception/THROW), §9.3.1 throw codes, §9.3.5 exception handling.
 
@@ -130,7 +130,7 @@ When a **caught** throw occurs during compilation (`STATE=1`), `CATCH` restores 
 
 When an throw is **uncaught**, `handleUnhandledThrow` → `resetRuntimeState()` still abandons compile mode (same as today).
 
-**FTEST:** immediate `t9cei` wraps `EVALUATE CATCH` during an open `: t9cpart`; immediate `t9cspi` prints `t9cst @` (= `1`) still during compile; `789 ;` completes the definition and `t9cpart .` runs.
+**FTEST:** immediate `t9pei` wraps `EVALUATE CATCH` during an open `: t9pdef`; immediate `t9ppi` prints `t9pst @` (= `1`) still during compile; `789 ;` completes the definition and `t9pdef .` runs.
 
 ---
 
@@ -153,18 +153,20 @@ When an throw is **uncaught**, `handleUnhandledThrow` → `resetRuntimeState()` 
 
 ---
 
-## Phase 4 — File I/O, host integration, edge cases
+## Phase 4 — File I/O, host integration, edge cases ✅
 
 | Message | Code | Notes |
 |---------|------|-------|
-| `? INCLUDE-FILE: invalid fileid` | -66* | *File-access range if adopted |
-| `? INCLUDED could not open` | Host / `ior` | May stay non-THROW |
-| `? FLOAD could not read` | Host | Keep `errorFlag`; not in Forth execution model |
-| `? GROWMEMORYMB already used` | -20 | |
-| `? DUMP out of range` | -7 | |
-| Corrupted SP/RSP auto-recover | -3/-5 after repair | Log repair note, then throw |
+| `? INCLUDE-FILE: invalid fileid` | -68 | ANS invalid file-id |
+| `? INCLUDED could not open` | -74 | ANS file not found |
+| `? FLOAD could not read` | -74 | Named `FLOAD` loads synchronously; host via `onPerformNamedLoad` |
+| `? GROWMEMORYMB …` | -20 | |
+| `? N>R` / `NR>` faults | -5 / -20 | |
+| `? CODE` / `;CODE` | -20 | |
+| `[IF]` / `[ELSE]` / `SLITERAL` / `S\"` in interpret | -14 | |
+| `OPEN-FILE` etc. | `ior` on stack | Unchanged (ANS file-access) |
 
-**~25 sites** plus host-only paths that may never THROW.
+**FTEST:** `S" fload missing.fth" CATCH-EVALUATE .` → -74; `999 ['] INCLUDE-FILE CATCH` → -68.
 
 ---
 

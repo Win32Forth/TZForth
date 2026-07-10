@@ -71,6 +71,10 @@ if ProcessInfo.processInfo.environment["FTEST"] == "1" {
         collected += text
         print(text, terminator: "") // echo for log visibility
     }
+    forth.onPerformNamedLoad = { url in
+        forth.loadFile(url)
+    }
+
     func resetTest() {
         // Use resetRuntimeState (not the full resetToSafeState) so that words defined
         // by prior loadFile/feedLine in this test step survive for the "exec . " verification
@@ -192,13 +196,6 @@ hello
     // Simulate "fload <name>" typed: engine sets pending, we do the host-side work (chdir + load)
     // just like the REPL shim in non-FTEST mode. This covers the "FLOAD filename" in cwd case.
     forth.feedLine("fload \(fecho.lastPathComponent)")
-    if let u = forth.pendingLoadURL {
-        let p = u.deletingLastPathComponent()
-        _ = fm.changeCurrentDirectoryPath(p.path)
-        forth.logicalCurrentDirectory = p.path
-        forth.pendingLoadURL = nil
-        forth.loadFile(u)
-    }
     let hasEchoPre = forth.debugFind("ECHOPRE")
     let hasEchoPost = forth.debugFind("ECHOPOST")
     print("TEST2b echo+slash: echopre=\(hasEchoPre) echopost=\(hasEchoPost)")
@@ -224,13 +221,6 @@ hello
     _ = fm.changeCurrentDirectoryPath(tmp.path)
     forth.logicalCurrentDirectory = tmp.path
     forth.feedLine("fload \(fdebug.lastPathComponent)")
-    if let u = forth.pendingLoadURL {
-        let p = u.deletingLastPathComponent()
-        _ = fm.changeCurrentDirectoryPath(p.path)
-        forth.logicalCurrentDirectory = p.path
-        forth.pendingLoadURL = nil
-        forth.loadFile(u)
-    }
     let hasDbg1 = forth.debugFind("DBG1")
     let hasDbg2 = forth.debugFind("DBG2")
     let hasDbg3 = forth.debugFind("DBG3")
@@ -255,13 +245,6 @@ hello
     _ = fm.changeCurrentDirectoryPath(tmp.path)
     forth.logicalCurrentDirectory = tmp.path
     forth.feedLine("fload \(fdotq.lastPathComponent)")
-    if let u = forth.pendingLoadURL {
-        let p = u.deletingLastPathComponent()
-        _ = fm.changeCurrentDirectoryPath(p.path)
-        forth.logicalCurrentDirectory = p.path
-        forth.pendingLoadURL = nil
-        forth.loadFile(u)
-    }
     let hasHello = forth.debugFind("HELLO")
     let hasAfterBad = forth.debugFind("AFTERBAD")
     print("TEST2d dotq: hello=\(hasHello) afterbad=\(hasAfterBad) (expect hello true, afterbad false -- abort on error)")
@@ -733,10 +716,6 @@ hello
     _ = fm.changeCurrentDirectoryPath(tmp.path)
     forth.logicalCurrentDirectory = tmp.path
     forth.feedLine("1 fload \(freq3Base)")
-    if let u = forth.pendingLoadURL {
-        forth.pendingLoadURL = nil
-        forth.loadFile(u)
-    }
     collected = ""
     forth.feedLine("S\" \(freq3Base)\" REQUIRED .")
     ansTotal += 1
@@ -838,15 +817,15 @@ hello
 
     // Caught throw during compile: STATE stays 1 and open : definition can finish with ;
     resetTest()
-    forth.feedLine("VARIABLE t9cst")
-    forth.feedLine(": t9cei ['] EVALUATE CATCH STATE @ t9cst ! ; IMMEDIATE")
-    forth.feedLine(": t9cspi t9cst @ . ; IMMEDIATE")
-    forth.feedLine(": t9cpart")
+    forth.feedLine("VARIABLE t9pst")
+    forth.feedLine(": t9pei ['] EVALUATE CATCH STATE @ t9pst ! ; IMMEDIATE")
+    forth.feedLine(": t9ppi t9pst @ . ; IMMEDIATE")
+    forth.feedLine(": t9pdef")
     collected = ""
-    forth.feedLine("S\" nosuch-tzforth-compile-xyz\" t9cei t9cspi")
+    forth.feedLine("S\" nosuch-tzforth-compile-xyz\" t9pei t9ppi")
     let compileStateOne = collected.contains("1")
     forth.feedLine("789 ;")
-    forth.feedLine("t9cpart .")
+    forth.feedLine("t9pdef .")
     ansTotal += 1
     let cstOut = collected.trimmingCharacters(in: .whitespacesAndNewlines)
     if compileStateOne && cstOut.contains("789") {
@@ -855,6 +834,13 @@ hello
     } else {
         print("TEST6 CATCH compile STATE preserve: FAIL compileState=\(compileStateOne) out='\(cstOut)' (expected 1 during compile, 789 at run)")
     }
+
+    // THROW Phase 4: file I/O and host FLOAD
+    ansTest("CATCH FLOAD missing", "S\" fload nosuch-tzforth-missing.fth\" CATCH-EVALUATE .", "-74")
+    forth.feedLine(": t4if 999 ['] INCLUDE-FILE CATCH ;")
+    ansTest("CATCH INCLUDE-FILE invalid", "t4if .", "-68")
+    forth.feedLine(": t4inc S\" nosuch-tzforth-missing.fth\" ['] INCLUDED CATCH ;")
+    ansTest("CATCH INCLUDED missing", "t4inc .", "-74")
 
     print("TEST6 ANS core summary: \(ansPassed)/\(ansTotal) passed")
     if ansPassed != ansTotal {
@@ -915,16 +901,7 @@ while let line = readLine() {
         forth.logicalCurrentDirectory = p.path
         forth.pendingEditURL = nil
     }
-    if let u = forth.pendingLoadURL {
-        print(" [FLOAD: \(u.lastPathComponent) (from \(u.deletingLastPathComponent().path)) ]")
-        // In CLI tester (runs outside sandbox), actually perform the load so that
-        // "fload path/to/foo.fth" works in the REPL. Also chdir + update logical to simulate host.
-        let p = u.deletingLastPathComponent()
-        _ = FileManager.default.changeCurrentDirectoryPath(p.path)
-        forth.logicalCurrentDirectory = p.path
-        forth.pendingLoadURL = nil
-        forth.loadFile(u)
-    }
+    // Named FLOAD loads synchronously inside the FLOAD word (onPerformNamedLoad / loadFileContents).
 
     // Support blocking KEY in the standalone tester: if the previous feed
     // left a KEY waiting, read additional lines and supply the first char

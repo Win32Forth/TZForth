@@ -191,6 +191,10 @@ struct ConsoleView: View {
                     return self.directoryURLWithActiveScope(for: url)
                 }
 
+                forth.onPerformNamedLoad = { [self] url in
+                    self.performScopedNamedLoad(url: url)
+                }
+
                 // Initially everything (the banner) is "protected" output
                 markProtectedThroughEndOfText()
                 lastKeyConsumedUserLength = 0
@@ -713,10 +717,9 @@ struct ConsoleView: View {
         }
     }
 
-    private func handlePendingLoadIfNeeded() {
-        guard let url = forth.pendingLoadURL else { return }
-        forth.pendingLoadURL = nil
-
+    /// Named FLOAD: activate sandbox scope, resolve case, and load synchronously (returns success).
+    @discardableResult
+    private func performScopedNamedLoad(url: URL) -> Bool {
         // Activate the (bookmarked) dir scope first. This makes subsequent access (including
         // Data for load, and later EDIT handoff) work for files inside the dir.
         // Note: we pass the pre-correction parent for activate's path set (it will use bookmark anyway).
@@ -767,8 +770,8 @@ struct ConsoleView: View {
         // startAccessingSecurityScopedResource here so the subsequent Data(contentsOf:) inside
         // loadFileContents succeeds in a sandboxed app.
         let fileAccessing = target.startAccessingSecurityScopedResource()
-        self.forth.loadFile(target)
-        if !self.forth.errorFlag {
+        let loaded = self.forth.loadFile(target)
+        if loaded {
             // On successful load, ensure we have a bookmark for this exact dir (now that we
             // have direct scope from above or ancestor, bookmarkData should succeed).
             do {
@@ -785,6 +788,13 @@ struct ConsoleView: View {
         // it to remain active (like ancestor scopes) for the rest of the session so that
         // subsequent named FLOADs/EDITs/DIR in the same tree keep working without re-auth.
         // onDisappear or next dir change will clean up the currentScoped.
+        return loaded && !self.forth.errorFlag
+    }
+
+    private func handlePendingLoadIfNeeded() {
+        guard let url = forth.pendingLoadURL else { return }
+        forth.pendingLoadURL = nil
+        _ = performScopedNamedLoad(url: url)
     }
 
     /// Activate (or re-activate) the security scope for the last bookmarked directory.

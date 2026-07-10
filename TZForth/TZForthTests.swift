@@ -44,6 +44,10 @@ extension TZForth {
             collected += text
         }
 
+        self.onPerformNamedLoad = { url in
+            self.loadFile(url)
+        }
+
         func resetTest() {
             self.resetRuntimeState()
             collected = ""
@@ -119,13 +123,6 @@ extension TZForth {
         _ = fm.changeCurrentDirectoryPath(tmp.path)
         self.logicalCurrentDirectory = tmp.path
         self.feedLine("fload \(fecho.lastPathComponent)")
-        if let u = self.pendingLoadURL {
-            let p = u.deletingLastPathComponent()
-            _ = fm.changeCurrentDirectoryPath(p.path)
-            self.logicalCurrentDirectory = p.path
-            self.pendingLoadURL = nil
-            self.loadFile(u)
-        }
         // restore immediately so subsequent tests don't run with cwd at /tmp
         self.logicalCurrentDirectory = savedLog2b
         _ = fm.changeCurrentDirectoryPath(savedCwd2b)
@@ -154,13 +151,6 @@ extension TZForth {
         _ = fm.changeCurrentDirectoryPath(tmp.path)
         self.logicalCurrentDirectory = tmp.path
         self.feedLine("fload \(fdebug.lastPathComponent)")
-        if let u = self.pendingLoadURL {
-            let p = u.deletingLastPathComponent()
-            _ = fm.changeCurrentDirectoryPath(p.path)
-            self.logicalCurrentDirectory = p.path
-            self.pendingLoadURL = nil
-            self.loadFile(u)
-        }
         // restore immediately
         self.logicalCurrentDirectory = savedLog2c
         _ = fm.changeCurrentDirectoryPath(savedCwd2c)
@@ -183,13 +173,6 @@ extension TZForth {
         _ = fm.changeCurrentDirectoryPath(tmp.path)
         self.logicalCurrentDirectory = tmp.path
         self.feedLine("fload \(fdotq.lastPathComponent)")
-        if let u = self.pendingLoadURL {
-            let p = u.deletingLastPathComponent()
-            _ = fm.changeCurrentDirectoryPath(p.path)
-            self.logicalCurrentDirectory = p.path
-            self.pendingLoadURL = nil
-            self.loadFile(u)
-        }
         // restore immediately
         self.logicalCurrentDirectory = savedLog2d
         _ = fm.changeCurrentDirectoryPath(savedCwd2d)
@@ -648,10 +631,6 @@ extension TZForth {
         _ = fm.changeCurrentDirectoryPath(tmp.path)
         self.logicalCurrentDirectory = tmp.path
         self.feedLine("1 fload \(freq3Base)")
-        if let u = self.pendingLoadURL {
-            self.pendingLoadURL = nil
-            self.loadFile(u)
-        }
         collected = ""
         self.feedLine("S\" \(freq3Base)\" REQUIRED .")
         ansTotal += 1
@@ -753,15 +732,15 @@ extension TZForth {
 
         // Caught throw during compile: STATE stays 1 and open : definition can finish with ;
         resetTest()
-        self.feedLine("VARIABLE t9cst")
-        self.feedLine(": t9cei ['] EVALUATE CATCH STATE @ t9cst ! ; IMMEDIATE")
-        self.feedLine(": t9cspi t9cst @ . ; IMMEDIATE")
-        self.feedLine(": t9cpart")
+        self.feedLine("VARIABLE t9pst")
+        self.feedLine(": t9pei ['] EVALUATE CATCH STATE @ t9pst ! ; IMMEDIATE")
+        self.feedLine(": t9ppi t9pst @ . ; IMMEDIATE")
+        self.feedLine(": t9pdef")
         collected = ""
-        self.feedLine("S\" nosuch-tzforth-compile-xyz\" t9cei t9cspi")
+        self.feedLine("S\" nosuch-tzforth-compile-xyz\" t9pei t9ppi")
         let compileStateOne = collected.contains("1")
         self.feedLine("789 ;")
-        self.feedLine("t9cpart .")
+        self.feedLine("t9pdef .")
         ansTotal += 1
         let cstOut = collected.trimmingCharacters(in: .whitespacesAndNewlines)
         if compileStateOne && cstOut.contains("789") {
@@ -770,6 +749,13 @@ extension TZForth {
         } else {
             results += "TEST6 CATCH compile STATE preserve: FAIL compileState=\(compileStateOne) out='\(cstOut)' (expected 1 during compile, 789 at run)\n"
         }
+
+        // THROW Phase 4: file I/O and host FLOAD
+        ansTest("CATCH FLOAD missing", "S\" fload nosuch-tzforth-missing.fth\" CATCH-EVALUATE .", "-74")
+        self.feedLine(": t4if 999 ['] INCLUDE-FILE CATCH ;")
+        ansTest("CATCH INCLUDE-FILE invalid", "t4if .", "-68")
+        self.feedLine(": t4inc S\" nosuch-tzforth-missing.fth\" ['] INCLUDED CATCH ;")
+        ansTest("CATCH INCLUDED missing", "t4inc .", "-74")
 
         results += "TEST6 ANS core summary: \(ansPassed)/\(ansTotal) passed\n"
         if ansPassed != ansTotal {

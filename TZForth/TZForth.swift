@@ -193,8 +193,13 @@ public final class TZForth {
     /// instead of loading immediately. The host (after feedLine returns, in post-processing)
     /// performs startAccessingSecurityScopedResource (required in sandboxed app), chdir to
     /// parent, persists LastFLOADDirectory, then calls loadFile(url) to actually read it.
-    /// This mirrors the pendingEditURL mechanism for sandbox friendliness.
+    /// Deprecated for named FLOAD: the FLOAD word now loads synchronously via onPerformNamedLoad
+    /// (or direct loadFileContents when no host callback is set). Cleared before load runs.
     public var pendingLoadURL: URL? = nil
+
+    /// Host performs a named FLOAD load (sandbox scope + read) synchronously before FLOAD returns.
+    /// Return true when the file was loaded. On failure the engine has already raised kernelThrow.
+    public var onPerformNamedLoad: ((URL) -> Bool)? = nil
 
     /// Optional callback fired after a successful CHDIR (host uses it to persist a
     /// security-scoped bookmark for the new directory if the current scope allows,
@@ -359,6 +364,9 @@ public final class TZForth {
         static let invalidToken: Cell = -16
         static let nestingLimit: Cell = -17
         static let illegalArgument: Cell = -20
+        static let fileIOError: Cell = -70
+        static let fileNotFound: Cell = -74
+        static let invalidFileId: Cell = -68
     }
     /// Depth of `[` … `]` compile-time interpret brackets (for SLITERAL et al.).
     private var bracketCompileDepth: Int = 0
@@ -1057,7 +1065,7 @@ public final class TZForth {
 
         runInterpreter()
 
-        if errorFlag {
+        if errorFlag || (throwActive && exceptionFrames.isEmpty) {
             recoverFromError()
         }
 
@@ -1111,12 +1119,13 @@ public final class TZForth {
 
     /// Public entry point for the host to load a file after a dialog (or programmatically).
     /// Clears any pending request flag and processes the file's lines.
-    public func loadFile(_ url: URL) {
+    @discardableResult
+    public func loadFile(_ url: URL) -> Bool {
         fileLoadRequested = false
         fileEditRequested = false
         pendingEditURL = nil
         pendingLoadURL = nil
-        loadFileContents(url)
+        return loadFileContents(url)
     }
 
     /// Public entry point for the host after EDIT dialog pick (or future programmatic).
@@ -1169,7 +1178,20 @@ public final class TZForth {
         self.pendingEditURL = url
     }
 
-    private func loadFileContents(_ url: URL, registerSpec: String? = nil) {
+    private func performNamedFload(url: URL, spec: String) {
+        let ok: Bool
+        if let hostLoad = self.onPerformNamedLoad {
+            ok = hostLoad(url)
+        } else {
+            ok = self.loadFileContents(url, registerSpec: spec)
+        }
+        if !ok && !self.throwActive {
+            self.throwFileNotFound("? FLOAD could not read '\(url.lastPathComponent)' (not found or unreadable)")
+        }
+    }
+
+    @discardableResult
+    private func loadFileContents(_ url: URL, registerSpec: String? = nil) -> Bool {
         // Support FLOAD auto .fth: if the provided url's leaf has no dot, try the literal
         // name first; if it doesn't exist, fall back to name + ".fth". This lets
         // "fload foo" work whether the file is "foo" or "foo.fth".
@@ -1236,20 +1258,19 @@ public final class TZForth {
                     self.nameJoinSpec(url.lastPathComponent)
                 }
                 self.pendingFloadSpec = ""
-                return  // success on this candidate
+                return true  // success on this candidate
             } catch {
                 // try next candidate (literal then auto-.fth for bare FLOAD names)
             }
         }
         self.pendingFloadSpec = ""
-        // All candidates failed (or only one).
         let reportURL = candidates.last ?? url
-        // Use a clean message; avoid embedding Cocoa's localizedDescription which
-        // can contain curly/smart quotes and cause display oddities in the console.
-        tell("? FLOAD could not read '\(reportURL.lastPathComponent)' (not found or unreadable)\n")
-        // Helpful hint for the common sandbox case (no bookmark/scope for the logical dir yet).
-        tell("  (If the file is in your current directory, type bare `fload` and pick any file in that folder once to authorize it. Then named FLOAD and CHDIR will stick across launches.)\n")
-        errorFlag = true
+        let msg = "? FLOAD could not read '\(reportURL.lastPathComponent)' (not found or unreadable)"
+        self.throwFileNotFound(msg)
+        if self.exceptionFrames.isEmpty {
+            tell("  (If the file is in your current directory, type bare `fload` and pick any file in that folder once to authorize it. Then named FLOAD and CHDIR will stick across launches.)\n")
+        }
+        return false
     }
 
     // MARK: - File-Access helpers (ANS word set 11)
@@ -1571,8 +1592,7 @@ public final class TZForth {
 
     private func includeFileInterpret(_ fileId: Int, closeWhenDone: Bool) {
         guard openFiles[fileId]?.isOpen == true else {
-            tell("? INCLUDE-FILE: invalid fileid\n")
-            errorFlag = true
+            self.throwInvalidFileId("? INCLUDE-FILE: invalid fileid")
             return
         }
         pushInputSourceFrame()
@@ -1589,7 +1609,7 @@ public final class TZForth {
         }
         while refillFromFile(fileId) {
             runInterpreter()
-            if errorFlag || sourceLoadStop { break }
+            if throwActive || errorFlag || sourceLoadStop { break }
         }
     }
 
@@ -1707,8 +1727,7 @@ public final class TZForth {
         let url = self.pathURLFromCounted(caddr, u)
         let (fid, ior) = self.openFileAtPath(url.path, fam: self.FAM_RDONLY, create: false)
         if ior != self.FILE_IO_SUCCESS {
-            self.tell("? INCLUDED could not open '\(url.lastPathComponent)'\n")
-            self.errorFlag = true
+            self.throwFileNotFound("? INCLUDED could not open '\(url.lastPathComponent)'")
             return
         }
         self.includeFileInterpret(Int(fid), closeWhenDone: true)
@@ -2171,8 +2190,8 @@ public final class TZForth {
     }
 
     private func memoryAllocationFailed(_ message: String) {
-        self.tell(message)
-        self.errorFlag = true
+        let trimmed = message.hasSuffix("\n") ? String(message.dropLast()) : message
+        self.throwIllegalArgument(trimmed)
     }
 
     @discardableResult
@@ -3343,16 +3362,17 @@ public final class TZForth {
             self.currentSourceId = 0
             self.runInterpreter()
             self.evaluateNesting -= 1
-            // Propagate caught THROW to enclosing CATCH (do not convert to errorFlag).
-            // Uncaught throws already set errorFlag via handleUnhandledThrow.
+            // Always restore outer input/source (even on caught THROW) before propagating throwActive.
             self.inputQueue = savedQueue
             self.writeCell(self.IN, savedIN)
             self.currentSourceId = savedSourceId
-            // restore previous source buffer
             self.currentSourceLen = savedSourceLen
             for i in 0..<savedSourceLen {
                 self.writeByte(self.SOURCE_BUFFER + i, savedSource[i])
             }
+            if self.throwActive { return }
+            // Propagate caught THROW to enclosing CATCH (do not convert to errorFlag).
+            // Uncaught throws already set errorFlag via handleUnhandledThrow.
         }
 
         // CATCH ( xt -- n | i*x n )  ANS Exception — execute xt; 0 on success, throw code otherwise.
@@ -4422,6 +4442,10 @@ public final class TZForth {
                 return
             }
             self.resolveAndLoadFile(spec: spec)
+            guard let url = self.pendingLoadURL else { return }
+            self.pendingLoadURL = nil
+            self.performNamedFload(url: url, spec: spec)
+            if self.throwActive { return }
         }
 
         // EDIT <name|dialog> — open in the system default text editor (TextEdit or user-chosen app for the type).
@@ -4873,8 +4897,7 @@ public final class TZForth {
         _ = register("N>R") {
             let n = Int(self.pop())
             if n < 0 {
-                self.tell("? N>R negative count\n")
-                self.errorFlag = true
+                self.throwIllegalArgument("? N>R negative count")
                 return
             }
             var items: [Cell] = []
@@ -4886,14 +4909,12 @@ public final class TZForth {
         _ = register("NR>") {
             let rs = self.rspGet()
             if rs < 2 {
-                self.tell("? NR> return stack underflow\n")
-                self.errorFlag = true
+                self.kernelThrow(StdThrow.returnStackUnderflow, message: "? NR> return stack underflow")
                 return
             }
             let n = Int(self.rpop())
             if n < 0 || rs - 1 < Cell(n) {
-                self.tell("? NR> mismatch with N>R\n")
-                self.errorFlag = true
+                self.throwIllegalArgument("? NR> mismatch with N>R")
                 return
             }
             for _ in 0..<n { self.push(self.rpop()) }
@@ -4938,19 +4959,16 @@ public final class TZForth {
 
         // Assembler words — stubs (no machine-code assembler in TZForth yet).
         _ = register("CODE") {
-            self.tell("? CODE assembler not implemented\n")
-            self.errorFlag = true
+            self.throwIllegalArgument("? CODE assembler not implemented")
         }
         _ = register(";CODE") {
-            self.tell("? ;CODE assembler not implemented\n")
-            self.errorFlag = true
+            self.throwIllegalArgument("? ;CODE assembler not implemented")
         }
         // [IF] / [ELSE] / [THEN] — Core Ext conditional compilation (also listed under Programming-Tools assembler).
         _ = register("[IF]", immediate: true) {
             let compiling = self.readCell(self.STATE) != 0 || self.bracketCompileDepth > 0
             if !compiling {
-                self.tell("? [IF] undefined in interpret state\n")
-                self.errorFlag = true
+                self.throwCompileOnly("? [IF] undefined in interpret state")
                 return
             }
             if self.pop() == 0 {
@@ -4960,8 +4978,7 @@ public final class TZForth {
         _ = register("[ELSE]", immediate: true) {
             let compiling = self.readCell(self.STATE) != 0 || self.bracketCompileDepth > 0
             if !compiling {
-                self.tell("? [ELSE] undefined in interpret state\n")
-                self.errorFlag = true
+                self.throwCompileOnly("? [ELSE] undefined in interpret state")
                 return
             }
             _ = self.skipConditionalBranch(stopAtElse: false)
@@ -5112,8 +5129,7 @@ public final class TZForth {
         _ = register("SLITERAL", immediate: true) {
             let compiling = self.readCell(self.STATE) != 0 || self.bracketCompileDepth > 0
             if !compiling {
-                self.tell("? SLITERAL undefined in interpret state\n")
-                self.errorFlag = true
+                self.throwCompileOnly("? SLITERAL undefined in interpret state")
                 return
             }
             let u = Int(self.pop())
@@ -5162,8 +5178,7 @@ public final class TZForth {
         // S\"  immediate — escaped string; compile-only per ANS (interpret undefined).
         _ = register("S\\\"", immediate: true) {
             if self.readCell(self.STATE) == 0 {
-                self.tell("? S\\\" is compile-only\n")
-                self.errorFlag = true
+                self.throwCompileOnly("? S\\\" is compile-only")
                 return
             }
             let (saddr, len) = self.parseEscapedStringToBuffer()
@@ -6301,6 +6316,9 @@ public final class TZForth {
         case StdThrow.invalidToken: return "? invalid execution token"
         case StdThrow.nestingLimit: return "? nesting limit exceeded"
         case StdThrow.illegalArgument: return "? illegal argument"
+        case StdThrow.fileIOError: return "? File I/O exception"
+        case StdThrow.fileNotFound: return "? File not found"
+        case StdThrow.invalidFileId: return "? Invalid file-id"
         default: return nil
         }
     }
@@ -6340,6 +6358,14 @@ public final class TZForth {
 
     private func throwIllegalArgument(_ message: String) {
         kernelThrow(StdThrow.illegalArgument, message: message)
+    }
+
+    private func throwFileNotFound(_ message: String) {
+        kernelThrow(StdThrow.fileNotFound, message: message)
+    }
+
+    private func throwInvalidFileId(_ message: String) {
+        kernelThrow(StdThrow.invalidFileId, message: message)
     }
 
     /// ANS THROW / ABORT delivery. n=0 is a no-op. Caught throws restore the CATCH frame.

@@ -2,7 +2,7 @@
 
 This document maps TZForth’s internal `errorFlag` error path to ANS Forth 2012 standard `THROW` codes (Exception word set §9.3.1). It is the implementation guide for replacing `tell("? …")` + `errorFlag = true` with catchable `kernelThrow(code, message:)`.
 
-**Status:** Phases 1–2 implemented. Phase 1: stack faults, div-by-zero, undefined word, `CATCH-EVALUATE`. Phase 2: memory bounds (-7), invalid tokens/branches (-16), compile-only control (-14), uncompleted `[IF]` (-15), execution limit (-17), search-order (-20). ~75 `errorFlag` sites remain for Phases 3–4.
+**Status:** Phases 1–3 implemented. Phase 1: stack faults, div-by-zero, undefined word, `CATCH-EVALUATE`. Phase 2: memory bounds (-7), invalid tokens/branches (-16), compile-only control (-14), uncompleted `[IF]` (-15), execution limit (-17), search-order (-20). Phase 3: defining words (-10), dictionary lookup (-13), misuse (-20) for `:`/`CREATE`/`FORGET`/`MARKER`/`SYNONYM`/`VALUE`/`DEFER`/`IS`/`TO`, locals, `RECURSE`/`DOES>`, `SEE`/`HELP`. ~15 `errorFlag` sites remain for Phase 4 (file I/O, host/FLOAD, `N>R`/`CODE`/conditional interpret).
 
 **Reference:** [ANS THROW](https://forth-standard.org/standard/exception/THROW), §9.3.1 throw codes, §9.3.5 exception handling.
 
@@ -132,7 +132,7 @@ When an throw is **uncaught**, `handleUnhandledThrow` → `resetRuntimeState()` 
 
 ---
 
-## Phase 3 — Defining words, dictionary, search order
+## Phase 3 — Defining words, dictionary, search order ✅
 
 | Message | Code |
 |---------|------|
@@ -147,7 +147,7 @@ When an throw is **uncaught**, `handleUnhandledThrow` → `resetRuntimeState()` 
 | `? MARKER needs a name` | -10 |
 | `ALLOCATE` / `FREE` / `RESIZE` failures | keep `ior` on stack (not THROW) |
 
-**~40 sites.**
+**FTEST:** `S" FORGET" CATCH-EVALUATE .` → -10; `S" SEE nosuch…" CATCH-EVALUATE .` → -13.
 
 ---
 

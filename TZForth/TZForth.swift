@@ -352,6 +352,7 @@ public final class TZForth {
         static let returnStackOverflow: Cell = -6
         static let invalidAddress: Cell = -7
         static let divisionByZero: Cell = -9
+        static let zeroLengthName: Cell = -10
         static let undefinedWord: Cell = -13
         static let compileOnly: Cell = -14
         static let uncompletedControl: Cell = -15
@@ -1375,18 +1376,15 @@ public final class TZForth {
     private func beginLocalName(_ name: String) {
         let key = self.localNameKey(name)
         if !self.validateLocalName(name) {
-            self.tell("? invalid local name \(name)\n")
-            self.errorFlag = true
+            self.throwIllegalArgument("? invalid local name \(name)")
             return
         }
         if self.localCompileNames.count >= Self.MAX_LOCALS_PER_DEF {
-            self.tell("? too many locals (max \(Self.MAX_LOCALS_PER_DEF))\n")
-            self.errorFlag = true
+            self.throwIllegalArgument("? too many locals (max \(Self.MAX_LOCALS_PER_DEF))")
             return
         }
         if self.localCompileNames.contains(where: { self.localNameKey($0) == key }) {
-            self.tell("? duplicate local \(name)\n")
-            self.errorFlag = true
+            self.throwIllegalArgument("? duplicate local \(name)")
             return
         }
         self.localCompileNames.append(name)
@@ -2790,7 +2788,7 @@ public final class TZForth {
         _ = register("IMMEDIATE") {
             let defsHeadCell = self.readCell(self.CURRENT)
             let l = self.readCell(defsHeadCell)
-            if l == 0 { self.tell("? No latest word\n"); self.errorFlag = true; return }
+            if l == 0 { self.throwIllegalArgument("? No latest word"); return }
             let fl = self.readByte( Int(l) + 8 )
             self.writeByte( Int(l) + 8 , fl | self.FLAG_IMMEDIATE )
         }
@@ -2805,7 +2803,7 @@ public final class TZForth {
         _ = register("[CHAR]", immediate: true) {
             if self.readCell(self.STATE) == 0 { self.throwCompileOnly("? [CHAR] only while compiling"); return }
             let name = self.parseWord()
-            if name.isEmpty { self.tell("? [CHAR] needs char\n"); self.errorFlag = true; return }
+            if name.isEmpty { self.throwZeroLengthName("? [CHAR] needs char"); return }
             let c = Cell( name.utf8.first ?? 0 )
             self.push(self.litID); self.comma()
             self.push(c); self.comma()
@@ -2814,7 +2812,7 @@ public final class TZForth {
         _ = register("[']", immediate: true) {
             if self.readCell(self.STATE) == 0 { self.kernelThrow(StdThrow.compileOnly, message: "? ['] only while compiling"); return }
             let name = self.parseWord()
-            if name.isEmpty { self.kernelThrow(StdThrow.undefinedWord, message: "? ['] needs name"); return }
+            if name.isEmpty { self.throwZeroLengthName("? ['] needs name"); return }
             let hdr = self.findWord(name)
             if hdr == 0 { self.kernelThrow(StdThrow.undefinedWord, message: "? ['] ? " + name); return }
             let cfa = self.getCFA(hdr)
@@ -2827,7 +2825,7 @@ public final class TZForth {
         _ = register("[COMPILE]", immediate: true) {
             if self.readCell(self.STATE) == 0 { self.kernelThrow(StdThrow.compileOnly, message: "? [COMPILE] only while compiling"); return }
             let name = self.parseWord()
-            if name.isEmpty { self.kernelThrow(StdThrow.undefinedWord, message: "? [COMPILE] needs name"); return }
+            if name.isEmpty { self.throwZeroLengthName("? [COMPILE] needs name"); return }
             let hdr = self.findWord(name)
             if hdr == 0 { self.kernelThrow(StdThrow.undefinedWord, message: "? [COMPILE] ? " + name); return }
             let cfa = self.getCFA(hdr)
@@ -2864,7 +2862,7 @@ public final class TZForth {
         _ = register("POSTPONE", immediate: true) {
             if self.readCell(self.STATE) == 0 { self.kernelThrow(StdThrow.compileOnly, message: "? POSTPONE only while compiling"); return }
             let name = self.parseWord()
-            if name.isEmpty { self.kernelThrow(StdThrow.undefinedWord, message: "? POSTPONE needs name"); return }
+            if name.isEmpty { self.throwZeroLengthName("? POSTPONE needs name"); return }
             let hdr = self.findWord(name)
             if hdr == 0 { self.kernelThrow(StdThrow.undefinedWord, message: "? POSTPONE ? " + name); return }
             let cfa = self.getCFA(hdr)
@@ -2893,7 +2891,7 @@ public final class TZForth {
         _ = register(":") {
             // Read the next word as the name
             let name = self.parseWord()
-            if name.isEmpty { self.tell("? : needs a name\n"); self.errorFlag = true; return }
+            if name.isEmpty { self.throwZeroLengthName("? : needs a name"); return }
 
             self.nonameCompile = false
             self.resetLocalCompileState()
@@ -2954,8 +2952,7 @@ public final class TZForth {
             let defsHeadCell = self.readCell(self.CURRENT)
             let latest = self.readCell(defsHeadCell)
             if latest == 0 {
-                self.tell("? RECURSE with no current definition\n")
-                self.errorFlag = true
+                self.throwIllegalArgument("? RECURSE with no current definition")
                 return
             }
             let cfa = self.getCFA(latest)
@@ -3032,8 +3029,7 @@ public final class TZForth {
             let defsHeadCell = self.readCell(self.CURRENT)
             let latest = self.readCell(defsHeadCell)
             if latest == 0 {
-                self.tell("? DOES> without a preceding CREATE\n")
-                self.errorFlag = true
+                self.throwIllegalArgument("? DOES> without a preceding CREATE")
                 return
             }
             let cfa = self.getCFA(latest)
@@ -3269,7 +3265,7 @@ public final class TZForth {
             // for the *target* of tick is clean (or normalized if it contained quotes).
             let name = self.parseWord()
             if name.isEmpty {
-                self.kernelThrow(StdThrow.undefinedWord, message: "? ' needs a name")
+                self.throwZeroLengthName("? ' needs a name")
                 return
             }
 
@@ -3957,9 +3953,7 @@ public final class TZForth {
         self.localFetchID = register("(LOCAL@)") {
             let idx = Int(self.pop())
             guard let frame = self.localFrames.last, idx >= 0, idx < frame.count else {
-                self.tell("? (LOCAL@) out of range\n")
-                self.errorFlag = true
-                self.push(0)
+                self.throwIllegalArgument("? (LOCAL@) out of range")
                 return
             }
             self.push(frame[idx])
@@ -3969,8 +3963,7 @@ public final class TZForth {
             let idx = Int(self.pop())
             let val = self.pop()
             guard !self.localFrames.isEmpty, idx >= 0, idx < self.localFrames[self.localFrames.count - 1].count else {
-                self.tell("? (LOCAL!) out of range\n")
-                self.errorFlag = true
+                self.throwIllegalArgument("? (LOCAL!) out of range")
                 return
             }
             self.localFrames[self.localFrames.count - 1][idx] = val
@@ -4310,8 +4303,7 @@ public final class TZForth {
         let unloopID = register("UNLOOP") {
             let rs = self.rspGet()
             if rs < 3 {
-                self.tell("? Return stack underflow\n")
-                self.errorFlag = true
+                self.kernelThrow(StdThrow.returnStackUnderflow, message: "? Return stack underflow")
                 return
             }
             self.rspSet(rs - 2)
@@ -4540,7 +4532,7 @@ public final class TZForth {
         // MARKER ( "name" -- )  Core Ext — save dict/search-order landmark; execution restores state.
         _ = register("MARKER") {
             let name = self.parseWord()
-            if name.isEmpty { self.tell("? MARKER needs a name\n"); self.errorFlag = true; return }
+            if name.isEmpty { self.throwZeroLengthName("? MARKER needs a name"); return }
             let savedHere = self.readCell(self.DP_ADDR)
             let savedCurrent = self.readCell(self.CURRENT)
             let n = self.searchOrder.count
@@ -4573,8 +4565,7 @@ public final class TZForth {
 
             let name = self.parseWord().uppercased()
             if name.isEmpty {
-                self.tell("? FORGET needs a name\n")
-                self.errorFlag = true
+                self.throwZeroLengthName("? FORGET needs a name")
                 return
             }
 
@@ -4596,8 +4587,7 @@ public final class TZForth {
                 if wname.uppercased() == name {
                     // Safety: do not allow FORGET to remove kernel primitives.
                     if link <= self.kernelLatest {
-                        self.tell("? Cannot FORGET kernel word '\(name)'\n")
-                        self.errorFlag = true
+                        self.throwIllegalArgument("? Cannot FORGET kernel word '\(name)'")
                         return
                     }
 
@@ -4626,8 +4616,7 @@ public final class TZForth {
                 prev = link
                 link = self.readCell(link)
             }
-            self.tell("? \(name) ?\n")
-            self.errorFlag = true
+            self.kernelThrow(StdThrow.undefinedWord, message: "? \(name) ?")
         }
 
         _ = register("HELP") {
@@ -4640,7 +4629,7 @@ public final class TZForth {
             let lookupName = name.trimmingCharacters(in: .whitespaces)
             let hdr = self.findWord(lookupName)
             if hdr == 0 {
-                self.tell("? \(lookupName) ?\n")
+                self.kernelThrow(StdThrow.undefinedWord, message: "? \(lookupName) ?")
                 return
             }
             // First the SEE/decompile (using shared helper)
@@ -4837,14 +4826,12 @@ public final class TZForth {
             let newName = self.parseWord()
             let oldName = self.parseWord()
             if newName.isEmpty || oldName.isEmpty {
-                self.tell("? SYNONYM needs newname and oldname\n")
-                self.errorFlag = true
+                self.throwZeroLengthName("? SYNONYM needs newname and oldname")
                 return
             }
             let hdr = self.findWord(oldName)
             if hdr == 0 {
-                self.tell("? SYNONYM ? \(oldName)\n")
-                self.errorFlag = true
+                self.kernelThrow(StdThrow.undefinedWord, message: "? SYNONYM ? \(oldName)")
                 return
             }
             let oldCfa = self.getCFA(hdr)
@@ -5191,7 +5178,7 @@ public final class TZForth {
         // Simple CONSTANT (enough for education)
         _ = register("CONSTANT") {
             let name = self.parseWord()
-            if name.isEmpty { self.errorFlag = true; return }
+            if name.isEmpty { self.throwZeroLengthName("? CONSTANT needs a name"); return }
             let value = self.pop()
             self.createWord(name: name, immediate: false)
             self.push(self.docolID); self.comma()
@@ -5202,7 +5189,7 @@ public final class TZForth {
 
         _ = register("2CONSTANT") {
             let name = self.parseWord()
-            if name.isEmpty { self.tell("? 2CONSTANT needs a name\n"); self.errorFlag = true; return }
+            if name.isEmpty { self.throwZeroLengthName("? 2CONSTANT needs a name"); return }
             let dhi = self.pop()
             let dlo = self.pop()
             self.createWord(name: name, immediate: false)
@@ -5227,7 +5214,7 @@ public final class TZForth {
         // VARIABLE (very simple)
         _ = register("VARIABLE") {
             let name = self.parseWord()
-            if name.isEmpty { self.errorFlag = true; return }
+            if name.isEmpty { self.throwZeroLengthName("? VARIABLE needs a name"); return }
             self.createWord(name: name, immediate: false)
             self.push(self.docolID); self.comma()
             self.push(self.litID); self.comma()
@@ -5243,7 +5230,7 @@ public final class TZForth {
 
         _ = register("2VARIABLE") {
             let name = self.parseWord()
-            if name.isEmpty { self.tell("? 2VARIABLE needs a name\n"); self.errorFlag = true; return }
+            if name.isEmpty { self.throwZeroLengthName("? 2VARIABLE needs a name"); return }
             self.createWord(name: name, immediate: false)
             self.push(self.docolID); self.comma()
             self.push(self.litID); self.comma()
@@ -5258,7 +5245,7 @@ public final class TZForth {
         // (We also support high-level CREATE/DOES> defers via updated DEFER!/IS logic.)
         _ = register("DEFER") {
             let name = self.parseWord()
-            if name.isEmpty { self.tell("? DEFER needs a name\n"); self.errorFlag = true; return }
+            if name.isEmpty { self.throwZeroLengthName("? DEFER needs a name"); return }
             self.createWord(name: name, immediate: false)
             self.push(self.docolID); self.comma()
             self.push(self.litID); self.comma()
@@ -5276,7 +5263,7 @@ public final class TZForth {
         // docol + LIT <val-cell> @ EXIT style.
         _ = register("VALUE") {
             let name = self.parseWord()
-            if name.isEmpty { self.tell("? VALUE needs a name\n"); self.errorFlag = true; return }
+            if name.isEmpty { self.throwZeroLengthName("? VALUE needs a name"); return }
             let n = self.pop()
             self.createWord(name: name, immediate: false)
             self.push(self.docolID); self.comma()
@@ -5291,7 +5278,7 @@ public final class TZForth {
 
         _ = register("2VALUE") {
             let name = self.parseWord()
-            if name.isEmpty { self.tell("? 2VALUE needs a name\n"); self.errorFlag = true; return }
+            if name.isEmpty { self.throwZeroLengthName("? 2VALUE needs a name"); return }
             let dhi = self.pop()
             let dlo = self.pop()
             self.createWord(name: name, immediate: false)
@@ -5312,7 +5299,7 @@ public final class TZForth {
             let deferXt = self.pop()
             let newXt = self.pop()
             if deferXt < Cell(self.MAX_BUILTIN_ID) {
-                self.tell("? DEFER! on a primitive\n"); self.errorFlag = true; return
+                self.throwIllegalArgument("? DEFER! on a primitive"); return
             }
             let cfa = Int(deferXt)
             let first = self.readCell(cfa)
@@ -5321,7 +5308,7 @@ public final class TZForth {
                 // old docol + LIT <storage> style (VALUE, old DEFER)
                 let second = self.readCell(cfa + 8)
                 if second != self.litID {
-                    self.tell("? DEFER! target does not look like a DEFER or VALUE\n"); self.errorFlag = true; return
+                    self.throwIllegalArgument("? DEFER! target does not look like a DEFER or VALUE"); return
                 }
                 storageAddr = Int( self.readCell(cfa + 16) )
             } else if first == self.createRuntimeID || first == self.dodoesID {
@@ -5329,7 +5316,7 @@ public final class TZForth {
                 // storage / behavior cell is the second cell after the runtime ID
                 storageAddr = Int( self.readCell(cfa + 8) )
             } else {
-                self.tell("? DEFER! target is not a supported defer or value\n"); self.errorFlag = true; return
+                self.throwIllegalArgument("? DEFER! target is not a supported defer or value"); return
             }
             self.writeCell(storageAddr, newXt)
         }
@@ -5338,7 +5325,7 @@ public final class TZForth {
         _ = register("ACTION-OF") {
             let deferXt = self.pop()
             if deferXt < Cell(self.MAX_BUILTIN_ID) {
-                self.tell("? ACTION-OF on a primitive\n"); self.errorFlag = true; return
+                self.throwIllegalArgument("? ACTION-OF on a primitive"); return
             }
             let cfa = Int(deferXt)
             let first = self.readCell(cfa)
@@ -5360,7 +5347,7 @@ public final class TZForth {
         _ = register("DEFER@") {
             let deferXt = self.pop()
             if deferXt < Cell(self.MAX_BUILTIN_ID) {
-                self.tell("? DEFER@ on a primitive\n"); self.errorFlag = true; return
+                self.throwIllegalArgument("? DEFER@ on a primitive"); return
             }
             let cfa = Int(deferXt)
             let first = self.readCell(cfa)
@@ -5382,22 +5369,22 @@ public final class TZForth {
         _ = register("IS", immediate: false) {   // not immediate; the parsing version
             let newXt = self.pop()
             let name = self.parseWord()
-            if name.isEmpty { self.tell("? IS needs a name\n"); self.errorFlag = true; return }
+            if name.isEmpty { self.throwZeroLengthName("? IS needs a name"); return }
             let hdr = self.findWord(name)
-            if hdr == 0 { self.tell("? IS ? " + name + "\n"); self.errorFlag = true; return }
+            if hdr == 0 { self.kernelThrow(StdThrow.undefinedWord, message: "? IS ? " + name); return }
             let cfa = self.getCFA(hdr)
             let first = self.readCell(Int(cfa))
             var storageAddr: Int = 0
             if first == self.docolID {
                 let second = self.readCell(Int(cfa) + 8)
                 if second != self.litID {
-                    self.tell("? IS target does not look like DEFER/VALUE\n"); self.errorFlag = true; return
+                    self.throwIllegalArgument("? IS target does not look like DEFER/VALUE"); return
                 }
                 storageAddr = Int( self.readCell(Int(cfa) + 16) )
             } else if first == self.createRuntimeID || first == self.dodoesID {
                 storageAddr = Int( self.readCell(Int(cfa) + 8) )
             } else {
-                self.tell("? IS target is not a supported defer or value\n"); self.errorFlag = true; return
+                self.throwIllegalArgument("? IS target is not a supported defer or value"); return
             }
             self.writeCell(storageAddr, newXt)
         }
@@ -5405,12 +5392,11 @@ public final class TZForth {
         // TO ( n "<name>" -- ) / ( d "<name>" -- ) — immediate; VALUE, 2VALUE, and locals
         _ = register("TO", immediate: true) {
             let name = self.parseWord()
-            if name.isEmpty { self.tell("? TO needs a name\n"); self.errorFlag = true; return }
+            if name.isEmpty { self.throwZeroLengthName("? TO needs a name"); return }
 
             if let idx = self.localIndexDuringCompile(name) {
                 if self.readCell(self.STATE) == 0 {
-                    self.tell("? TO local undefined in interpret state\n")
-                    self.errorFlag = true
+                    self.throwCompileOnly("? TO local undefined in interpret state")
                     return
                 }
                 self.compileLocalStore(idx)
@@ -5419,18 +5405,17 @@ public final class TZForth {
 
             let hdr = self.findWord(name)
             if hdr == 0 || hdr == Cell(-1) {
-                self.tell("? TO ? " + name + "\n")
-                self.errorFlag = true
+                self.kernelThrow(StdThrow.undefinedWord, message: "? TO ? " + name)
                 return
             }
             let cfa = self.getCFA(hdr)
             let first = self.readCell(Int(cfa))
             guard first == self.docolID else {
-                self.tell("? TO target is not a VALUE\n"); self.errorFlag = true; return
+                self.throwIllegalArgument("? TO target is not a VALUE"); return
             }
             let second = self.readCell(Int(cfa) + 8)
             guard second == self.litID else {
-                self.tell("? TO target does not look like a VALUE\n"); self.errorFlag = true; return
+                self.throwIllegalArgument("? TO target does not look like a VALUE"); return
             }
             let storageAddr = Int(self.readCell(Int(cfa) + 16))
             let fourth = self.readCell(Int(cfa) + 24)
@@ -5459,7 +5444,7 @@ public final class TZForth {
         // Used together with DOES> for defining words.
         _ = register("CREATE") {
             let name = self.parseWord()
-            if name.isEmpty { self.tell("? CREATE needs a name\n"); self.errorFlag = true; return }
+            if name.isEmpty { self.throwZeroLengthName("? CREATE needs a name"); return }
             self.createWord(name: name, immediate: false)
 
             // Set up the runtime for this new child word (two cells after header):
@@ -5720,7 +5705,7 @@ public final class TZForth {
 
         _ = register("INCLUDE", immediate: true) {
             let name = self.parseWord()
-            if name.isEmpty { self.tell("? INCLUDE needs a name\n"); self.errorFlag = true; return }
+            if name.isEmpty { self.throwZeroLengthName("? INCLUDE needs a name"); return }
             let bytes = Array(name.utf8)
             let slot = self.allocateStringBufferSlot()
             for (i, b) in bytes.enumerated() {
@@ -5738,8 +5723,7 @@ public final class TZForth {
         _ = register("REQUIRE") {
             let (caddr, u) = self.parseNameFromInput()
             if u == 0 {
-                self.tell("? REQUIRE needs a name\n")
-                self.errorFlag = true
+                self.throwZeroLengthName("? REQUIRE needs a name")
                 return
             }
             self.requiredFromSpec(caddr, u)
@@ -6198,8 +6182,7 @@ public final class TZForth {
         let savedCurrent = self.readCell(storage + 8)
         let n = Int(self.readCell(storage + 16))
         if savedHere < self.kernelHere {
-            self.tell("? MARKER cannot restore past kernel\n")
-            self.errorFlag = true
+            self.throwIllegalArgument("? MARKER cannot restore past kernel")
             return
         }
         let headsBase = storage + 24
@@ -6311,6 +6294,7 @@ public final class TZForth {
         case StdThrow.returnStackOverflow: return "? Return stack overflow"
         case StdThrow.invalidAddress: return "? Invalid memory address"
         case StdThrow.divisionByZero: return "? Division by zero"
+        case StdThrow.zeroLengthName: return "? Attempt to use zero-length string as name"
         case StdThrow.undefinedWord: return "? undefined word"
         case StdThrow.compileOnly: return "? compile-only word in interpret state"
         case StdThrow.uncompletedControl: return "? uncompleted control structure"
@@ -6348,6 +6332,14 @@ public final class TZForth {
 
     private func throwInvalidAddress(_ message: String) {
         kernelThrow(StdThrow.invalidAddress, message: message)
+    }
+
+    private func throwZeroLengthName(_ message: String) {
+        kernelThrow(StdThrow.zeroLengthName, message: message)
+    }
+
+    private func throwIllegalArgument(_ message: String) {
+        kernelThrow(StdThrow.illegalArgument, message: message)
     }
 
     /// ANS THROW / ABORT delivery. n=0 is a no-op. Caught throws restore the CATCH frame.
@@ -6490,7 +6482,7 @@ public final class TZForth {
         }
         let hdr = self.findWord(name)
         if hdr == 0 {
-            self.tell("? \(name) ?\n")
+            self.kernelThrow(StdThrow.undefinedWord, message: "? \(name) ?")
             return
         }
         self.printDecompiled(name: name, hdr: hdr)

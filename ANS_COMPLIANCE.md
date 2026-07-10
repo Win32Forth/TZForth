@@ -20,7 +20,7 @@ Last update: Programming-Tools — pre-ANS `COMPILE` documented as intentionally
 | **Locals (13)** | Complete — `(LOCAL)`, `LOCALS|`, `{:`; `TO` for locals; max 32 (`#LOCALS`) |
 | **Other optional sets** | Mostly absent — Float, Facility, Block, Extended-Character, etc. |
 
-FTEST harness: run with `FTEST=1 swift /tmp/combined.swift` (concatenate `TZForth.swift`, `TZForthTests.swift`, `TestTZForth.swift`). Current count: **255/255** TEST6 spot-checks plus block-comment / FLOAD harness tests.
+FTEST harness: run with `FTEST=1 swift /tmp/combined.swift` (concatenate `TZForth.swift`, `TZForthTests.swift`, `TestTZForth.swift`). Current count: **259/259** TEST6 spot-checks plus block-comment / FLOAD harness tests.
 
 ## Core (6.1) — Complete
 
@@ -163,7 +163,7 @@ Unhandled `THROW` with no active `CATCH`: `-1` → print `Aborted!`, reset stack
 
 FTEST covers `ABORT`/`ABORT"` with and without `CATCH`, including REPL recovery after uncaught `ABORT`.
 
-**Standard THROW codes (Phase 1, partial):** Runtime faults in `pop`/`push`/`rpop`/`rpush`, division by zero, undefined word (-13), and compile-only misuse (-14) use `kernelThrow` and are **CATCH-able**. Uncaught throws still print the familiar `? …` lines and set `errorFlag` for REPL/FLOAD recovery. See **`THROW_CODES.md`** for the full migration plan (~120 `errorFlag` sites remain in Phases 2–4: memory bounds, control-flow compile errors, file I/O, host paths).
+**Standard THROW codes (Phases 1–3):** Runtime faults (-3…-9), memory (-7), compile-only (-14), control (-15/-16), limits (-17), search order (-20), zero-length names (-10), undefined dictionary words (-13), and defining-word misuse (-20) use `kernelThrow` and are **CATCH-able**. TZForth also provides **`.ERROR`** (spaced message for a CATCH code). Uncaught throws still print the familiar `? …` lines and set `errorFlag` for REPL/FLOAD recovery. See **`THROW_CODES.md`** — Phase 4 (~15 host/file/`N>R` sites) remains.
 
 ## Memory-Allocation (14) — Complete
 
@@ -298,6 +298,6 @@ Not implemented (no current plan unless requested):
 ## Recommendations
 
 - TZForth is highly functional for classic Forth sources, REPL, sandboxed `FLOAD`/`EDIT`/`CHDIR`, ANS Core + Core Ext conformance testing, and ANS File-Access file I/O / `INCLUDED`.
-- Next logical steps (if desired): Float, Facility, or continue `THROW_CODES.md` Phases 2–4 (memory, control-flow, dictionary).
+- Next logical steps (if desired): Float, Facility, or `THROW_CODES.md` Phase 4 (file I/O, host/FLOAD, `N>R`/`CODE`).
 
 For full standard details, see the official 2012 ANS Forth document (sections 6.1, 6.2, and optional word sets in chapters 7–18).

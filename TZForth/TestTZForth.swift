@@ -830,6 +830,12 @@ hello
     ansTest(".ERROR abort code", "-1 .ERROR", "Aborted!")
     ansTest(".ERROR inline spaced", ".\" before\" 1 0 ' / CATCH .ERROR .\" after\"", "before ? Division by zero after")
 
+    // THROW Phase 3: dictionary / defining-word faults
+    ansTest("CATCH FORGET no name", "S\" FORGET\" CATCH-EVALUATE .", "-10")
+    ansTest("CATCH CREATE no name", "S\" CREATE\" CATCH-EVALUATE .", "-10")
+    ansTest("CATCH SEE undefined", "S\" SEE nosuchtzforthxyz\" CATCH-EVALUATE .", "-13")
+    ansTest("CATCH SYNONYM undefined", "S\" SYNONYM newsyn nosuchtzforthxyz\" CATCH-EVALUATE .", "-13")
+
     print("TEST6 ANS core summary: \(ansPassed)/\(ansTotal) passed")
     if ansPassed != ansTotal {
         print("WARNING: some ANS 2012 core tests failed — review against standard stack effects.")

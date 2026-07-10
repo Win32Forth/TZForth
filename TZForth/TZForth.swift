@@ -506,6 +506,7 @@ public final class TZForth {
         ("ABORT\"", "( flag \"text\" -- )", "if flag, type message and THROW -2 (immediate)"),
         ("CATCH",   "( xt -- n )",        "execute xt; push 0 or throw code"),
         ("CATCH-EVALUATE","( c-addr u -- n )", "EVALUATE string; push 0 or throw code (TZForth)"),
+        (".ERROR",  "( n -- )",           "type standard message for CATCH/THROW code n (0 = silent)"),
         ("THROW",   "( n -- )",           "raise exception n (0 is no-op)"),
         ("ACCEPT",  "( c-addr +n1 -- +n2 )", "read up to n1 chars from input into buffer"),
         ("<#",      "( -- )",             "begin pictured numeric output"),
@@ -3378,6 +3379,12 @@ public final class TZForth {
             self.push(Cell(caddr))
             self.push(Cell(u))
             self.performCatch(xt: self.getCFA(hdr))
+        }
+
+        // .ERROR ( n -- )  TZForth — display standard text for a CATCH/THROW code (0 = no output).
+        _ = register(".ERROR") {
+            let n = self.pop()
+            self.displayThrowMessage(n)
         }
 
         // THROW ( n -- )  ANS Exception — 0 is no-op; non-zero unwinds to nearest CATCH.
@@ -6286,13 +6293,17 @@ public final class TZForth {
         if let message, !message.isEmpty {
             lastKernelThrowMessage = message
         } else if lastKernelThrowMessage.isEmpty {
-            lastKernelThrowMessage = defaultThrowMessage(code) ?? "? THROW \(code)"
+            lastKernelThrowMessage = messageForThrowCode(code) ?? "? THROW \(code)"
         }
         deliverThrow(code)
     }
 
-    private func defaultThrowMessage(_ code: Cell) -> String? {
+    /// Standard REPL text for a throw code (ANS §9.3.1 and TZForth kernel codes). nil = unknown code.
+    private func messageForThrowCode(_ code: Cell) -> String? {
         switch code {
+        case -1: return "Aborted!"
+        case -2:
+            return lastAbortQuoteText.isEmpty ? "? ABORT\"" : lastAbortQuoteText
         case StdThrow.stackUnderflow: return "? Stack underflow"
         case StdThrow.stackOverflow: return "? Stack overflow"
         case StdThrow.returnStackUnderflow: return "? Return stack underflow"
@@ -6307,6 +6318,13 @@ public final class TZForth {
         case StdThrow.illegalArgument: return "? illegal argument"
         default: return nil
         }
+    }
+
+    /// Type the standard message for a CATCH/THROW result (0 = success, no output).
+    private func displayThrowMessage(_ code: Cell) {
+        if code == 0 { return }
+        let msg = messageForThrowCode(code) ?? "? THROW \(code)"
+        tell(msg + "\n")
     }
 
     private func throwDivisionByZero() {

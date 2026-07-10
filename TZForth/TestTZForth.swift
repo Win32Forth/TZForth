@@ -825,6 +825,10 @@ hello
     ansTest("CATCH compile-only", "S\" IF\" CATCH-EVALUATE .", "-14")
     ansTest("CATCH invalid address", "-1 ' @ CATCH .", "-7")
 
+    ansTest(".ERROR div-by-zero", "1 0 ' / CATCH .ERROR", "? Division by zero")
+    ansTest(".ERROR success silent", "0 .ERROR 1 .", "1")
+    ansTest(".ERROR abort code", "-1 .ERROR", "Aborted!")
+
     print("TEST6 ANS core summary: \(ansPassed)/\(ansTotal) passed")
     if ansPassed != ansTotal {
         print("WARNING: some ANS 2012 core tests failed — review against standard stack effects.")

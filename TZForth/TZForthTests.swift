@@ -661,6 +661,18 @@ extension TZForth {
         }
         resetIncludedNames()
         ansTest("INCLUDED-NAMES", "S\" \(freq4Base)\" REQUIRED INCLUDED-NAMES @ 0= .", "0")
+        resetTest()
+        resetIncludedNames()
+        self.feedLine("S\" \(freq1Base)\" REQUIRED")
+        collected = ""
+        self.feedLine(".INCLUDED")
+        ansTotal += 1
+        if collected.contains(freq1Base) {
+            ansPassed += 1
+            results += "TEST6 .INCLUDED list: pass\n"
+        } else {
+            results += "TEST6 .INCLUDED list: FAIL got '\(collected.trimmingCharacters(in: .whitespacesAndNewlines))' (expected \(freq1Base))\n"
+        }
 
         ansTest("ENVIRONMENT? FILE", "S\" FILE\" ENVIRONMENT? .", "-1")
         ansTest("CREATE-FILE", "S\" \(fwrPath)\" W/O CREATE-FILE 0= SWAP CLOSE-FILE DROP .", "-1")

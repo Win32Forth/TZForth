@@ -746,6 +746,18 @@ hello
     }
     resetIncludedNames()
     ansTest("INCLUDED-NAMES", "S\" \(freq4Base)\" REQUIRED INCLUDED-NAMES @ 0= .", "0")
+    resetTest()
+    resetIncludedNames()
+    forth.feedLine("S\" \(freq1Base)\" REQUIRED")
+    collected = ""
+    forth.feedLine(".INCLUDED")
+    ansTotal += 1
+    if collected.contains(freq1Base) {
+        ansPassed += 1
+        print("TEST6 .INCLUDED list: pass")
+    } else {
+        print("TEST6 .INCLUDED list: FAIL got '\(collected.trimmingCharacters(in: .whitespacesAndNewlines))' (expected \(freq1Base))")
+    }
 
     ansTest("ENVIRONMENT? FILE", "S\" FILE\" ENVIRONMENT? .", "-1")
     ansTest("CREATE-FILE", "S\" \(fwrPath)\" W/O CREATE-FILE 0= SWAP CLOSE-FILE DROP .", "-1")

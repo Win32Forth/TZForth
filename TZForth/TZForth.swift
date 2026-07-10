@@ -726,6 +726,7 @@ public final class TZForth {
         ("REQUIRED", "( c-addr u -- )",   "INCLUDED if file spec not yet in INCLUDED-NAMES list"),
         ("REQUIRE", "( -- name )",        "PARSE-NAME REQUIRED (load once per spec string)"),
         ("INCLUDED-NAMES", "( -- addr )", "variable: head of load-once name list (ANS REQUIRED registry)"),
+        (".INCLUDED", "( -- )",            "list file specs registered in INCLUDED-NAMES"),
         ("FILE-STATUS","( fileid -- fl ior )", "implementation-defined file status"),
         ("FLUSH-FILE","( fileid -- ior )",  "flush buffered file data to disk"),
         ("RENAME-FILE","( c-addr1 u1 c-addr2 u2 -- ior )", "rename file"),
@@ -1638,6 +1639,27 @@ public final class TZForth {
             self.writeByte(slot + i, b)
         }
         self.nameJoin(caddr: slot, u: bytes.count)
+    }
+
+    private func displayIncludedNames() {
+        self.tell("Included:\n")
+        var node = self.readIncludedNamesHead()
+        if node == 0 {
+            self.tell("  (none)\n")
+            return
+        }
+        var safety = 0
+        while node != 0 && safety < 10_000 {
+            safety += 1
+            let strAddr = Int(self.readCell(node + 8))
+            let strU = Int(self.readCell(node + 16))
+            self.tell("  ")
+            for i in 0..<strU {
+                self.putkey(self.readByte(strAddr + i))
+            }
+            self.tell("\n")
+            node = Int(self.readCell(node))
+        }
     }
 
     private func requiredFromSpec(_ caddr: Int, _ u: Int) {
@@ -5736,6 +5758,10 @@ public final class TZForth {
                 return
             }
             self.requiredFromSpec(caddr, u)
+        }
+
+        _ = register(".INCLUDED") {
+            self.displayIncludedNames()
         }
     }
 

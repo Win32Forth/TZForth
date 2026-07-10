@@ -813,6 +813,14 @@ hello
     forth.feedLine(": t9t5 2DROP 2DROP 9999 THROW ; : t9c5 1 2 3 4 ['] t9t5 CATCH DEPTH ;")
     ansTest("CATCH depth restore", "t9c5 .", "5")
 
+    // Standard THROW codes (Phase 1): kernel faults are CATCH-able
+    forth.feedLine(": t9div ['] / CATCH ;")
+    ansTest("CATCH div-by-zero", "1 0 t9div .", "-9")
+    forth.feedLine(": t9undef S\" no-such-word-tzforth-xyz\" ['] EVALUATE CATCH ;")
+    ansTest("CATCH undefined word", "t9undef .", "-13")
+    forth.feedLine(": t9under ['] drop CATCH ;")
+    ansTest("CATCH stack underflow", "t9under .", "-3")
+
     print("TEST6 ANS core summary: \(ansPassed)/\(ansTotal) passed")
     if ansPassed != ansTotal {
         print("WARNING: some ANS 2012 core tests failed — review against standard stack effects.")

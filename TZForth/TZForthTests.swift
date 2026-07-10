@@ -728,6 +728,14 @@ extension TZForth {
         self.feedLine(": t9t5 2DROP 2DROP 9999 THROW ; : t9c5 1 2 3 4 ['] t9t5 CATCH DEPTH ;")
         ansTest("CATCH depth restore", "t9c5 .", "5")
 
+        // Standard THROW codes (Phase 1): kernel faults are CATCH-able
+        self.feedLine(": t9div ['] / CATCH ;")
+        ansTest("CATCH div-by-zero", "1 0 t9div .", "-9")
+        self.feedLine(": t9undef S\" no-such-word-tzforth-xyz\" ['] EVALUATE CATCH ;")
+        ansTest("CATCH undefined word", "t9undef .", "-13")
+        self.feedLine(": t9under ['] drop CATCH ;")
+        ansTest("CATCH stack underflow", "t9under .", "-3")
+
         results += "TEST6 ANS core summary: \(ansPassed)/\(ansTotal) passed\n"
         if ansPassed != ansTotal {
             results += "WARNING: some ANS 2012 core tests failed — review against standard stack effects.\n"

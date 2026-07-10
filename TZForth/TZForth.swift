@@ -341,6 +341,23 @@ public final class TZForth {
     private var throwActive: Bool = false
     /// Text from the most recent ABORT" before THROW -2 (for unhandled -2 display).
     private var lastAbortQuoteText: String = ""
+    /// Full REPL line for uncaught kernelThrow (e.g. "? Division by zero"). Cleared after display.
+    private var lastKernelThrowMessage: String = ""
+
+    /// ANS §9.3.1 standard throw codes used by kernelThrow.
+    private enum StdThrow {
+        static let stackUnderflow: Cell = -3
+        static let stackOverflow: Cell = -4
+        static let returnStackUnderflow: Cell = -5
+        static let returnStackOverflow: Cell = -6
+        static let invalidAddress: Cell = -7
+        static let divisionByZero: Cell = -9
+        static let undefinedWord: Cell = -13
+        static let compileOnly: Cell = -14
+        static let uncompletedControl: Cell = -15
+        static let invalidToken: Cell = -16
+        static let nestingLimit: Cell = -17
+    }
     /// Depth of `[` … `]` compile-time interpret brackets (for SLITERAL et al.).
     private var bracketCompileDepth: Int = 0
 
@@ -914,13 +931,9 @@ public final class TZForth {
             spSet(1)
         }
         if s <= 1 {
-            if readCell(STATE) != 0 {
-                tell("? Stack underflow while compiling\n")
-            } else {
-                tell("? Stack underflow\n")
-            }
             spSet(1)
-            errorFlag = true
+            let msg = readCell(STATE) != 0 ? "? Stack underflow while compiling" : "? Stack underflow"
+            kernelThrow(StdThrow.stackUnderflow, message: msg)
             return 0
         }
         spSet(s - 1)
@@ -935,7 +948,8 @@ public final class TZForth {
             spSet(1)
         }
         if s >= Cell(STACK_SIZE) {
-            tell("? Stack overflow\n"); errorFlag = true; return
+            kernelThrow(StdThrow.stackOverflow, message: "? Stack overflow")
+            return
         }
         writeCell(stackBase + (s - 1) * 8, v)
         spSet(s + 1)
@@ -949,13 +963,9 @@ public final class TZForth {
             rspSet(1)
         }
         if rs <= 1 {
-            if readCell(STATE) != 0 {
-                tell("? Return stack underflow while compiling\n")
-            } else {
-                tell("? Return stack underflow\n")
-            }
             rspSet(1)
-            errorFlag = true
+            let msg = readCell(STATE) != 0 ? "? Return stack underflow while compiling" : "? Return stack underflow"
+            kernelThrow(StdThrow.returnStackUnderflow, message: msg)
             return 0
         }
         rspSet(rs - 1)
@@ -970,7 +980,8 @@ public final class TZForth {
             rspSet(1)
         }
         if rs >= Cell(RSTACK_SIZE) {
-            tell("? Return stack overflow\n"); errorFlag = true; return
+            kernelThrow(StdThrow.returnStackOverflow, message: "? Return stack overflow")
+            return
         }
         writeCell(rstackBase + (rs - 1) * 8, v)
         rspSet(rs + 1)
@@ -2465,24 +2476,28 @@ public final class TZForth {
         _ = register("/MOD")  {
             let b = self.pop(); let a = self.pop()
             if b == 0 {
-                self.tell("? Division by zero\n"); self.errorFlag = true; self.push(0); self.push(0); return
+                self.throwDivisionByZero()
+                return
             }
             self.push(a % b); self.push(a / b)
         }
         _ = register("/")     {
             let b = self.pop(); let a = self.pop()
-            if b == 0 { self.tell("? Division by zero\n"); self.errorFlag = true; self.push(0); return }
+            if self.throwActive { return }
+            if b == 0 { self.throwDivisionByZero(); return }
             self.push(a / b)
         }
         _ = register("*/MOD") {
             let n3 = self.pop(); let n2 = self.pop(); let n1 = self.pop()
-            if n3 == 0 { self.tell("? Division by zero\n"); self.errorFlag = true; self.push(0); self.push(0); return }
+            if self.throwActive { return }
+            if n3 == 0 { self.throwDivisionByZero(); return }
             let prod = n1 * n2
             self.push( prod % n3 ); self.push( prod / n3 )
         }
         _ = register("*/") {
             let n3 = self.pop(); let n2 = self.pop(); let n1 = self.pop()
-            if n3 == 0 { self.tell("? Division by zero\n"); self.errorFlag = true; self.push(0); return }
+            if self.throwActive { return }
+            if n3 == 0 { self.throwDivisionByZero(); return }
             // ANS: M* double-cell product, then divide by n3 (trunc toward zero, same as /).
             let prod = Int64(n1) * Int64(n2)
             self.push(Cell(prod / Int64(n3)))
@@ -2498,7 +2513,7 @@ public final class TZForth {
         _ = register("FM/MOD") {
             let n = self.pop(); let dlow = self.pop(); let dhigh = self.pop()
             let d = (dhigh << 32) | (dlow & 0xffffffff)
-            if n == 0 { self.tell("? Division by zero\n"); self.errorFlag = true; self.push(0); self.push(0); return }
+            if n == 0 { self.throwDivisionByZero(); return }
             var quot = d / n
             var rem = d % n
             if (rem < 0) != (n < 0) && rem != 0 { rem += n; quot -= (n > 0 ? 1 : -1) }
@@ -2507,7 +2522,7 @@ public final class TZForth {
         _ = register("SM/REM") {
             let n = self.pop(); let dlow = self.pop(); let dhigh = self.pop()
             let d = (dhigh << 32) | (dlow & 0xffffffff)
-            if n == 0 { self.tell("? Division by zero\n"); self.errorFlag = true; self.push(0); self.push(0); return }
+            if n == 0 { self.throwDivisionByZero(); return }
             self.push( d % n ); self.push( d / n )
         }
         _ = register("U<") { let b = self.pop(); let a = self.pop(); let ua = UInt64( bitPattern: Int64(a) ); let ub = UInt64( bitPattern: Int64(b) ); self.push( ua < ub ? -1 : 0 ) }
@@ -2523,7 +2538,7 @@ public final class TZForth {
         _ = register("UM/MOD") {
             let u = self.pop(); let dlow = self.pop(); let dhigh = self.pop()
             let d = (UInt64( bitPattern: Int64(dhigh) ) << 32) | UInt64( bitPattern: Int64(dlow) )
-            if u == 0 { self.tell("? Division by zero\n"); self.errorFlag = true; self.push(0); self.push(0); return }
+            if u == 0 { self.throwDivisionByZero(); return }
             let uu = UInt64( bitPattern: Int64(u) )
             let quot = d / uu
             let rem = d % uu
@@ -2774,7 +2789,7 @@ public final class TZForth {
         }
 
         _ = register("LITERAL", immediate: true) {
-            if self.readCell(self.STATE) == 0 { self.tell("? LITERAL only while compiling\n"); self.errorFlag = true; return }
+            if self.readCell(self.STATE) == 0 { self.kernelThrow(StdThrow.compileOnly, message: "? LITERAL only while compiling"); return }
             let n = self.pop()
             self.push(self.litID); self.comma()
             self.push(n); self.comma()
@@ -2790,11 +2805,11 @@ public final class TZForth {
         }
 
         _ = register("[']", immediate: true) {
-            if self.readCell(self.STATE) == 0 { self.tell("? ['] only while compiling\n"); self.errorFlag = true; return }
+            if self.readCell(self.STATE) == 0 { self.kernelThrow(StdThrow.compileOnly, message: "? ['] only while compiling"); return }
             let name = self.parseWord()
-            if name.isEmpty { self.tell("? ['] needs name\n"); self.errorFlag = true; return }
+            if name.isEmpty { self.kernelThrow(StdThrow.undefinedWord, message: "? ['] needs name"); return }
             let hdr = self.findWord(name)
-            if hdr == 0 { self.tell("? ['] ? " + name + "\n"); self.errorFlag = true; return }
+            if hdr == 0 { self.kernelThrow(StdThrow.undefinedWord, message: "? ['] ? " + name); return }
             let cfa = self.getCFA(hdr)
             self.push(self.litID); self.comma()
             self.push(cfa); self.comma()
@@ -2803,11 +2818,11 @@ public final class TZForth {
         // [COMPILE] name  (immediate)  Force compilation of the next word's reference even if
         // the word is immediate. (Older form; POSTPONE is preferred in ANS.)
         _ = register("[COMPILE]", immediate: true) {
-            if self.readCell(self.STATE) == 0 { self.tell("? [COMPILE] only while compiling\n"); self.errorFlag = true; return }
+            if self.readCell(self.STATE) == 0 { self.kernelThrow(StdThrow.compileOnly, message: "? [COMPILE] only while compiling"); return }
             let name = self.parseWord()
-            if name.isEmpty { self.tell("? [COMPILE] needs name\n"); self.errorFlag = true; return }
+            if name.isEmpty { self.kernelThrow(StdThrow.undefinedWord, message: "? [COMPILE] needs name"); return }
             let hdr = self.findWord(name)
-            if hdr == 0 { self.tell("? [COMPILE] ? " + name + "\n"); self.errorFlag = true; return }
+            if hdr == 0 { self.kernelThrow(StdThrow.undefinedWord, message: "? [COMPILE] ? " + name); return }
             let cfa = self.getCFA(hdr)
             let first = self.readCell(Int(cfa))
             // Always emit a reference (ignore the target's IMMEDIATE flag)
@@ -2841,11 +2856,11 @@ public final class TZForth {
         // (LIT xt EXECUTE). For non-immediate, same as normal reference emission.
         // Requires executeID (captured at registration of EXECUTE).
         _ = register("POSTPONE", immediate: true) {
-            if self.readCell(self.STATE) == 0 { self.tell("? POSTPONE only while compiling\n"); self.errorFlag = true; return }
+            if self.readCell(self.STATE) == 0 { self.kernelThrow(StdThrow.compileOnly, message: "? POSTPONE only while compiling"); return }
             let name = self.parseWord()
-            if name.isEmpty { self.tell("? POSTPONE needs name\n"); self.errorFlag = true; return }
+            if name.isEmpty { self.kernelThrow(StdThrow.undefinedWord, message: "? POSTPONE needs name"); return }
             let hdr = self.findWord(name)
-            if hdr == 0 { self.tell("? POSTPONE ? " + name + "\n"); self.errorFlag = true; return }
+            if hdr == 0 { self.kernelThrow(StdThrow.undefinedWord, message: "? POSTPONE ? " + name); return }
             let cfa = self.getCFA(hdr)
             let first = self.readCell(Int(cfa))
             let isImm = (self.readByte(Int(hdr) + 8) & self.FLAG_IMMEDIATE) != 0
@@ -3263,12 +3278,14 @@ public final class TZForth {
             // for the *target* of tick is clean (or normalized if it contained quotes).
             let name = self.parseWord()
             if name.isEmpty {
-                self.tell("? ' needs a name\n"); self.errorFlag = true; return
+                self.kernelThrow(StdThrow.undefinedWord, message: "? ' needs a name")
+                return
             }
 
             let hdr = self.findWord(name)
             if hdr == 0 {
-                self.tell("? \(name) ?\n"); self.errorFlag = true; return
+                self.kernelThrow(StdThrow.undefinedWord, message: "? \(name) ?")
+                return
             }
             let cfa = self.getCFA(hdr)
             self.push(cfa)
@@ -3642,9 +3659,7 @@ public final class TZForth {
             let u2 = UInt64(bitPattern: Int64(self.pop()))
             let u1 = UInt64(bitPattern: Int64(self.pop()))
             if u3 == 0 {
-                self.tell("? Division by zero\n")
-                self.errorFlag = true
-                self.pushUnsignedDouble(0)
+                self.throwDivisionByZero()
                 return
             }
             let prod = u1 &* u2
@@ -3792,7 +3807,8 @@ public final class TZForth {
 
         _ = register("MOD") {
             let b = self.pop(); let a = self.pop()
-            if b == 0 { self.tell("? Division by zero\n"); self.errorFlag = true; self.push(0); return }
+            if self.throwActive { return }
+            if b == 0 { self.throwDivisionByZero(); return }
             self.push( a % b )
         }
 
@@ -3959,8 +3975,7 @@ public final class TZForth {
 
         _ = register("(LOCAL)", immediate: true) {
             if self.readCell(self.STATE) == 0 {
-                self.tell("? (LOCAL) undefined in interpret state\n")
-                self.errorFlag = true
+                self.kernelThrow(StdThrow.compileOnly, message: "? (LOCAL) undefined in interpret state")
                 return
             }
             let u = Int(self.pop())
@@ -3975,8 +3990,7 @@ public final class TZForth {
 
         _ = register("LOCALS|", immediate: true) {
             if self.readCell(self.STATE) == 0 {
-                self.tell("? LOCALS| undefined in interpret state\n")
-                self.errorFlag = true
+                self.kernelThrow(StdThrow.compileOnly, message: "? LOCALS| undefined in interpret state")
                 return
             }
             self.resetLocalCompileState()
@@ -3993,8 +4007,7 @@ public final class TZForth {
 
         _ = register("{:", immediate: true) {
             if self.readCell(self.STATE) == 0 {
-                self.tell("? {: undefined in interpret state\n")
-                self.errorFlag = true
+                self.kernelThrow(StdThrow.compileOnly, message: "? {: undefined in interpret state")
                 return
             }
             self.resetLocalCompileState()
@@ -5946,12 +5959,8 @@ public final class TZForth {
                         push(num)
                     }
                 } else {
-                    if readCell(STATE) != 0 {
-                        tell("? \(name) ?  (while compiling)\n")
-                    } else {
-                        tell("? \(name)\n")
-                    }
-                    errorFlag = true
+                    let msg = readCell(STATE) != 0 ? "? \(name) ?  (while compiling)" : "? \(name)"
+                    kernelThrow(StdThrow.undefinedWord, message: msg)
                 }
             }
         }
@@ -6276,6 +6285,38 @@ public final class TZForth {
         self.exitReq = false
     }
 
+    /// Raise a standard (or user) throw from kernel code. Caught → CATCH receives code only.
+    /// Uncaught → handleUnhandledThrow prints lastKernelThrowMessage and resets.
+    private func kernelThrow(_ code: Cell, message: String? = nil) {
+        if let message, !message.isEmpty {
+            lastKernelThrowMessage = message
+        } else if lastKernelThrowMessage.isEmpty {
+            lastKernelThrowMessage = defaultThrowMessage(code) ?? "? THROW \(code)"
+        }
+        deliverThrow(code)
+    }
+
+    private func defaultThrowMessage(_ code: Cell) -> String? {
+        switch code {
+        case StdThrow.stackUnderflow: return "? Stack underflow"
+        case StdThrow.stackOverflow: return "? Stack overflow"
+        case StdThrow.returnStackUnderflow: return "? Return stack underflow"
+        case StdThrow.returnStackOverflow: return "? Return stack overflow"
+        case StdThrow.invalidAddress: return "? Invalid memory address"
+        case StdThrow.divisionByZero: return "? Division by zero"
+        case StdThrow.undefinedWord: return "? undefined word"
+        case StdThrow.compileOnly: return "? compile-only word in interpret state"
+        case StdThrow.uncompletedControl: return "? uncompleted control structure"
+        case StdThrow.invalidToken: return "? invalid execution token"
+        case StdThrow.nestingLimit: return "? nesting limit exceeded"
+        default: return nil
+        }
+    }
+
+    private func throwDivisionByZero() {
+        kernelThrow(StdThrow.divisionByZero, message: "? Division by zero")
+    }
+
     /// ANS THROW / ABORT delivery. n=0 is a no-op. Caught throws restore the CATCH frame.
     private func deliverThrow(_ n: Cell) {
         if n == 0 { return }
@@ -6295,9 +6336,12 @@ public final class TZForth {
             self.tell(self.lastAbortQuoteText + "\n")
         } else if n == -1 {
             self.tell("Aborted!\n")
+        } else if !self.lastKernelThrowMessage.isEmpty {
+            self.tell(self.lastKernelThrowMessage + "\n")
         } else {
             self.tell("? THROW \(n)\n")
         }
+        self.lastKernelThrowMessage = ""
         self.clearAllLocalFrames()
         self.resetRuntimeState()
         self.errorFlag = true
@@ -6320,11 +6364,13 @@ public final class TZForth {
                     errorFlag = true
                 } else {
                     innerThread()
+                    if throwActive { return }
                 }
             } else {
                 self.currentCodeAddr = cfa
                 self.dispatchedFromInnerThread = false
                 body()
+                if throwActive { return }
             }
         } else {
             // Not a primitive ID — assume threaded code
@@ -6335,6 +6381,7 @@ public final class TZForth {
                 errorFlag = true
             } else {
                 innerThread()
+                if throwActive { return }
             }
         }
     }
@@ -6366,6 +6413,7 @@ public final class TZForth {
                 self.dispatchedFromInnerThread = true
                 f()
                 self.dispatchedFromInnerThread = false
+                if throwActive { break }
                 if waitingForKey {
                     // A blocking primitive (KEY) has decided to wait for host input.
                     // Rewind IP so the next innerThread() call will hit this cell again.

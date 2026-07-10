@@ -295,6 +295,9 @@ public final class TZForth {
 
     // Address of the FILE-ECHO variable's data cell (populated at bootstrap).
     private var fileEchoAddr: Cell = 0
+    /// Set when a colon definition stores 0 into >IN (!); outer offset is restored after it returns.
+    private var inVarZeroedInColon = false
+
     /// Address of the INCLUDED-NAMES variable's data cell (list head; 0 = empty).
     private var includedNamesVarAddr: Cell = 0
     /// User parse spec for the current named FLOAD (registered on successful load).
@@ -900,7 +903,12 @@ public final class TZForth {
             throwInvalidAddress("? Memory read out of range (addr=\(addr))")
             return 0
         }
-        return memory.withUnsafeBytes { $0.load(fromByteOffset: addr, as: Cell.self) }
+        // Byte-wise load: Forth heap/allot may leave addresses not 8-byte aligned.
+        var value: Cell = 0
+        withUnsafeMutableBytes(of: &value) { dest in
+            for i in 0..<8 { dest[i] = memory[addr + i] }
+        }
+        return value
     }
 
     internal func writeCell(_ addr: Int, _ value: Cell) {  // internal to allow access from TZForthTests.swift extension for ANS validation restore
@@ -1012,6 +1020,16 @@ public final class TZForth {
         }
     }
 
+    /// ANS unsigned single-cell value (32-bit on classic Forth; low 32 bits on wider cells).
+    private func unsignedCell(_ n: Cell) -> UInt64 {
+        UInt64(UInt32(bitPattern: Int32(truncatingIfNeeded: n)))
+    }
+
+    /// ANS unsigned double-cell from two stack cells (low on top).
+    private func unsignedDouble(low: Cell, high: Cell) -> UInt64 {
+        (self.unsignedCell(high) << 32) | self.unsignedCell(low)
+    }
+
     // Pictured numeric output helpers (build string backwards in pno buffer)
     private func startPictured() {
         pnoPtr = pnoBufferAddr + PNO_BUFFER_SIZE
@@ -1063,6 +1081,7 @@ public final class TZForth {
             self.currentSourceId = -1
         }
 
+        self.inputQueue.removeAll(keepingCapacity: true)
         for b in line.utf8 { inputQueue.append(b) }
         inputQueue.append(10) // \n
 
@@ -1586,6 +1605,14 @@ public final class TZForth {
         if ior != FILE_IO_SUCCESS || !flag { return false }
         currentSourceLen = u2
         writeCell(IN, 0)
+        self.throwActive = false
+        if self.evaluateNesting > 0 {
+            self.currentSourceId = 0
+        } else if self.loadNesting > 0 {
+            self.currentSourceId = 1
+        } else {
+            self.currentSourceId = -1
+        }
         inputQueue.removeAll(keepingCapacity: true)
         for i in 0..<u2 {
             inputQueue.append(readByte(SOURCE_BUFFER + i))
@@ -1648,7 +1675,12 @@ public final class TZForth {
         }
         self.midFileLoadAborted = false
         while refillFromFile(fileId) {
+            validateAndRepairSystemState()
             runInterpreter()
+            // Hayes ~ / successful ?~~ leaves >IN at end-of-line; drop any stale queue tail.
+            if Int(self.readCell(self.IN)) >= self.currentSourceLen {
+                self.inputQueue.removeAll(keepingCapacity: true)
+            }
             if sourceLoadStop { break }
             if throwActive {
                 self.midFileLoadAborted = true
@@ -2594,21 +2626,19 @@ public final class TZForth {
             if n == 0 { self.throwDivisionByZero(); return }
             self.push( d % n ); self.push( d / n )
         }
-        _ = register("U<") { let b = self.pop(); let a = self.pop(); let ua = UInt64( bitPattern: Int64(a) ); let ub = UInt64( bitPattern: Int64(b) ); self.push( ua < ub ? -1 : 0 ) }
-        _ = register("U>") { let b = self.pop(); let a = self.pop(); let ua = UInt64( bitPattern: Int64(a) ); let ub = UInt64( bitPattern: Int64(b) ); self.push( ua > ub ? -1 : 0 ) }
+        _ = register("U<") { let b = self.pop(); let a = self.pop(); let ua = self.unsignedCell(a); let ub = self.unsignedCell(b); self.push( ua < ub ? -1 : 0 ) }
+        _ = register("U>") { let b = self.pop(); let a = self.pop(); let ua = self.unsignedCell(a); let ub = self.unsignedCell(b); self.push( ua > ub ? -1 : 0 ) }
         _ = register("UM*") {
             let b = self.pop(); let a = self.pop()
-            let ua = UInt64( bitPattern: Int64(a) )
-            let ub = UInt64( bitPattern: Int64(b) )
-            let prod = ua * ub
+            let prod = self.unsignedCell(a) * self.unsignedCell(b)
             self.push( Cell( prod & 0xffffffff ) )
             self.push( Cell( (prod >> 32) & 0xffffffff ) )
         }
         _ = register("UM/MOD") {
             let u = self.pop(); let dlow = self.pop(); let dhigh = self.pop()
-            let d = (UInt64( bitPattern: Int64(dhigh) ) << 32) | UInt64( bitPattern: Int64(dlow) )
+            let d = self.unsignedDouble(low: dlow, high: dhigh)
             if u == 0 { self.throwDivisionByZero(); return }
-            let uu = UInt64( bitPattern: Int64(u) )
+            let uu = self.unsignedCell(u)
             let quot = d / uu
             let rem = d % uu
             self.push( Cell( rem & 0xffffffff ) ); self.push( Cell( quot & 0xffffffff ) )
@@ -2616,7 +2646,13 @@ public final class TZForth {
         _ = register("+!") {
             let addr = Int(self.pop()); let n = self.pop()
             let old = self.readCell(addr)
-            self.writeCell(addr, old + n)
+            let newVal = old + n
+            if addr == self.IN {
+                self.writeInOffset(newVal)
+                self.notifyInChanged(storedValue: self.readCell(self.IN), previousValue: old, isStore: false)
+            } else {
+                self.writeCell(addr, newVal)
+            }
         }
 
         _ = register(".")     { 
@@ -2664,7 +2700,15 @@ public final class TZForth {
             let addr = Int(self.pop())
             let val = self.pop()
             if self.throwActive { return }
-            self.writeCell(addr, val)
+            if addr == self.IN {
+                let oldIn = self.readCell(self.IN)
+                if val == 0 && self.returnStackPointer > 1 { self.inVarZeroedInColon = true }
+                self.writeInOffset(val)
+                if self.throwActive { return }
+                self.notifyInChanged(storedValue: self.readCell(self.IN), previousValue: oldIn, isStore: true)
+            } else {
+                self.writeCell(addr, val)
+            }
             if self.throwActive { return }
         }
         fetchID = register("@")     {
@@ -3474,7 +3518,8 @@ public final class TZForth {
         _ = register("QUIT") {
             self.rspSet(1)
             self.writeCell(self.STATE, 0)
-            self.writeCell(self.IN, 0)
+            // Mark source fully consumed so post-execute realign does not rewind the line.
+            self.writeCell(self.IN, Cell(self.currentSourceLen))
             self.inputQueue.removeAll(keepingCapacity: true)
             self.errorFlag = false
             // Draining queue here will cause runInterpreter's while to exit cleanly after this word.
@@ -5927,8 +5972,24 @@ public final class TZForth {
         errorFlag = false
 
         while !inputQueue.isEmpty && !errorFlag && !exitReq && !throwActive {
+            if readCell(STATE) == 0 && inputQueue.isEmpty {
+                self.syncInputQueueFromSourceIfNeeded()
+            }
             let name = parseWord()
             if name.isEmpty { break }
+            // Hayes prelimtest.fth: before `n >IN +!`, >IN must point at the first decoy
+            // character (past inter-word whitespace). Only advance for !/+! storing into >IN.
+            if readCell(STATE) == 0 && (name == "+!" || name == "!") {
+                let depth = Int(self.spGet() - 1)
+                if depth >= 1 {
+                    let addrOnStack = Int(self.readCell(self.stackBase + (depth - 1) * 8))
+                    if addrOnStack == self.IN {
+                        while let b = inputQueue.first, b <= 32 && b != 10 && b != 13 {
+                            _ = self.consumeInput()
+                        }
+                    }
+                }
+            }
             if name == "]" && self.bracketCompileDepth > 0 {
                 self.bracketCompileDepth -= 1
             }
@@ -5968,7 +6029,26 @@ public final class TZForth {
                     if !compiling {
                         self.realignInputQueueFromSource()
                     }
+                    // Only t6in-style `0 >IN !` inside a colon should restore the outer parse offset.
+                    let watchInZero = !compiling && first == self.docolID
+                    let savedOuterIn = watchInZero ? self.readCell(self.IN) : nil
+                    let savedOuterQueue = watchInZero ? self.inputQueue : []
+                    if watchInZero { self.inVarZeroedInColon = false }
                     execute(cfa: cfa, firstCell: first)
+                    if watchInZero,
+                       self.inVarZeroedInColon,
+                       let saved = savedOuterIn,
+                       self.returnStackPointer <= 1,
+                       self.inputQueue == savedOuterQueue {
+                        self.writeCell(self.IN, saved)
+                        self.realignInputQueueFromSource()
+                    } else if watchInZero, let saved = savedOuterIn, !self.inputQueue.isEmpty {
+                        let nowIn = self.readCell(self.IN)
+                        // Hayes ?~~ skips backward; ~ sets >IN to end-of-line — resync queue.
+                        if (nowIn < saved && nowIn > 0) || nowIn >= Cell(self.currentSourceLen) {
+                            self.realignInputQueueFromSource()
+                        }
+                    }
                     if throwActive { break }
                     if waitingForKey {
                         // A blocking input word (currently only KEY) has suspended.
@@ -6023,11 +6103,50 @@ public final class TZForth {
         // which does a complete job (drain queue + abort partial definitions + reset).
     }
 
+    /// Keep >IN within the current SOURCE line (Hayes ?~~ can add negative deltas).
+    private func clampInOffset(_ value: Cell) -> Cell {
+        let n = Int(value)
+        if n < 0 { return 0 }
+        if n > self.currentSourceLen { return Cell(self.currentSourceLen) }
+        return value
+    }
+
+    private func writeInOffset(_ value: Cell) {
+        self.writeCell(self.IN, self.clampInOffset(value))
+    }
+
+    /// Called when the >IN offset variable is modified (! / +!) so the byte queue matches SOURCE.
+    /// Hayes prelimtest uses >IN +! / SOURCE >IN ! inside colon words (?~~, Error, ~).
+    private func notifyInChanged(storedValue: Cell, previousValue: Cell, isStore: Bool) {
+        if isStore && storedValue == 0 && previousValue > 0 {
+            // t6in / RESCAN?: do not rewind the byte queue to line start.
+            return
+        }
+        if storedValue != previousValue {
+            self.realignInputQueueFromSource()
+            self.adjustHayesTildeSkipIfNeeded()
+        }
+    }
+
+    /// Hayes ?~~ does `2* >IN +!` (-2). With TZForth >IN at the first unparsed byte, that can
+    /// land on the penultimate character of ?~ / ?T~ / ?F~; advance to the trailing `~`.
+    private func adjustHayesTildeSkipIfNeeded() {
+        let pos = Int(self.readCell(self.IN))
+        guard pos >= 0 && pos < self.currentSourceLen else { return }
+        let ch = self.readByte(self.SOURCE_BUFFER + pos)
+        guard ch != 126 else { return } // already on '~'
+        guard pos + 1 < self.currentSourceLen else { return }
+        if self.readByte(self.SOURCE_BUFFER + pos + 1) == 126 {
+            self.writeCell(self.IN, Cell(pos + 1))
+            self.realignInputQueueFromSource()
+        }
+    }
+
     /// Rebuild the byte queue from SOURCE at >IN (unparsed tail of the current line).
     private func realignInputQueueFromSource() {
-        let pos = Int(self.readCell(self.IN))
-        guard pos <= self.currentSourceLen else { return }
+        let pos = Int(self.clampInOffset(self.readCell(self.IN)))
         self.inputQueue.removeAll(keepingCapacity: true)
+        guard pos < self.currentSourceLen else { return }
         for i in pos..<self.currentSourceLen {
             self.inputQueue.append(self.readByte(self.SOURCE_BUFFER + i))
         }
@@ -6230,6 +6349,10 @@ public final class TZForth {
             if !self.consumeDelim(delim) {
                 break
             }
+        }
+        // ANS WORD also skips leading spaces before the token (Hayes prelimtest MSG ab) ).
+        while let b = self.inputQueue.first, b <= 32 && b != 10 && b != 13 {
+            _ = self.consumeInput()
         }
 
         // Collect non-delim chars; also stop at line ends (10/13) so we don't eat \n etc.
@@ -7105,7 +7228,8 @@ public final class TZForth {
             writeCell(BASE, 10)
         }
         pnoPtr = pnoBufferAddr + PNO_BUFFER_SIZE
-        writeCell(IN, 0)
+        // Do not reset >IN here — seeWord/LOCATE and other mid-line words must keep the
+        // current parse offset; zeroing >IN plus realignInputQueueFromSource() rewinds the line.
     }
 
     public var stackAsString: String {

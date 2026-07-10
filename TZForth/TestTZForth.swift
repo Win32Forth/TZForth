@@ -12,6 +12,9 @@
 //      # For automated tests (\\ block comments, \S, FLOAD behavior):
 //      FTEST=1 swift /tmp/combined.swift
 //
+//      # For John Hayes / forth2012-test-suite (Block + Facility omitted):
+//      HAYES=1 swift /tmp/combined.swift
+//
 //  Note: The ANS validation test logic (runANSValidation + test sources) was split to
 //  TZForthTests.swift (as extension) to keep the main engine file smaller; it is included
 //  above so that the standalone REPL supports the ANS-VALIDATE word too.
@@ -546,6 +549,7 @@ hello
 
     // New Core (QUIT SOURCE PARSE PAD POSTPONE [COMPILE] + SP!/RSP! + improved ENV)
     ansTest("SOURCE", "SOURCE DROP 0= .", "0")
+    ansTest(">IN +! skip", "S\" 1 >IN +! xSOURCE TYPE\" EVALUATE", "SOURCE")
     ansTest("PAD", "PAD 0= 0= .", "-1")
     ansTest("PAD size", "PAD DUP 1023 + 65 OVER C! DROP S\" x\" DROP DROP PAD 1023 + C@ .", "65")
     ansTest("multi S\" interpret", "S\" hello\" S\" world\" SWAP ROT ROT ROT TYPE SPACE TYPE", "world hello")
@@ -886,6 +890,107 @@ hello
 
     print("=== FTEST complete ===")
     exit(0)
+}
+
+// MARK: - Hayes forth2012-test-suite (run with: HAYES=1 swift ... TestTZForth.swift)
+if ProcessInfo.processInfo.environment["HAYES"] == "1" {
+    let fm = FileManager.default
+    // Run from the TZForth repo root (where Tests/forth2012-test-suite lives).
+    let repoRoot = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+    let suiteSrc = repoRoot.appendingPathComponent("Tests/forth2012-test-suite/src")
+    let runFile = suiteSrc.appendingPathComponent("runtests-tzforth.fth")
+    let outFile = suiteSrc.appendingPathComponent("HAYES-RESULTS.txt")
+
+    guard fm.fileExists(atPath: runFile.path) else {
+        print("ERROR: Hayes suite not found at \(suiteSrc.path)")
+        print("Clone: git clone https://github.com/gerryjackson/forth2012-test-suite.git Tests/forth2012-test-suite")
+        exit(1)
+    }
+
+    print("=== Running Hayes forth2012-test-suite (TZForth subset) ===")
+    print("Suite: \(suiteSrc.path)\n")
+
+    var collected = ""
+    forth.onOutput = { text in
+        collected += text
+        print(text, terminator: "")
+    }
+    _ = fm.changeCurrentDirectoryPath(suiteSrc.path)
+    forth.logicalCurrentDirectory = suiteSrc.path
+
+    // Quick >IN +! sanity check (Hayes prelimtest pass #2 pattern)
+    forth.feedLine("( sanity ) 1 >IN +! xSOURCE TYPE CR")
+    if collected.contains("? xSOURCE") || !collected.contains("SOURCE") {
+        print("\nERROR: >IN +! skip still broken (expected SOURCE, not ? xSOURCE)")
+        exit(1)
+    }
+    collected = ""
+    forth.resetRuntimeState()
+
+    forth.feedLine("CR .( Running ANS Forth tests for TZForth — Block and Facility omitted ) CR")
+
+    // Load via feedLine (FLOAD path). INCLUDED/REFILL mis-syncs >IN for Hayes ?~~ skips.
+    let hayesFiles = [
+        "prelimtest.fth", "tester.fr", "core.fr", "coreplustest.fth", "utilities.fth",
+        "errorreport.fth", "coreexttest.fth", "doubletest.fth", "exceptiontest.fth",
+        "filetest.fth", "localstest.fth", "memorytest.fth", "toolstest.fth",
+        "searchordertest.fth", "stringtest.fth",
+    ]
+    var ok = true
+    for name in hayesFiles {
+        let url = suiteSrc.appendingPathComponent(name)
+        guard fm.fileExists(atPath: url.path) else {
+            print("ERROR: missing Hayes file \(name)")
+            ok = false
+            break
+        }
+        if !forth.loadFile(url) {
+            ok = false
+            break
+        }
+    }
+    if ok {
+        forth.feedLine("REPORT-ERRORS")
+    }
+    do {
+        try collected.write(to: outFile, atomically: true, encoding: .utf8)
+        print("\nResults written to \(outFile.path)")
+    } catch {
+        print("\nWARNING: could not write HAYES-RESULTS.txt: \(error.localizedDescription)")
+    }
+
+    let lines = collected.components(separatedBy: "\n")
+    let testErrors = lines.filter {
+        $0.contains("INCORRECT RESULT") || $0.contains("WRONG NUMBER OF RESULTS")
+    }
+    let aborts = lines.filter {
+        $0.contains("aborted after error") || $0.hasPrefix("? ") && !$0.contains("INCORRECT") && !$0.contains("WRONG NUMBER")
+    }
+
+    print("\n=== Hayes summary ===")
+    print("Load completed: \(ok)")
+    print("T{ failures: \(testErrors.count)")
+    if !testErrors.isEmpty {
+        print("--- first failures ---")
+        for e in testErrors.prefix(15) { print(e) }
+        if testErrors.count > 15 { print("... and \(testErrors.count - 15) more") }
+    }
+    if !aborts.isEmpty {
+        print("Aborts / undefined (\(aborts.count)):")
+        for a in aborts.prefix(10) { print(a) }
+    }
+
+    if let reportStart = lines.firstIndex(where: { $0.contains("Error Report") }) {
+        print("\n--- REPORT-ERRORS ---")
+        for line in lines[reportStart..<min(reportStart + 20, lines.count)] {
+            if !line.trimmingCharacters(in: .whitespaces).isEmpty { print(line) }
+        }
+    } else {
+        print("\nWARNING: REPORT-ERRORS summary not found in output")
+    }
+
+    print("\n=== HAYES complete ===")
+    exit(testErrors.isEmpty && ok ? 0 : 1)
 }
 
 // Simple REPL

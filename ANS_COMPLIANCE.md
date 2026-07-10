@@ -2,7 +2,7 @@
 
 This document tracks implementation status of the 2012 ANS Forth Standard word sets in TZForth (Swift port of the lbForth model). Generated from codebase inspection (`TZForth/TZForth.swift`, `TestTZForth.swift`, `TZForthTests.swift`).
 
-Last update: Programming-Tools — pre-ANS `COMPILE` documented as intentionally omitted (superseded by `POSTPONE` / `[COMPILE]` / `COMPILE,`).
+Last update: Exception — THROW migration complete (Phases 1–4); `.ERROR`, synchronous catchable `FLOAD`, FTEST 263/263.
 
 ## Summary
 
@@ -13,7 +13,7 @@ Last update: Programming-Tools — pre-ANS `COMPILE` documented as intentionally
 | **Search-Order (16)** | Complete — 16.6.1 + 16.6.2; `SEARCH-WORDLIST`, `ENVIRONMENT?` `WORDLISTS` (8) |
 | **Programming-Tools** | Partial — 15.6.1/15.6.2 words below; assembler `CODE`/`;CODE` stubbed; `LOCATE` (SEE alias); pre-ANS `COMPILE` omitted (`POSTPONE` / `[COMPILE]` / `COMPILE,` in Core); no `NEEDS` |
 | **File-Access (11)** | Substantial — 11.6.1 core words + `INCLUDE`/`INCLUDED` + `REQUIRE`/`REQUIRED` |
-| **Exception (9)** | Complete — `CATCH`, `THROW`; Core `ABORT`/`ABORT"` delegate to `THROW -1`/`-2` |
+| **Exception (9)** | Complete — `CATCH`, `THROW`, `.ERROR`; kernel faults CATCH-able; `ABORT`/`ABORT"` → `-1`/`-2` |
 | **String (17)** | Complete — 17.6.1 (`COMPARE`, `SEARCH`, `SLITERAL`, `/STRING`, `-TRAILING`, `BLANK`, `CMOVE`, `CMOVE>`) |
 | **Memory-Allocation (14)** | Complete — 14.6.1 (`ALLOCATE`, `FREE`, `RESIZE`); extension `GROWMEMORYMB` |
 | **Double-Number (8)** | Complete — 8.6.1 + 8.6.2 (`2ROT`, `2VALUE`, `DU<`); trailing `.` literals |
@@ -158,12 +158,21 @@ ANS word set 9.6.1 and extensions 9.6.2 (`ABORT`/`ABORT"` as `THROW` aliases).
 | `THROW` | `( n -- )` — `0` is a no-op; non-zero unwinds to the nearest `CATCH`, restoring saved depths and input nesting per 9.3.5 |
 | `ABORT` | `( -- )` — `THROW -1` (catchable; uncaught → print `Aborted!`, reset, REPL continues) |
 | `ABORT"` | `( flag "ccc" -- )` — if flag, `THROW -2` (catchable; uncaught → type `ccc` then reset) |
+| `.ERROR` | `( n -- )` — TZForth: type spaced standard message for CATCH/THROW code `n` (`0` = silent) |
+| `CATCH-EVALUATE` | `( c-addr u -- n )` — TZForth: `EVALUATE` under `CATCH` (interpret-friendly) |
 
-Unhandled `THROW` with no active `CATCH`: `-1` → print `Aborted!`, reset stacks/input, REPL ready for next line; `-2` → type stored `ABORT"` text then reset; other codes → `? THROW n` then reset. Caught `-1`/`-2` leave the throw code on the stack with no message.
+Unhandled `THROW` with no active `CATCH`: `-1` → print `Aborted!`, reset stacks/input, REPL ready for next line; `-2` → type stored `ABORT"` text then reset; other codes → `? …` from `lastKernelThrowMessage` then reset. Caught throws push **only the numeric code** (no message on stack).
 
-FTEST covers `ABORT`/`ABORT"` with and without `CATCH`, including REPL recovery after uncaught `ABORT`.
+FTEST covers `ABORT`/`ABORT"` with and without `CATCH`, standard kernel codes, compile `STATE` preservation, and file faults.
 
-**Standard THROW codes (Phases 1–4):** Runtime, memory, compile-only, control, dictionary, and **file-access** faults (-68 invalid fileid, -74 file not found) use `kernelThrow` and are **CATCH-able**. Named **`FLOAD`** loads synchronously (`onPerformNamedLoad` in the app host) so `CATCH-EVALUATE` can catch missing files. **`.ERROR`** prints spaced messages for CATCH codes. Uncaught throws still print `? …` and set `errorFlag` for REPL/FLOAD load-abort. See **`THROW_CODES.md`**.
+**Standard THROW codes (Phases 1–4, complete):** Runtime (-3…-9), memory (-7), compile-only (-14), control (-15/-16), limits (-17), search order (-20), names (-10), undefined (-13), dictionary misuse (-20), file-access (-68, -74). **`OPEN-FILE`** and related words still return **`ior`** on the stack (ANS file-access). Named **`FLOAD`** loads synchronously (`onPerformNamedLoad` in the app) so parsing words can be wrapped with `['] fload catch`. Full map: **`THROW_CODES.md`**.
+
+Catchable named load example:
+
+```forth
+: safe-fload  ( -- )
+  ['] fload catch ?dup if  ." load failed:" .error  else  drop  then ;
+```
 
 ## Memory-Allocation (14) — Complete
 
@@ -283,7 +292,7 @@ Example: `' DUP >HEADER 32 DUMP` · `' DUP H.` · `' DUP >XID .` → `8`.
 
 ## TZForth-specific extensions (non-ANS)
 
-`FLOAD`, `EDIT`, `CHDIR`, `DIR`, `FILE-ECHO`, `DEBUG-ON`/`DEBUG-OFF`, `RESET`, `CLS`, `BYE`, `ANS-VALIDATE`, `.ENVIRONMENT`, `.INCLUDED` (list `INCLUDED-NAMES` registry), `CATCH-EVALUATE` (interpret-friendly `EVALUATE` + `CATCH`), `LOCATE` (SEE alias), `FORGET-WORD`, `>LFA`, `>HEADER`, `>NFA`, `>XID`, `ID.`, `H.` (unsigned hex print, ignores `BASE`), `\\` (block comment to `{`), `\\S`, `DP`, high-level `HERE` (`DP @`), `ERASE` (`0 FILL`), `GROWMEMORYMB`, etc.
+`FLOAD` (synchronous named load, catchable `-74`), `EDIT`, `CHDIR`, `DIR`, `FILE-ECHO`, `DEBUG-ON`/`DEBUG-OFF`, `RESET`, `CLS`, `BYE`, `ANS-VALIDATE`, `.ENVIRONMENT`, `.ERROR` (spaced throw message), `.INCLUDED` (list `INCLUDED-NAMES` registry), `CATCH-EVALUATE`, `LOCATE` (SEE alias), `FORGET-WORD`, `>LFA`, `>HEADER`, `>NFA`, `>XID`, `ID.`, `H.` (unsigned hex print, ignores `BASE`), `\\` (block comment to `{`), `\\S`, `DP`, high-level `HERE` (`DP @`), `ERASE` (`0 FILL`), `GROWMEMORYMB`, etc.
 
 ## Missing optional / future word sets
 

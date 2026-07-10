@@ -2,7 +2,7 @@
 
 This document maps TZForth’s internal `errorFlag` error path to ANS Forth 2012 standard `THROW` codes (Exception word set §9.3.1). It is the implementation guide for replacing `tell("? …")` + `errorFlag = true` with catchable `kernelThrow(code, message:)`.
 
-**Status:** Phases 1–4 implemented. Phase 4: file-access throws (-68 invalid fileid, -74 file not found), synchronous named `FLOAD` with `onPerformNamedLoad` host callback, `GROWMEMORYMB`/`N>R`/`CODE`/conditional interpret (-14/-20). `errorFlag` remains only in `handleUnhandledThrow` and `recoverFromError` (FLOAD load-abort bookkeeping).
+**Status:** **Migration complete** (Phases 1–4). Kernel faults use `kernelThrow`; only `handleUnhandledThrow` and `recoverFromError` set `errorFlag` (uncaught throws + FLOAD load-abort). TZForth extensions: **`.ERROR`** (spaced message for a CATCH code), **`CATCH-EVALUATE`**, synchronous named **`FLOAD`** via host `onPerformNamedLoad`.
 
 **Reference:** [ANS THROW](https://forth-standard.org/standard/exception/THROW), §9.3.1 throw codes, §9.3.5 exception handling.
 
@@ -15,16 +15,15 @@ This document maps TZForth’s internal `errorFlag` error path to ANS Forth 2012
 | **`errorFlag`** | Swift `Bool` on `TZForth` | **No** | `feedLine` → `recoverFromError()` |
 | **`THROW` / `CATCH`** | Forth words | **Yes** | `deliverThrow` → restore `CATCH` frame |
 
-`CATCH`, `THROW`, `ABORT`, and `ABORT"` are implemented and tested. Most kernel faults still bypass them.
+`CATCH`, `THROW`, `ABORT`, and `ABORT"` are implemented and tested. **Kernel faults** (stack, memory, compile, dictionary, file-access, etc.) raise **`kernelThrow`** and are **CATCH-able** when a frame is active.
 
-### What `errorFlag` does
+### What `errorFlag` does (remaining uses only)
 
-1. Kernel sets `errorFlag = true` (often after `tell("? …")`).
-2. `runInterpreter` / `innerThread` stop looping.
-3. `feedLine` calls `recoverFromError()` — drain input, reset stacks, handle open colon defs.
-4. REPL continues on the next line (no Forth-level unwinding).
+1. **`handleUnhandledThrow`** — after an uncaught `THROW`, sets `errorFlag` so `feedLine` / FLOAD can observe failure.
+2. **`recoverFromError`** — during `FLOAD` (`wasLoading`), leaves `errorFlag` set to stop interpreting further lines in the file.
+3. Host may read `errorFlag` after `loadFile` (e.g. skip bookmark persist on failure).
 
-`errorFlag` is **not** a Forth word; the host reads it after `FLOAD` to decide whether to abort loading.
+`errorFlag` is **not** a Forth word and is **not** set on **caught** throws.
 
 ### Target behavior after migration
 
@@ -75,7 +74,7 @@ TZForth assigns **-40 and below** only where no standard code fits; prefer -3…
 private func kernelThrow(_ code: Cell, message: String? = nil)
 ```
 
-- **`StdThrow`** enum in `TZForth.swift` — named constants for -1…-17.
+- **`StdThrow`** enum in `TZForth.swift` — named constants for -3…-17, -20, -68, -74 (and delivery for -1/-2).
 - **`lastKernelThrowMessage`** — full REPL line for uncaught display (e.g. `"? Division by zero"`).
 - **`innerThread`** — `if throwActive { break }` after each primitive (required for CATCH inside colon words).
 
@@ -83,14 +82,37 @@ private func kernelThrow(_ code: Cell, message: String? = nil)
 
 | Case | Reason |
 |------|--------|
-| Uncaught `THROW` | `handleUnhandledThrow` sets `errorFlag` for `feedLine` / FLOAD abort |
-| FLOAD host failures | File not found — `ior`-style, not Forth execution |
+| Uncaught `kernelThrow` / `THROW` | `handleUnhandledThrow` sets `errorFlag` for `feedLine` / FLOAD abort |
 | `recoverFromError` during FLOAD | `wasLoading` leaves `errorFlag` set to stop include |
-| Soft notes (`DIR` failure, sandbox hints) | Not execution faults |
+| Soft notes (`DIR` failure) | Not execution faults; no `errorFlag` |
+
+Named **`FLOAD`** file-not-found now **`kernelThrow(-74)`** (CATCH-able). Uncaught load still sets `errorFlag` via `handleUnhandledThrow`. Sandbox hint prints only on uncaught `-74`.
+
+### `.ERROR` and catchable parsing words
+
+**`.ERROR`** `( n -- )` — types a **spaced** standard message for throw code `n` (`0` = silent). Use after `CATCH`:
+
+```forth
+: safe-fload  ( -- )
+  ['] fload catch ?dup if  ." load failed:" .error  else  drop  then ;
+```
+
+Usage: `safe-fload myfile.fth` — missing file → `load failed: ? File not found` (inline; no extra CR).
+
+Same pattern for other **parsing** words: `['] included catch`, `['] include-file catch`, etc. For interpret strings without compiling: **`CATCH-EVALUATE`** (`S" …" CATCH-EVALUATE`).
+
+### Codes not mapped (exempt)
+
+| Code | Reason |
+|------|--------|
+| -8, -11, -12 | No double-literal / alignment faults on those paths yet |
+| -60…-65 | Float word set not implemented |
+| -66, -67, -69…-73, -75 | File-access via `ior`; only -68/-74 used for kernel INCLUDE/FLOAD paths |
+| -40… | Reserved for user `THROW` |
 
 ---
 
-## Phase 1 — Done
+## Phase 1 — Done ✅
 
 | Site | Code | Message (uncaught) |
 |------|------|-------------------|
@@ -108,7 +130,7 @@ private func kernelThrow(_ code: Cell, message: String? = nil)
 
 ---
 
-## Phase 2 — Done
+## Phase 2 — Done ✅
 
 | TZForth message / site | Code | Notes |
 |------------------------|------|-------|
@@ -178,7 +200,7 @@ When converting `errorFlag = true` → `kernelThrow`:
 2. **Do not `tell` before `kernelThrow`** — message goes through `lastKernelThrowMessage`.
 3. **Check `throwActive`** after primitive returns in `innerThread` and `execute`.
 4. **Outer interpreter** — `while` already tests `!throwActive`; verify no `errorFlag` needed when throw caught.
-5. **Compile-time errors** — decide: stay `errorFlag` for “open definition” UX, or THROW -14/-15. Phase 2+.
+5. **Compile-time errors** — use `kernelThrow` (-14/-15); caught throws preserve `STATE` (see policy above).
 6. **FTEST** — add CATCH test for each new code; keep uncaught tests expecting same `?` text.
 
 ### Compile-error special case
@@ -223,10 +245,10 @@ t-under .            → -3
 
 ### Full migration exit criteria
 
-- [ ] All §9.3.1 codes -3…-17 mapped or explicitly exempted
-- [ ] `grep errorFlag = true` only host/FLOAD/uncaught-handler paths
-- [ ] FTEST count updated; `ANS_COMPLIANCE.md` Exception section revised
-- [ ] `ANS-VALIDATE` / Hayes-style exception suite (future)
+- [x] All §9.3.1 codes -3…-17 mapped or explicitly exempted (see **Codes not mapped**); file-access -68/-74 for kernel paths
+- [x] `grep errorFlag = true` only `handleUnhandledThrow` + `recoverFromError` (2 sites in `TZForth.swift`)
+- [x] FTEST **263/263**; `ANS_COMPLIANCE.md` Exception section revised
+- [ ] `ANS-VALIDATE` / Hayes-style exception suite (future enhancement)
 
 ---
 
@@ -242,13 +264,13 @@ t-under .            → -3
 
 ---
 
-## Estimated effort
+## Migration log
 
-| Phase | Sites | Risk | Time |
-|-------|-------|------|------|
-| 1 (done) | ~25 | Medium — stack/div0/undef | 2–3 h |
-| 2 | ~35 | High — compile/control | 4–6 h |
-| 3 | ~40 | Medium | 3–4 h |
-| 4 | ~25 | Low–medium | 2–3 h |
+| Phase | Status | FTEST highlights |
+|-------|--------|------------------|
+| 1 | Done | CATCH div-by-zero, undefined, stack underflow; `CATCH-EVALUATE` |
+| 2 | Done | CATCH compile-only (-14), invalid address (-7) |
+| 3 | Done | CATCH FORGET/CREATE/SEE/SYNONYM; compile `STATE` preserve |
+| 4 | Done | CATCH FLOAD (-74), INCLUDE-FILE (-68), INCLUDED (-74); `.ERROR` |
 
-**Total:** ~12–16 h for full migration; Phase 1 delivers the highest user value (CATCH on runtime faults).
+**FTEST:** `FTEST=1 swift /tmp/combined.swift` (concatenate `TZForth.swift`, `TZForthTests.swift`, `TestTZForth.swift`).

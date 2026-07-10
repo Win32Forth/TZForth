@@ -2,7 +2,7 @@
 
 This document maps TZForth’s internal `errorFlag` error path to ANS Forth 2012 standard `THROW` codes (Exception word set §9.3.1). It is the implementation guide for replacing `tell("? …")` + `errorFlag = true` with catchable `kernelThrow(code, message:)`.
 
-**Status:** Phase 1 implemented (stack faults, division by zero, undefined word, compile-only misuse, `innerThread` throw propagation). ~120 `errorFlag` sites remain for Phases 2–4.
+**Status:** Phases 1–2 implemented. Phase 1: stack faults, div-by-zero, undefined word, `CATCH-EVALUATE`. Phase 2: memory bounds (-7), invalid tokens/branches (-16), compile-only control (-14), uncompleted `[IF]` (-15), execution limit (-17), search-order (-20). ~75 `errorFlag` sites remain for Phases 3–4.
 
 **Reference:** [ANS THROW](https://forth-standard.org/standard/exception/THROW), §9.3.1 throw codes, §9.3.5 exception handling.
 
@@ -108,22 +108,27 @@ private func kernelThrow(_ code: Cell, message: String? = nil)
 
 ---
 
-## Phase 2 — Memory, tokens, control flow
+## Phase 2 — Done
 
 | TZForth message / site | Code | Notes |
 |------------------------|------|-------|
-| `readCell` / `writeCell` out of range | -7 | `? Memory read/write out of range` |
+| `readCell` / `writeCell` out of range | -7 | `? Memory read/write out of range`; `DUMP` out of range |
 | `? Invalid executable token` | -16 | Bad threaded branch / literal as code |
-| `? Bad threaded call target` / `? Bad colon definition target` | -16 | Corrupt CFA / IP |
-| `? Bad branch target (ip=…)` | -16 | Unresolved `>MARK` / corrupt compile |
+| `? Bad threaded call target` / colon / execution target | -16 | Corrupt CFA / IP |
+| `? Bad branch target (ip=…)` | -16 | `0BRANCH` / `BRANCH` / `?DO` / `LOOP` / `+LOOP` |
 | `? [IF] unresolved conditional compilation` | -15 | |
-| `? IF/DO/CASE only while compiling` (when STATE=0) | -14 | Same family as Phase 1 |
-| `? THEN` with no matching `IF` | -15 | |
-| `? Execution limit exceeded` | -17 or -40 | Deep recursion guard |
+| `? IF/DO/CASE/… only while compiling` (STATE=0) | -14 | All immediate control + `[DEFINED]` etc. |
+| `? Execution limit exceeded` | -17 | `innerThread` safety limit |
 | `? SYNONYM chain too deep` | -17 | |
-| `? Invalid search order count` / full / empty | -20 | Illegal argument |
+| `? Invalid search order count` / full / empty | -20 | |
 
-**~35 sites** in `TZForth.swift` compile/control sections.
+**FTEST:** `S" IF" CATCH-EVALUATE .` → -14; `-1 ' @ CATCH .` → -7.
+
+### Compile errors and CATCH (policy)
+
+When a **caught** throw occurs during compilation (`STATE=1`), `CATCH` restores the exception frame including **`STATE`** — the open colon definition stays open. The catching word is responsible for cleanup. Do **not** force `STATE=0` or unhide the definition on caught throws.
+
+When an throw is **uncaught**, `handleUnhandledThrow` → `resetRuntimeState()` still abandons compile mode (same as today).
 
 ---
 
@@ -174,12 +179,7 @@ When converting `errorFlag = true` → `kernelThrow`:
 
 ### Compile-error special case
 
-`recoverFromError()` deliberately **keeps colon definitions open** on interactive compile errors. If compile faults THROW -14/-15:
-
-- **Caught:** definition may be left inconsistent — document or abort definition in `restoreExceptionFrame`.
-- **Uncaught:** same open-def behavior as today.
-
-Recommend: Phase 2+ for compile control; Phase 1 focuses on **interpret and run-time primitives**.
+`recoverFromError()` keeps colon definitions open on interactive `errorFlag` errors. **Caught `kernelThrow` during compile** does not call `recoverFromError` (`errorFlag` stays false); `CATCH` restores `STATE` and stacks from the exception frame — open definition preserved by design.
 
 ---
 

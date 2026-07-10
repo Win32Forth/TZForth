@@ -357,6 +357,7 @@ public final class TZForth {
         static let uncompletedControl: Cell = -15
         static let invalidToken: Cell = -16
         static let nestingLimit: Cell = -17
+        static let illegalArgument: Cell = -20
     }
     /// Depth of `[` … `]` compile-time interpret brackets (for SLITERAL et al.).
     private var bracketCompileDepth: Int = 0
@@ -883,8 +884,7 @@ public final class TZForth {
 
     internal func readCell(_ addr: Int) -> Cell {  // internal to allow access from TZForthTests.swift extension for ANS validation
         if addr < 0 || addr + 8 > memory.count {
-            tell("? Memory read out of range (addr=\(addr))\n")
-            errorFlag = true
+            throwInvalidAddress("? Memory read out of range (addr=\(addr))")
             return 0
         }
         return memory.withUnsafeBytes { $0.load(fromByteOffset: addr, as: Cell.self) }
@@ -892,8 +892,7 @@ public final class TZForth {
 
     internal func writeCell(_ addr: Int, _ value: Cell) {  // internal to allow access from TZForthTests.swift extension for ANS validation restore
         if addr < 0 || addr + 8 > memory.count {
-            tell("? Memory write out of range (addr=\(addr))\n")
-            errorFlag = true
+            throwInvalidAddress("? Memory write out of range (addr=\(addr))")
             return
         }
         withUnsafeBytes(of: value) { raw in
@@ -2033,8 +2032,7 @@ public final class TZForth {
             }
             return
         }
-        tell("? SYNONYM chain too deep\n")
-        errorFlag = true
+        kernelThrow(StdThrow.nestingLimit, message: "? SYNONYM chain too deep")
     }
 
     /// Anonymous xt (no dictionary header) that compiles a fixed target cfa when executed.
@@ -2060,7 +2058,7 @@ public final class TZForth {
     /// Skip conditional-compilation source until a matching `[THEN]` or (when allowed) `[ELSE]`.
     private func skipConditionalBranch(stopAtElse: Bool) -> ConditionalSkipResult {
         var depth = 1
-        while !inputQueue.isEmpty && !errorFlag {
+        while !inputQueue.isEmpty && !errorFlag && !throwActive {
             let word = parseWord()
             if word.isEmpty { continue }
             let w = word.uppercased()
@@ -2073,8 +2071,7 @@ public final class TZForth {
                 return .elseBranch
             }
         }
-        tell("? [IF] unresolved conditional compilation\n")
-        errorFlag = true
+        throwUncompletedControl("? [IF] unresolved conditional compilation")
         return .error
     }
 
@@ -2592,8 +2589,20 @@ public final class TZForth {
             self.push( self.inputQueue.isEmpty ? 0 : -1 )
         }
 
-        self.storeID = register("!") { let addr = Int(self.pop()); let val = self.pop(); self.writeCell(addr, val) }
-        fetchID = register("@")     { let addr = Int(self.pop()); self.push(self.readCell(addr)) }
+        self.storeID = register("!") {
+            let addr = Int(self.pop())
+            let val = self.pop()
+            if self.throwActive { return }
+            self.writeCell(addr, val)
+            if self.throwActive { return }
+        }
+        fetchID = register("@")     {
+            let addr = Int(self.pop())
+            if self.throwActive { return }
+            let val = self.readCell(addr)
+            if self.throwActive { return }
+            self.push(val)
+        }
         _ = register("C!")    { let addr = Int(self.pop()); let val = self.pop(); self.writeByte(addr, UInt8(val & 0xff)) }
         _ = register("C@")    { let addr = Int(self.pop()); self.push(Cell(self.readByte(addr))) }
 
@@ -2637,8 +2646,7 @@ public final class TZForth {
         _ = register("SET-ORDER") {
             let n = Int(self.pop())
             if n < 0 || n > self.MAX_VOCABS {
-                self.tell("? Invalid search order count\n")
-                self.errorFlag = true
+                self.kernelThrow(StdThrow.illegalArgument, message: "? Invalid search order count")
                 return
             }
             var order: [Cell] = []
@@ -2651,8 +2659,7 @@ public final class TZForth {
         // Internal: prepend a word list to the search order (used by VOCABULARY DOES>).
         _ = register("PUSH-ORDER") {
             if self.searchOrder.count >= self.MAX_VOCABS {
-                self.tell("? Search order full\n")
-                self.errorFlag = true
+                self.kernelThrow(StdThrow.illegalArgument, message: "? Search order full")
                 return
             }
             let wid = self.pop()
@@ -2708,8 +2715,7 @@ public final class TZForth {
 
         _ = register("ALSO") {
             if self.searchOrder.count >= self.MAX_VOCABS {
-                self.tell("? Search order full\n")
-                self.errorFlag = true
+                self.kernelThrow(StdThrow.illegalArgument, message: "? Search order full")
                 return
             }
             if self.searchOrder.isEmpty {
@@ -2721,8 +2727,7 @@ public final class TZForth {
 
         _ = register("PREVIOUS") {
             if self.searchOrder.isEmpty {
-                self.tell("? Search order empty\n")
-                self.errorFlag = true
+                self.kernelThrow(StdThrow.illegalArgument, message: "? Search order empty")
                 return
             }
             self.searchOrder.removeFirst()
@@ -2797,7 +2802,7 @@ public final class TZForth {
         }
 
         _ = register("[CHAR]", immediate: true) {
-            if self.readCell(self.STATE) == 0 { self.tell("? [CHAR] only while compiling\n"); self.errorFlag = true; return }
+            if self.readCell(self.STATE) == 0 { self.throwCompileOnly("? [CHAR] only while compiling"); return }
             let name = self.parseWord()
             if name.isEmpty { self.tell("? [CHAR] needs char\n"); self.errorFlag = true; return }
             let c = Cell( name.utf8.first ?? 0 )
@@ -2837,8 +2842,7 @@ public final class TZForth {
         // COMPILE, ( xt -- )  Core Ext. Compile the given xt (cfa from ') as if found while compiling.
         _ = register("COMPILE,") {
             if self.readCell(self.STATE) == 0 {
-                self.tell("? COMPILE, only while compiling\n")
-                self.errorFlag = true
+                self.throwCompileOnly("? COMPILE, only while compiling")
                 return
             }
             let xt = self.pop()
@@ -2943,8 +2947,7 @@ public final class TZForth {
         // RECURSE ( -- )  immediate: compile a call to the current definition (for recursion)
         _ = register("RECURSE", immediate: true) {
             if self.readCell(self.STATE) == 0 {
-                self.tell("? RECURSE only allowed while compiling a word\n")
-                self.errorFlag = true
+                self.throwCompileOnly("? RECURSE only allowed while compiling a word")
                 return
             }
             let defsHeadCell = self.readCell(self.CURRENT)
@@ -2973,8 +2976,7 @@ public final class TZForth {
             // The next iteration of innerThread will validate via readCell + dispatch guard,
             // but we also check immediately so a wildly bad offset produces a clear message fast.
             if self.ip < 0 || self.ip + 8 > self.memory.count {
-                self.tell("? Bad branch target (ip=\(self.ip) after 0BRANCH)\n")
-                self.errorFlag = true
+                self.throwInvalidToken("? Bad branch target (ip=\(self.ip) after 0BRANCH)")
             }
         }
 
@@ -2983,8 +2985,7 @@ public final class TZForth {
             self.ip += 8
             self.ip += offset
             if self.ip < 0 || self.ip + 8 > self.memory.count {
-                self.tell("? Bad branch target (ip=\(self.ip) after BRANCH)\n")
-                self.errorFlag = true
+                self.throwInvalidToken("? Bad branch target (ip=\(self.ip) after BRANCH)")
             }
         }
 
@@ -3066,8 +3067,7 @@ public final class TZForth {
 
         _ = register("BEGIN", immediate: true) {
             if self.readCell(self.STATE) == 0 {
-                self.tell("? BEGIN only allowed while compiling a word\n")
-                self.errorFlag = true
+                self.throwCompileOnly("? BEGIN only allowed while compiling a word")
                 return
             }
             let here = self.readCell(self.DP_ADDR)
@@ -3076,8 +3076,7 @@ public final class TZForth {
 
         _ = register("AGAIN", immediate: true) {
             if self.readCell(self.STATE) == 0 {
-                self.tell("? AGAIN only allowed while compiling a word\n")
-                self.errorFlag = true
+                self.throwCompileOnly("? AGAIN only allowed while compiling a word")
                 return
             }
             let dest = self.pop()
@@ -3089,8 +3088,7 @@ public final class TZForth {
 
         _ = register("UNTIL", immediate: true) {
             if self.readCell(self.STATE) == 0 {
-                self.tell("? UNTIL only allowed while compiling a word\n")
-                self.errorFlag = true
+                self.throwCompileOnly("? UNTIL only allowed while compiling a word")
                 return
             }
             let dest = self.pop()
@@ -3102,8 +3100,7 @@ public final class TZForth {
 
         _ = register("WHILE", immediate: true) {
             if self.readCell(self.STATE) == 0 {
-                self.tell("? WHILE only allowed while compiling a word\n")
-                self.errorFlag = true
+                self.throwCompileOnly("? WHILE only allowed while compiling a word")
                 return
             }
             // Compile a 0BRANCH with a placeholder offset (0 for now).
@@ -3120,8 +3117,7 @@ public final class TZForth {
 
         _ = register("REPEAT", immediate: true) {
             if self.readCell(self.STATE) == 0 {
-                self.tell("? REPEAT only allowed while compiling a word\n")
-                self.errorFlag = true
+                self.throwCompileOnly("? REPEAT only allowed while compiling a word")
                 return
             }
             let origPlaceholder = self.pop()   // address of the forward 0BRANCH offset left by WHILE
@@ -3147,8 +3143,7 @@ public final class TZForth {
 
         _ = register("IF", immediate: true) {
             if self.readCell(self.STATE) == 0 {
-                self.tell("? IF only allowed while compiling a word\n")
-                self.errorFlag = true
+                self.throwCompileOnly("? IF only allowed while compiling a word")
                 return
             }
             self.push(self.zeroBranchID); self.comma()
@@ -3159,8 +3154,7 @@ public final class TZForth {
 
         _ = register("ELSE", immediate: true) {
             if self.readCell(self.STATE) == 0 {
-                self.tell("? ELSE only allowed while compiling a word\n")
-                self.errorFlag = true
+                self.throwCompileOnly("? ELSE only allowed while compiling a word")
                 return
             }
             let ifPlaceholder = self.pop()
@@ -3176,8 +3170,7 @@ public final class TZForth {
 
         _ = register("THEN", immediate: true) {
             if self.readCell(self.STATE) == 0 {
-                self.tell("? THEN only allowed while compiling a word\n")
-                self.errorFlag = true
+                self.throwCompileOnly("? THEN only allowed while compiling a word")
                 return
             }
             let placeholder = self.pop()
@@ -3193,8 +3186,7 @@ public final class TZForth {
         // the generated body shows the 0BRANCH/BRANCH details.
         _ = register("CASE", immediate: true) {
             if self.readCell(self.STATE) == 0 {
-                self.tell("? CASE only allowed while compiling a word\n")
-                self.errorFlag = true
+                self.throwCompileOnly("? CASE only allowed while compiling a word")
                 return
             }
             self.push(0)  // sentinel for ENDCASE
@@ -3202,8 +3194,7 @@ public final class TZForth {
 
         _ = register("OF", immediate: true) {
             if self.readCell(self.STATE) == 0 {
-                self.tell("? OF only allowed while compiling a word\n")
-                self.errorFlag = true
+                self.throwCompileOnly("? OF only allowed while compiling a word")
                 return
             }
             // Emit: OVER =   then the IF part (0BRANCH ph + push ph)
@@ -3229,8 +3220,7 @@ public final class TZForth {
 
         _ = register("ENDOF", immediate: true) {
             if self.readCell(self.STATE) == 0 {
-                self.tell("? ENDOF only allowed while compiling a word\n")
-                self.errorFlag = true
+                self.throwCompileOnly("? ENDOF only allowed while compiling a word")
                 return
             }
             // Like ELSE: resolve previous ph (from OF or prev ENDOF), emit forward BRANCH with new ph
@@ -3247,8 +3237,7 @@ public final class TZForth {
 
         _ = register("ENDCASE", immediate: true) {
             if self.readCell(self.STATE) == 0 {
-                self.tell("? ENDCASE only allowed while compiling a word\n")
-                self.errorFlag = true
+                self.throwCompileOnly("? ENDCASE only allowed while compiling a word")
                 return
             }
             // Resolve the pending forward branches from ENDOFs (and last false OF) to the cleanup point.
@@ -3554,14 +3543,20 @@ public final class TZForth {
         rFrom_ID = register("R>") { self.push( self.rpop() ) }
         rAt_ID = register("R@") {
             let rs = self.rspGet()
-            if rs < 2 { self.tell("? Return stack underflow\n"); self.errorFlag = true; self.push(0); return }
+            if rs < 2 {
+                self.kernelThrow(StdThrow.returnStackUnderflow, message: "? Return stack underflow")
+                return
+            }
             self.push( self.readCell( self.rstackBase + (rs - 2) * 8 ) )
         }
         _ = register("2>R") { let n2 = self.pop(); let n1 = self.pop(); self.rpush(n1); self.rpush(n2) }
         _ = register("2R>") { let n2 = self.rpop(); let n1 = self.rpop(); self.push(n1); self.push(n2) }
         _ = register("2R@") {
             let rs = self.rspGet()
-            if rs < 3 { self.tell("? Return stack underflow\n"); self.errorFlag = true; self.push(0); self.push(0); return }
+            if rs < 3 {
+                self.kernelThrow(StdThrow.returnStackUnderflow, message: "? Return stack underflow")
+                return
+            }
             let n2 = self.readCell(self.rstackBase + (rs-2)*8 )
             let n1 = self.readCell(self.rstackBase + (rs-3)*8 )
             self.push(n1); self.push(n2)
@@ -4231,8 +4226,7 @@ public final class TZForth {
                 self.ip += 8
                 self.ip += offset
                 if self.ip < 0 || self.ip + 8 > self.memory.count {
-                    self.tell("? Bad branch target (ip=\(self.ip)) after ?DO\n")
-                    self.errorFlag = true
+                    self.throwInvalidToken("? Bad branch target (ip=\(self.ip)) after ?DO")
                 }
             } else {
                 self.rpush(limit)
@@ -4255,8 +4249,7 @@ public final class TZForth {
                 self.rpush(newIndex)
                 self.ip += backOffset
                 if self.ip < 0 || self.ip + 8 > self.memory.count {
-                    self.tell("? Bad branch target (ip=\(self.ip)) after (LOOP)\n")
-                    self.errorFlag = true
+                    self.throwInvalidToken("? Bad branch target (ip=\(self.ip)) after (LOOP)")
                 }
             } else {
                 // fall through to after LOOP; params already dropped by the rpops
@@ -4276,8 +4269,7 @@ public final class TZForth {
                 self.rpush(newIndex)
                 self.ip += backOffset
                 if self.ip < 0 || self.ip + 8 > self.memory.count {
-                    self.tell("? Bad branch target (ip=\(self.ip)) after (+LOOP)\n")
-                    self.errorFlag = true
+                    self.throwInvalidToken("? Bad branch target (ip=\(self.ip)) after (+LOOP)")
                 }
             } else {
                 // fall out, params dropped
@@ -4288,9 +4280,7 @@ public final class TZForth {
         _ = register("I") {
             let rs = self.rspGet()
             if rs < 2 {
-                self.tell("? Return stack underflow\n")
-                self.errorFlag = true
-                self.push(0)
+                self.kernelThrow(StdThrow.returnStackUnderflow, message: "? Return stack underflow")
                 return
             }
             self.push( self.readCell( self.rstackBase + (rs - 2) * 8 ) )
@@ -4302,9 +4292,7 @@ public final class TZForth {
         _ = register("J") {
             let rs = self.rspGet()
             if rs < 4 {
-                self.tell("? Return stack underflow\n")
-                self.errorFlag = true
-                self.push(0)
+                self.kernelThrow(StdThrow.returnStackUnderflow, message: "? Return stack underflow")
                 return
             }
             self.push( self.readCell( self.rstackBase + (rs - 4) * 8 ) )
@@ -4324,8 +4312,7 @@ public final class TZForth {
         // LEAVE -- compile-time: emit unconditional branch to after the matching LOOP (patched by LOOP)
         _ = register("LEAVE", immediate: true) {
             if self.readCell(self.STATE) == 0 {
-                self.tell("? LEAVE only allowed while compiling a word\n")
-                self.errorFlag = true
+                self.throwCompileOnly("? LEAVE only allowed while compiling a word")
                 return
             }
             self.push(unloopID); self.comma()  // ensure rstack loop params dropped at runtime before branching out
@@ -4338,8 +4325,7 @@ public final class TZForth {
         // DO -- compile time immediate: emit setup, record body dest + leave sentinel on compile stack
         _ = register("DO", immediate: true) {
             if self.readCell(self.STATE) == 0 {
-                self.tell("? DO only allowed while compiling a word\n")
-                self.errorFlag = true
+                self.throwCompileOnly("? DO only allowed while compiling a word")
                 return
             }
             self.push(doSetupID); self.comma()
@@ -4351,8 +4337,7 @@ public final class TZForth {
         // ?DO -- like DO but skips body (and consumes limit/start) if start==limit
         _ = register("?DO", immediate: true) {
             if self.readCell(self.STATE) == 0 {
-                self.tell("? ?DO only allowed while compiling a word\n")
-                self.errorFlag = true
+                self.throwCompileOnly("? ?DO only allowed while compiling a word")
                 return
             }
             self.push(qdoSetupID); self.comma()
@@ -4368,8 +4353,7 @@ public final class TZForth {
         // LOOP -- compile time: emit (LOOP) + back offset, resolve any pending LEAVE/?DO phs to after
         _ = register("LOOP", immediate: true) {
             if self.readCell(self.STATE) == 0 {
-                self.tell("? LOOP only allowed while compiling a word\n")
-                self.errorFlag = true
+                self.throwCompileOnly("? LOOP only allowed while compiling a word")
                 return
             }
             var leavePhs: [Cell] = []
@@ -4393,8 +4377,7 @@ public final class TZForth {
         // +LOOP -- like LOOP but delta from stack at runtime
         _ = register("+LOOP", immediate: true) {
             if self.readCell(self.STATE) == 0 {
-                self.tell("? +LOOP only allowed while compiling a word\n")
-                self.errorFlag = true
+                self.throwCompileOnly("? +LOOP only allowed while compiling a word")
                 return
             }
             var leavePhs: [Cell] = []
@@ -4740,8 +4723,7 @@ public final class TZForth {
                     let addr = lineAddr + i
                     let b: UInt8
                     if addr < 0 || addr >= self.memory.count {
-                        self.tell("? DUMP out of range (addr=\(addr))\n")
-                        self.errorFlag = true
+                        self.throwInvalidAddress("? DUMP out of range (addr=\(addr))")
                         return
                     }
                     b = self.memory[addr]
@@ -4870,8 +4852,7 @@ public final class TZForth {
         _ = register("[DEFINED]", immediate: true) {
             let compiling = self.readCell(self.STATE) != 0 || self.bracketCompileDepth > 0
             if !compiling {
-                self.tell("? [DEFINED] only while compiling\n")
-                self.errorFlag = true
+                self.throwCompileOnly("? [DEFINED] only while compiling")
                 return
             }
             let name = self.parseWord()
@@ -4884,8 +4865,7 @@ public final class TZForth {
         _ = register("[UNDEFINED]", immediate: true) {
             let compiling = self.readCell(self.STATE) != 0 || self.bracketCompileDepth > 0
             if !compiling {
-                self.tell("? [UNDEFINED] only while compiling\n")
-                self.errorFlag = true
+                self.throwCompileOnly("? [UNDEFINED] only while compiling")
                 return
             }
             let name = self.parseWord()
@@ -4927,8 +4907,7 @@ public final class TZForth {
         // CS-PICK / CS-ROLL — control-flow stack is the data stack during compilation.
         _ = register("CS-PICK", immediate: true) {
             if self.readCell(self.STATE) == 0 {
-                self.tell("? CS-PICK only while compiling\n")
-                self.errorFlag = true
+                self.throwCompileOnly("? CS-PICK only while compiling")
                 return
             }
             let u = Int(self.pop())
@@ -4938,8 +4917,7 @@ public final class TZForth {
 
         _ = register("CS-ROLL", immediate: true) {
             if self.readCell(self.STATE) == 0 {
-                self.tell("? CS-ROLL only while compiling\n")
-                self.errorFlag = true
+                self.throwCompileOnly("? CS-ROLL only while compiling")
                 return
             }
             let u = Int(self.pop())
@@ -4954,8 +4932,7 @@ public final class TZForth {
         // AHEAD ( -- )  unconditional forward branch placeholder (resolved by THEN).
         _ = register("AHEAD", immediate: true) {
             if self.readCell(self.STATE) == 0 {
-                self.tell("? AHEAD only while compiling\n")
-                self.errorFlag = true
+                self.throwCompileOnly("? AHEAD only while compiling")
                 return
             }
             self.push(self.branchID); self.comma()
@@ -5231,8 +5208,7 @@ public final class TZForth {
 
         _ = register("2LITERAL", immediate: true) {
             if self.readCell(self.STATE) == 0 {
-                self.tell("? 2LITERAL only while compiling\n")
-                self.errorFlag = true
+                self.throwCompileOnly("? 2LITERAL only while compiling")
                 return
             }
             let dhi = self.pop()
@@ -5494,8 +5470,7 @@ public final class TZForth {
         // execute the code following this DOES> .
         _ = register("DOES>", immediate: true) {
             if self.readCell(self.STATE) == 0 {
-                self.tell("? DOES> only allowed while compiling a word\n")
-                self.errorFlag = true
+                self.throwCompileOnly("? DOES> only allowed while compiling a word")
                 return
             }
             // Compile into the current definition (the parent):
@@ -6329,12 +6304,30 @@ public final class TZForth {
         case StdThrow.uncompletedControl: return "? uncompleted control structure"
         case StdThrow.invalidToken: return "? invalid execution token"
         case StdThrow.nestingLimit: return "? nesting limit exceeded"
+        case StdThrow.illegalArgument: return "? illegal argument"
         default: return nil
         }
     }
 
     private func throwDivisionByZero() {
         kernelThrow(StdThrow.divisionByZero, message: "? Division by zero")
+    }
+
+    /// Compile-only / interpret-state misuse (ANS -14). Caught throw leaves STATE unchanged.
+    private func throwCompileOnly(_ message: String) {
+        kernelThrow(StdThrow.compileOnly, message: message)
+    }
+
+    private func throwInvalidToken(_ message: String) {
+        kernelThrow(StdThrow.invalidToken, message: message)
+    }
+
+    private func throwUncompletedControl(_ message: String) {
+        kernelThrow(StdThrow.uncompletedControl, message: message)
+    }
+
+    private func throwInvalidAddress(_ message: String) {
+        kernelThrow(StdThrow.invalidAddress, message: message)
     }
 
     /// ANS THROW / ABORT delivery. n=0 is a no-op. Caught throws restore the CATCH frame.
@@ -6380,8 +6373,7 @@ public final class TZForth {
                 rpush(ip)
                 ip = Int(cfa) + 8   // skip the DOCOL cell
                 if ip < 0 || ip + 8 > memory.count {
-                    tell("? Bad colon definition target (cfa=\(cfa))\n")
-                    errorFlag = true
+                    throwInvalidToken("? Bad colon definition target (cfa=\(cfa))")
                 } else {
                     innerThread()
                     if throwActive { return }
@@ -6397,8 +6389,7 @@ public final class TZForth {
             rpush(ip)
             ip = Int(cfa)
             if ip < 0 || ip + 8 > memory.count {
-                tell("? Bad execution target (cfa=\(cfa))\n")
-                errorFlag = true
+                throwInvalidToken("? Bad execution target (cfa=\(cfa))")
             } else {
                 innerThread()
                 if throwActive { return }
@@ -6422,8 +6413,7 @@ public final class TZForth {
             // Hard IP bounds check — prevents following corrupted threaded code or wild branches
             // into completely invalid regions. readCell would catch it too, but this gives a clearer message.
             if ip < 0 || ip + 8 > memory.count {
-                tell("? Invalid instruction pointer (ip=\(ip)) — possible corrupted threaded code or bad branch\n")
-                errorFlag = true
+                throwInvalidToken("? Invalid instruction pointer (ip=\(ip)) — possible corrupted threaded code or bad branch")
                 break
             }
 
@@ -6448,8 +6438,8 @@ public final class TZForth {
                 // (e.g. the "1" or "-16" in your looper example) and tried to
                 // execute it as code. We turn it into a clean error instead of
                 // a fatal array subscript trap.
-                tell("? Invalid executable token \(cell) (not a registered primitive; possible bad branch offset)\n")
-                errorFlag = true
+                throwInvalidToken("? Invalid executable token \(cell) (not a registered primitive; possible bad branch offset)")
+                break
             } else {
                 // Treat as address of another colon definition (threaded call).
                 // Jump directly past the DOCOL marker cell at the target CFA; the
@@ -6457,17 +6447,16 @@ public final class TZForth {
                 rpush(ip)
                 ip = Int(cell) + 8
                 if ip < 0 || ip + 8 > memory.count {
-                    tell("? Bad threaded call target (ip=\(ip))\n")
-                    errorFlag = true
+                    throwInvalidToken("? Bad threaded call target (ip=\(ip))")
+                    break
                 }
             }
 
             if ip == 0 { break }   // safety
         }
 
-        if safety >= SAFETY_LIMIT && !errorFlag {
-            tell("? Execution limit exceeded (possible infinite loop or very deep recursion)\n")
-            errorFlag = true
+        if safety >= SAFETY_LIMIT && !errorFlag && !throwActive {
+            kernelThrow(StdThrow.nestingLimit, message: "? Execution limit exceeded (possible infinite loop or very deep recursion)")
         }
     }
 

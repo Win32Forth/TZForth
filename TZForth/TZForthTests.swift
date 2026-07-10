@@ -737,6 +737,8 @@ extension TZForth {
         ansTest("CATCH-EVALUATE", "S\" no-such-word-tzforth-xyz\" CATCH-EVALUATE .", "-13")
         self.feedLine(": t9under ['] drop CATCH ;")
         ansTest("CATCH stack underflow", "t9under .", "-3")
+        ansTest("CATCH compile-only", "S\" IF\" CATCH-EVALUATE .", "-14")
+        ansTest("CATCH invalid address", "-1 ' @ CATCH .", "-7")
 
         results += "TEST6 ANS core summary: \(ansPassed)/\(ansTotal) passed\n"
         if ansPassed != ansTotal {

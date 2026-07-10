@@ -2,7 +2,7 @@
 
 This document tracks implementation status of the 2012 ANS Forth Standard word sets in TZForth (Swift port of the lbForth model). Generated from codebase inspection (`TZForth/TZForth.swift`, `TestTZForth.swift`, `TZForthTests.swift`).
 
-Last update: File-Access `REQUIRE`/`REQUIRED` with `INCLUDED-NAMES` registry; `INCLUDE`/`INCLUDED`/`FLOAD` register loaded specs.
+Last update: Programming-Tools — pre-ANS `COMPILE` documented as intentionally omitted (superseded by `POSTPONE` / `[COMPILE]` / `COMPILE,`).
 
 ## Summary
 
@@ -11,7 +11,7 @@ Last update: File-Access `REQUIRE`/`REQUIRED` with `INCLUDED-NAMES` registry; `I
 | **Core (6.1)** | Complete — all required words implemented with FTEST coverage |
 | **Core Ext (6.2)** | Complete — all standard Core Ext words implemented |
 | **Search-Order (16)** | Complete — 16.6.1 + 16.6.2; `SEARCH-WORDLIST`, `ENVIRONMENT?` `WORDLISTS` (8) |
-| **Programming-Tools** | Partial — core + extensions above; assembler `CODE`/`[IF]` stubbed; `LOCATE` (SEE alias); no `COMPILE`, `NEEDS` |
+| **Programming-Tools** | Partial — 15.6.1/15.6.2 words below; assembler `CODE`/`;CODE` stubbed; `LOCATE` (SEE alias); pre-ANS `COMPILE` omitted (`POSTPONE` / `[COMPILE]` / `COMPILE,` in Core); no `NEEDS` |
 | **File-Access (11)** | Substantial — 11.6.1 core words + `INCLUDE`/`INCLUDED` + `REQUIRE`/`REQUIRED` |
 | **Exception (9)** | Complete — `CATCH`, `THROW`; Core `ABORT`/`ABORT"` delegate to `THROW -1`/`-2` |
 | **String (17)** | Complete — 17.6.1 (`COMPARE`, `SEARCH`, `SLITERAL`, `/STRING`, `-TRAILING`, `BLANK`, `CMOVE`, `CMOVE>`) |
@@ -246,7 +246,23 @@ ANS words implemented from 15.6.1 / extensions:
 
 `[IF]` / `[ELSE]` / `[THEN]` also satisfy Core Ext conditional compilation. Stubbed (error at use): `CODE`, `;CODE`.
 
-Not implemented: `COMPILE`, `NEEDS`. Gforth-style source-file `LOCATE` (retained buffers, file:line) is a future enhancement.
+### Compile-time control (Core / Core Ext — not Programming-Tools)
+
+Pre-ANS fig/F-PC `COMPILE` is **not** implemented and is **not planned**. ANS 2012 never standardized it; compilation control lives in Core and Core Ext instead:
+
+| Word | Set | Role |
+|------|-----|------|
+| `POSTPONE` | Core | Append compilation semantics of the next word; for immediates, emits `LIT xt EXECUTE` (preferred ANS form) |
+| `[COMPILE]` | Core | Force compile-time reference to the next word even if immediate (older ANS form) |
+| `COMPILE,` | Core Ext | `( xt -- )` — compile a known execution token |
+| `NAME>COMPILE` | Programming-Tools | `( nt -- xt )` — compilation token for a name token |
+
+Porting legacy sources that use `COMPILE name` should rewrite to `POSTPONE name`, `[COMPILE] name`, or `' name COMPILE,` as appropriate.
+
+### Not implemented
+
+- **`NEEDS`** — not planned.
+- **Gforth-style source `LOCATE`** (retained buffers, file:line) — future enhancement; TZForth `LOCATE` remains a `SEE` alias.
 
 ## Dictionary introspection (fig-style extensions)
 
@@ -277,7 +293,7 @@ Not implemented (no current plan unless requested):
 - **Facility** (`AT-XY`, `TIME&DATE`, …)
 - **Block**
 - **Extended-Character**
-- Full **Programming-Tools** (`COMPILE`, Gforth-style source `LOCATE`, …)
+- Remaining **Programming-Tools** (`NEEDS`, Gforth-style source `LOCATE`, …)
 
 ## Recommendations
 

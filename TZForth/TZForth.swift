@@ -3937,15 +3937,10 @@ public final class TZForth {
                 self.throwDivisionByZero()
                 return
             }
-            let u2 = Int128(self.unsignedCell(u2c))
+            let u2 = Int128(u2c)
             let u3 = Int128(self.unsignedCell(u3c))
             let prod = d * u2
-            var quot = prod / u3
-            let rem = prod % u3
-            if rem != 0 && ((prod < 0) != (u3 < 0)) {
-                quot -= 1
-            }
-            self.pushSignedDouble(quot)
+            self.pushSignedDouble(prod / u3)
         }
         _ = register("2ROT") {
             let f = self.pop(); let e = self.pop(); let d = self.pop()
@@ -6592,7 +6587,7 @@ public final class TZForth {
                 case 114: collected.append(13) // \r CR
                 case 116: collected.append(9)  // \t tab
                 case 118: collected.append(11) // \v VT
-                case 122: break                // \z NUL (no char)
+                case 122: collected.append(0)  // \z NUL
                 case 92: collected.append(92)  // \\
                 case 120: // \xHH
                     var hex = ""

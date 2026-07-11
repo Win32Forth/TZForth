@@ -558,7 +558,10 @@ hello
     // TYPE COUNT WORD (more coverage)
     ansTest("COUNT TYPE via WORD", "32 WORD HELLO COUNT TYPE", "HELLO")
 
-    // 2@ 2! etc. (use safe non-HERE to avoid prior side effects on DP)
+    // 2@ 2! (use safe non-HERE to avoid prior side effects on DP)
+    forth.feedLine("VARIABLE t2a")
+    ansTest("2! 2@", "1111 2222 t2a 2! t2a 2@ SWAP . .", "1111 2222")
+    ansTest("S\\\" escapes", ": t6sq S\\\" \\a\\b\\e\" ; t6sq DROP C@ .", "7")
     ansTest("ARSHIFT", "-8 1 ARSHIFT .", "-4")
 
     // New batch: >IN >NUMBER ABORT ABORT" ACCEPT ENVIRONMENT? EVALUATE FIND
@@ -682,7 +685,7 @@ hello
     ansTest("D=", "100. 100. D= .", "-1")
     ansTest("D0=", "0. D0= .", "-1")
     ansTest("M+", "1. 5 M+ D.", "6")
-    ansTest("M*/", "10 10 5 M*/ D.", "20")
+    ansTest("M*/", "10. 10 5 M*/ D.", "20")
     ansTest("D>S", "1234. D>S .", "1234")
     forth.feedLine("1000. 2CONSTANT t8big")
     ansTest("2CONSTANT", "t8big D.", "1000")

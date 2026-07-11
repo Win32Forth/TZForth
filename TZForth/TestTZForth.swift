@@ -971,7 +971,8 @@ if ProcessInfo.processInfo.environment["HAYES"] == "1" {
     forth.resetRuntimeState()
 
     forth.feedLine("CR .( Running ANS Forth tests for TZForth — Block and Facility omitted ) CR")
-
+    forth.feedLine("FILE-ECHO ON")
+    
     // Load via feedLine (FLOAD path). INCLUDED/REFILL mis-syncs >IN for Hayes ?~~ skips.
     let hayesFiles = [
         "prelimtest.fth", "tester.fr", "core.fr", "coreplustest.fth", "utilities.fth",

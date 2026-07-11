@@ -337,6 +337,9 @@ public final class TZForth {
     private var whileRepeatStack: [Cell] = []
     private var whileNestStack: [Cell] = []
 
+    /// CASE/OF/ENDOF branch placeholders (0 sentinel + forward-branch addrs); avoids data-stack pollution.
+    private var caseBranchStack: [Cell] = []
+
     /// Saved machine state for each active CATCH (ANS 9.3.2 exception frame).
     private struct ExceptionFrame {
         var dataStackDepth: Cell
@@ -1724,14 +1727,12 @@ public final class TZForth {
         currentSourceLen = u2
         writeCell(IN, 0)
         self.throwActive = false
-        if self.evaluateNesting > 0 {
+        if self.loadNesting > 0, self.interpreterInputFileId >= 2 {
+            self.currentSourceId = self.interpreterInputFileId
+        } else if self.evaluateNesting > 0 {
             self.currentSourceId = 0
         } else if self.loadNesting > 0 {
-            if self.interpreterInputFileId >= 2 {
-                self.currentSourceId = self.interpreterInputFileId
-            } else {
-                self.currentSourceId = 1
-            }
+            self.currentSourceId = 1
         } else {
             self.currentSourceId = -1
         }
@@ -2394,10 +2395,17 @@ public final class TZForth {
     /// ANS SUBSTITUTE — left-to-right, non-recursive %name% expansion.
     private func substituteText(srcCaddr: Int, srcLen: Int, destCaddr: Int, destCap: Int) -> (u3: Int, n: Cell)? {
         if srcCaddr == destCaddr { return nil }
-        if srcLen > 0 && destCap > 0 {
-            let srcEnd = srcCaddr + srcLen
-            let destEnd = destCaddr + destCap
-            if srcCaddr < destEnd && destCaddr < srcEnd { return nil } // overlapping buffers
+        let overlaps = srcLen > 0 && destCap > 0 && srcCaddr < destCaddr + destCap && destCaddr < srcCaddr + srcLen
+        let workDest: Int
+        let workCap: Int
+        if overlaps {
+            workCap = max(srcLen, destCap) * 2 + 64
+            let alloc = self.heapAllocateBytes(workCap)
+            if alloc.ior != 0 || alloc.addr == 0 { return nil }
+            workDest = alloc.addr
+        } else {
+            workDest = destCaddr
+            workCap = destCap
         }
         var out = 0
         var subs = 0
@@ -2406,23 +2414,23 @@ public final class TZForth {
         while pos < srcLen {
             let ch = self.readByte(srcCaddr + pos)
             if ch != pct {
-                if out >= destCap { return nil }
-                self.writeByte(destCaddr + out, ch)
+                if out >= workCap { return nil }
+                self.writeByte(workDest + out, ch)
                 out += 1
                 pos += 1
                 continue
             }
             if pos + 1 >= srcLen {
-                if out >= destCap { return nil }
-                self.writeByte(destCaddr + out, pct)
+                if out >= workCap { return nil }
+                self.writeByte(workDest + out, pct)
                 out += 1
                 pos += 1
                 continue
             }
             let next = self.readByte(srcCaddr + pos + 1)
             if next == pct {
-                if out >= destCap { return nil }
-                self.writeByte(destCaddr + out, pct)
+                if out >= workCap { return nil }
+                self.writeByte(workDest + out, pct)
                 out += 1
                 pos += 2
                 continue
@@ -2433,39 +2441,51 @@ public final class TZForth {
             }
             if end >= srcLen {
                 let tailLen = srcLen - pos
-                if out + tailLen > destCap { return nil }
+                if out + tailLen > workCap { return nil }
                 for i in 0..<tailLen {
-                    self.writeByte(destCaddr + out + i, self.readByte(srcCaddr + pos + i))
+                    self.writeByte(workDest + out + i, self.readByte(srcCaddr + pos + i))
                 }
                 out += tailLen
                 break
             }
             let nameLen = end - (pos + 1)
             if nameLen == 0 {
-                if out >= destCap { return nil }
-                self.writeByte(destCaddr + out, pct)
+                if out >= workCap { return nil }
+                self.writeByte(workDest + out, pct)
                 out += 1
                 pos += 2
                 continue
             }
             if let name = self.substitutionNameFromMemory(caddr: srcCaddr + pos + 1, u: nameLen),
                let repl = self.lookupSubstitutionText(name: name) {
-                if out + repl.count > destCap { return nil }
+                if out + repl.count > workCap { return nil }
                 for (i, b) in repl.enumerated() {
-                    self.writeByte(destCaddr + out + i, b)
+                    self.writeByte(workDest + out + i, b)
                 }
                 out += repl.count
                 subs += 1
                 pos = end + 1
             } else {
                 let span = end + 1 - pos
-                if out + span > destCap { return nil }
+                if out + span > workCap { return nil }
                 for i in 0..<span {
-                    self.writeByte(destCaddr + out + i, self.readByte(srcCaddr + pos + i))
+                    self.writeByte(workDest + out + i, self.readByte(srcCaddr + pos + i))
                 }
                 out += span
                 pos = end + 1
             }
+        }
+        if overlaps {
+            if out > destCap {
+                _ = self.heapFreeBytes(workDest)
+                return nil
+            }
+            for i in 0..<out {
+                self.writeByte(destCaddr + i, self.readByte(workDest + i))
+            }
+            _ = self.heapFreeBytes(workDest)
+        } else if out > destCap {
+            return nil
         }
         return (out, Cell(subs))
     }
@@ -3262,6 +3282,7 @@ public final class TZForth {
 
             self.nonameCompile = false
             self.resetLocalCompileState()
+            self.caseBranchStack.removeAll()
             self.createWord(name: name, immediate: false)
 
             // Compile DOCOL into the code field (as if user had done DOCOL , )
@@ -3281,6 +3302,7 @@ public final class TZForth {
         _ = register(":NONAME") {
             self.nonameCompile = true
             self.resetLocalCompileState()
+            self.caseBranchStack.removeAll()
             self.createWord(name: "", immediate: false)
             self.push(self.docolID); self.comma()
             let defsHeadCell = self.readCell(self.CURRENT)
@@ -3309,6 +3331,7 @@ public final class TZForth {
             self.loopControlStack.removeAll()  // clean any leftover from unbalanced loops in this def
             self.whileRepeatStack.removeAll()
             self.whileNestStack.removeAll()
+            self.caseBranchStack.removeAll()
             self.resetLocalCompileState()
         }
 
@@ -3569,7 +3592,7 @@ public final class TZForth {
                 self.throwCompileOnly("? CASE only allowed while compiling a word")
                 return
             }
-            self.push(0)  // sentinel for ENDCASE
+            self.caseBranchStack.append(0) // sentinel for ENDCASE
         }
 
         _ = register("OF", immediate: true) {
@@ -3577,8 +3600,6 @@ public final class TZForth {
                 self.throwCompileOnly("? OF only allowed while compiling a word")
                 return
             }
-            // Emit: OVER =   then the IF part (0BRANCH ph + push ph)
-            // Then emit DROP (so matched case drops the selector before running the OF code)
             func emitRef(_ name: String) {
                 let hdr = self.findWord(name)
                 if hdr != 0 {
@@ -3592,11 +3613,10 @@ public final class TZForth {
             emitRef("OVER")
             emitRef("SWAP")
             emitRef("=")
-            // The IF emit:
             self.push(self.zeroBranchID); self.comma()
             let ph = self.readCell(self.DP_ADDR)
             self.push(0); self.comma()
-            self.push(ph)
+            self.caseBranchStack.append(ph)
             emitRef("DROP")
         }
 
@@ -3605,13 +3625,14 @@ public final class TZForth {
                 self.throwCompileOnly("? ENDOF only allowed while compiling a word")
                 return
             }
-            // Like ELSE: resolve previous ph (from OF or prev ENDOF), emit forward BRANCH with new ph
-            let prevPh = self.pop()
+            guard let prevPh = self.caseBranchStack.popLast() else {
+                self.throwInvalidToken("? ENDOF without OF")
+                return
+            }
             self.push(self.branchID); self.comma()
             let newPhAddr = self.readCell(self.DP_ADDR)
             self.push(0); self.comma()
-            self.push(newPhAddr)
-            // False OF branches land after this BRANCH (start of next case or default).
+            self.caseBranchStack.append(newPhAddr)
             let here = self.readCell(self.DP_ADDR)
             let off = here - (prevPh + 8)
             self.writeCell(Int(prevPh), off)
@@ -3622,7 +3643,6 @@ public final class TZForth {
                 self.throwCompileOnly("? ENDCASE only allowed while compiling a word")
                 return
             }
-            // Emit DROP first (default path still has the selector on stack).
             let hdr = self.findWord("DROP")
             if hdr != 0 {
                 let cfa = self.getCFA(hdr)
@@ -3630,13 +3650,9 @@ public final class TZForth {
                 let toEmit = (first < Cell(self.MAX_BUILTIN_ID) && first != self.docolID) ? first : cfa
                 self.push(toEmit); self.comma()
             }
-            // Resolve ENDOF forward branches to *after* the DROP so matched cases keep their result.
-            while true {
-                let s = self.spGet()
-                if s <= 1 { break }
-                let x = self.pop()
+            let here = self.readCell(self.DP_ADDR)
+            while let x = self.caseBranchStack.popLast() {
                 if x == 0 { break }
-                let here = self.readCell(self.DP_ADDR)
                 let off = here - (x + 8)
                 self.writeCell(Int(x), off)
             }
@@ -7439,6 +7455,7 @@ public final class TZForth {
         loopControlStack.removeAll()
         whileRepeatStack.removeAll()
         whileNestStack.removeAll()
+        caseBranchStack.removeAll()
         self.clearAllLocalFrames()
         self.exceptionFrames.removeAll()
         self.throwActive = false

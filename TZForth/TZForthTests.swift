@@ -144,6 +144,20 @@ extension TZForth {
         let saw123 = collected.contains("123")
         results += "TEST2b post-slash exec: saw123=\(saw123) out=\(collected.trimmingCharacters(in: .whitespacesAndNewlines))\n"
 
+        // === Test 2b-include: FILE-ECHO + \S via INCLUDE (same interpret path as FLOAD) ===
+        resetTest()
+        _ = fm.changeCurrentDirectoryPath(tmp.path)
+        self.logicalCurrentDirectory = tmp.path
+        self.feedLine("FILE-ECHO OFF")
+        collected = ""
+        self.feedLine("INCLUDE \(fecho.lastPathComponent)")
+        self.logicalCurrentDirectory = savedLog2b
+        _ = fm.changeCurrentDirectoryPath(savedCwd2b)
+        let hasIncEchoPre = self.debugFind("ECHOPRE")
+        let hasIncEchoPost = self.debugFind("ECHOPOST")
+        let sawIncEchoSrc = collected.contains("FILE-ECHO ON") || collected.contains("echopre")
+        results += "TEST2b-include: echopre=\(hasIncEchoPre) echopost=\(hasIncEchoPost) sawEcho=\(sawIncEchoSrc)\n"
+
         // === Test 2c: DEBUG-ON/OFF in file ===
         resetTest()
         self.feedLine("FILE-ECHO OFF")
@@ -325,7 +339,7 @@ extension TZForth {
         ansTest("U<", "1 2 U< .", "-1")
         ansTest("U>", "2 1 U> .  1 2 U> .", "-1 0")
         ansTest("UM*", "100 100 UM* . .", "0 10000")
-        ansTest("UM/MOD", "0 100 10 UM/MOD . .", "10 0")
+        ansTest("UM/MOD", "100 0 10 UM/MOD . .", "10 0")
         ansTest("MOD", "10 3 MOD .", "1")
         ansTest("1+", "41 1+ .", "42")
         ansTest("1-", "43 1- .", "42")
@@ -413,6 +427,21 @@ extension TZForth {
         ansTest("BEGIN UNTIL", ": t6until 0 BEGIN 1+ DUP 3 > UNTIL ; t6until .", "4")
         ansTest("DO LOOP I", ": t6do 0 3 0 DO I + LOOP ; t6do .", "3")  // 0+1+2
         ansTest("?DO +LOOP UNLOOP LEAVE", ": t6dop 0 5 0 ?DO 1+ LOOP ; t6dop .", "5")
+
+        // Hayes GD8/GD9 +LOOP circular arithmetic (Forth-2012 core+)
+        self.feedLine("VARIABLE BUMP")
+        self.feedLine("0 INVERT CONSTANT MAX-UINT")
+        self.feedLine("MAX-UINT 8 RSHIFT 1+ CONSTANT USTEP")
+        self.feedLine("USTEP NEGATE CONSTANT -USTEP")
+        self.feedLine("1 63 LSHIFT 1- CONSTANT MAX-INT")
+        self.feedLine("1 63 LSHIFT NEGATE CONSTANT MIN-INT")
+        self.feedLine("MAX-INT 7 RSHIFT 1+ CONSTANT STEP")
+        self.feedLine("STEP NEGATE CONSTANT -STEP")
+        self.feedLine(": GD8 BUMP ! DO 1+ BUMP @ +LOOP ;")
+        ansTest("GD8 USTEP orbit", "0 MAX-UINT 0 USTEP GD8 .", "256")
+        ansTest("GD8 -USTEP orbit", "0 0 MAX-UINT -USTEP GD8 .", "256")
+        ansTest("GD8 STEP orbit", "0 MAX-INT MIN-INT STEP GD8 .", "256")
+        ansTest("GD8 -STEP orbit", "0 MIN-INT MAX-INT -STEP GD8 .", "256")
         ansTest("J", ": t6j 0 2 0 DO 0 2 0 DO J + LOOP LOOP ; t6j .", "2")  // 0+0 +1+1 =2
         ansTest("RECURSE", ": t6rec 1- DUP 0= IF DROP 99 ELSE RECURSE THEN ; 5 t6rec .", "99")
         ansTest("EXECUTE", "3 4 ' + EXECUTE .", "7")
@@ -600,6 +629,19 @@ extension TZForth {
         ansTest("RESTORE-INPUT fail", "SAVE-INPUT 2DROP 0 RESTORE-INPUT .", "-1")
         ansTest("SAVE-INPUT nested", "SAVE-INPUT S\" 11 .\" EVALUATE RESTORE-INPUT 0= . 22 .", "0 22")
         ansTest("FILE-ECHO default", "FILE-ECHO @ .", "0")
+        resetTest()
+        _ = fm.changeCurrentDirectoryPath(tmp.path)
+        self.logicalCurrentDirectory = tmp.path
+        self.feedLine("FILE-ECHO OFF")
+        collected = ""
+        self.feedLine("INCLUDE \(fecho.lastPathComponent)")
+        ansTotal += 1
+        if collected.contains("FILE-ECHO ON") && self.debugFind("ECHOPRE") && !self.debugFind("ECHOPOST") {
+            ansPassed += 1
+            results += "TEST6 FILE-ECHO INCLUDE: pass\n"
+        } else {
+            results += "TEST6 FILE-ECHO INCLUDE: FAIL echo='\(collected.trimmingCharacters(in: .whitespacesAndNewlines))'\n"
+        }
         ansTest("S\\\"", ": t7sq S\\\" hello\" TYPE ; t7sq", "hello")
         ansTest("S\\\" escapes", ": t7sq2 S\\\" a\\\\b\" TYPE ; t7sq2", "a\\b")
 

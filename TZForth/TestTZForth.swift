@@ -217,8 +217,20 @@ hello
     let saw123 = collected.contains("123")
     print("TEST2b post-slash exec: saw123=\(saw123) out=\(collected.trimmingCharacters(in: .whitespacesAndNewlines))")
 
+    // === Test 2b-include: FILE-ECHO + \S via INCLUDE (shared interpret path with FLOAD) ===
+    resetTest()
+    _ = fm.changeCurrentDirectoryPath(tmp.path)
+    forth.logicalCurrentDirectory = tmp.path
+    forth.feedLine("FILE-ECHO OFF")
+    collected = ""
+    forth.feedLine("INCLUDE \(fecho.lastPathComponent)")
+    let hasIncEchoPre = forth.debugFind("ECHOPRE")
+    let hasIncEchoPost = forth.debugFind("ECHOPOST")
+    let sawIncEchoSrc = collected.contains("FILE-ECHO ON") || collected.contains("echopre")
+    print("TEST2b-include: echopre=\(hasIncEchoPre) echopost=\(hasIncEchoPost) sawEcho=\(sawIncEchoSrc)")
+
     // === Test 2c: DEBUG-ON / DEBUG-OFF inside a loaded file should take effect immediately
-    // for subsequent lines in *that* file (live flag change during the load loop's feedLine calls).
+    // for subsequent lines in *that* file (live flag change during the shared load loop).
     // We expect [DEBUG] dumps only for lines between DEBUG-ON and DEBUG-OFF.
     resetTest()
     forth.feedLine("FILE-ECHO OFF")  // ensure no pollution from prior tests' FILE-ECHO ON
@@ -408,7 +420,7 @@ hello
     ansTest("U<", "1 2 U< .", "-1")
     ansTest("U>", "2 1 U> .  1 2 U> .", "-1 0")
     ansTest("UM*", "100 100 UM* . .", "0 10000")
-    ansTest("UM/MOD", "0 100 10 UM/MOD . .", "10 0")
+    ansTest("UM/MOD", "100 0 10 UM/MOD . .", "10 0")
     ansTest("MOD", "10 3 MOD .", "1")
     ansTest("1+", "41 1+ .", "42")
     ansTest("1-", "43 1- .", "42")
@@ -499,6 +511,21 @@ hello
     ansTest("BEGIN UNTIL", ": t6until 0 BEGIN 1+ DUP 3 > UNTIL ; t6until .", "4")
     ansTest("DO LOOP I", ": t6do 0 3 0 DO I + LOOP ; t6do .", "3")  // 0+1+2
     ansTest("?DO +LOOP UNLOOP LEAVE", ": t6dop 0 5 0 ?DO 1+ LOOP ; t6dop .", "5")
+
+    // Hayes GD8/GD9 +LOOP circular arithmetic (Forth-2012 core+)
+    forth.feedLine("VARIABLE BUMP")
+    forth.feedLine("0 INVERT CONSTANT MAX-UINT")
+    forth.feedLine("MAX-UINT 8 RSHIFT 1+ CONSTANT USTEP")
+    forth.feedLine("USTEP NEGATE CONSTANT -USTEP")
+    forth.feedLine("1 63 LSHIFT 1- CONSTANT MAX-INT")
+    forth.feedLine("1 63 LSHIFT NEGATE CONSTANT MIN-INT")
+    forth.feedLine("MAX-INT 7 RSHIFT 1+ CONSTANT STEP")
+    forth.feedLine("STEP NEGATE CONSTANT -STEP")
+    forth.feedLine(": GD8 BUMP ! DO 1+ BUMP @ +LOOP ;")
+    ansTest("GD8 USTEP orbit", "0 MAX-UINT 0 USTEP GD8 .", "256")
+    ansTest("GD8 -USTEP orbit", "0 0 MAX-UINT -USTEP GD8 .", "256")
+    ansTest("GD8 STEP orbit", "0 MAX-INT MIN-INT STEP GD8 .", "256")
+    ansTest("GD8 -STEP orbit", "0 MIN-INT MAX-INT -STEP GD8 .", "256")
     ansTest("J", ": t6j 0 2 0 DO 0 2 0 DO J + LOOP LOOP ; t6j .", "2")  // 0+0 +1+1 =2
     ansTest("RECURSE", ": t6rec 1- DUP 0= IF DROP 99 ELSE RECURSE THEN ; 5 t6rec .", "99")
     ansTest("EXECUTE", "3 4 ' + EXECUTE .", "7")
@@ -688,6 +715,19 @@ hello
     ansTest("RESTORE-INPUT fail", "SAVE-INPUT 2DROP 0 RESTORE-INPUT .", "-1")
     ansTest("SAVE-INPUT nested", "SAVE-INPUT S\" 11 .\" EVALUATE RESTORE-INPUT 0= . 22 .", "0 22")
     ansTest("FILE-ECHO default", "FILE-ECHO @ .", "0")
+    resetTest()
+    _ = fm.changeCurrentDirectoryPath(tmp.path)
+    forth.logicalCurrentDirectory = tmp.path
+    forth.feedLine("FILE-ECHO OFF")
+    collected = ""
+    forth.feedLine("INCLUDE \(fecho.lastPathComponent)")
+    ansTotal += 1
+    if collected.contains("FILE-ECHO ON") && forth.debugFind("ECHOPRE") && !forth.debugFind("ECHOPOST") {
+        ansPassed += 1
+        print("TEST6 FILE-ECHO INCLUDE: pass")
+    } else {
+        print("TEST6 FILE-ECHO INCLUDE: FAIL echo='\(collected.trimmingCharacters(in: .whitespacesAndNewlines))'")
+    }
     ansTest("S\\\"", ": t7sq S\\\" hello\" TYPE ; t7sq", "hello")
     ansTest("S\\\" escapes", ": t7sq2 S\\\" a\\\\b\" TYPE ; t7sq2", "a\\b")
 

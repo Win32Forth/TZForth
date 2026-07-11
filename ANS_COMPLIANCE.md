@@ -2,7 +2,7 @@
 
 This document tracks implementation status of the 2012 ANS Forth Standard word sets in TZForth (Swift port of the lbForth model). Generated from codebase inspection (`TZForth/TZForth.swift`, `TestTZForth.swift`, `TZForthTests.swift`).
 
-Last update: Exception — THROW migration complete (Phases 1–5b); `.ERROR`, catchable mid-`FLOAD`/`INCLUDE-FILE`, FTEST 273/273.
+Last update: FLOAD/INCLUDE unified load loop + `FILE-ECHO` for all loaders; FTEST 279/279.
 
 ## Summary
 
@@ -20,7 +20,7 @@ Last update: Exception — THROW migration complete (Phases 1–5b); `.ERROR`, c
 | **Locals (13)** | Complete — `(LOCAL)`, `LOCALS|`, `{:`; `TO` for locals; max 32 (`#LOCALS`) |
 | **Other optional sets** | Mostly absent — Float, Facility, Block, Extended-Character, etc. |
 
-FTEST harness: run with `FTEST=1 swift /tmp/combined.swift` (concatenate `TZForth.swift`, `TZForthTests.swift`, `TestTZForth.swift`). Current count: **263/263** TEST6 spot-checks plus block-comment / FLOAD harness tests.
+FTEST harness: run with `FTEST=1 swift /tmp/combined.swift` (concatenate `TZForth.swift`, `TZForthTests.swift`, `TestTZForth.swift`). Current count: **279/279** TEST6 spot-checks plus block-comment / FLOAD / INCLUDE harness tests.
 
 ## Core (6.1) — Complete
 
@@ -58,7 +58,7 @@ All Core words required for conformance are implemented. Notable details:
 | `MARKER` | `( "name" -- )` — saves dict/search-order state; execution restores and removes marker + subsequent defs |
 | `SAVE-INPUT` | `( -- x1 ... xn n )` — saves input source state (implementation-defined tuple on stack) |
 | `RESTORE-INPUT` | `( x1 ... xn n -- flag )` — restores state; flag true if restore failed |
-| `SOURCE-ID` | `( -- id )` — `-1` terminal, `0` evaluate string, `1` file (`FLOAD`) |
+| `SOURCE-ID` | `( -- id )` — `-1` terminal, `0` evaluate string, `≥2` open fileid while loading |
 | `S\"` | compile: parse escaped `"`-string, compile `(S")` + literal; interpret undefined per ANS |
 | `REFILL` | `( -- flag )` — refill input buffer; false when no further line available (line-oriented REPL) |
 
@@ -133,7 +133,8 @@ ANS optional word set 11.6.1 (file operations) and key 11.6.2 extensions are imp
 
 - **`REFILL`** — when interpreting from an open file (`interpreterInputFileId` ≥ 2), refills `SOURCE` from that file; returns false at EOF.
 - **`(`** — multi-line parenthesized comments span file lines (refills when `)` not found on current line).
-- **`INCLUDE-FILE` / `INCLUDED` / `INCLUDE`** — line-at-a-time interpret loop; `SOURCE-ID` is the fileid (≥ 10 for newly opened files; host `FLOAD` uses id `1`).
+- **Shared load loop** — `INCLUDE-FILE`, `INCLUDED`, `INCLUDE`, and host **`FLOAD`** all use the same line-at-a-time interpret path (`includeFileInterpret`): `FILE-ECHO`, `\S`, mid-file abort, no per-line `OK`, `DEBUG-ON`/`OFF` per line, and `SOURCE-ID` = the open **fileid** (≥ 10 for newly opened files).
+- **`FLOAD`** — resolves path (`.fth` auto-append, cwd, host sandbox via `onPerformNamedLoad`), opens text with UTF-8/Latin-1 tolerance, then runs the shared include loop; registers spec in `INCLUDED-NAMES` on success.
 - **`ENVIRONMENT?`** — returns true for `FILE`, `FILE-ACCESS`, `FILE-EXT`.
 
 ### REQUIRE / REQUIRED / INCLUDED-NAMES
@@ -142,11 +143,11 @@ ANS optional word set 11.6.1 (file operations) and key 11.6.2 extensions are imp
 - **`REQUIRED`** — if spec `( c-addr u )` is absent from the list, `nameJoin` + load (same as sample `included`); if present, discard spec without loading.
 - **`REQUIRE`** — `PARSE-NAME` then `REQUIRED`.
 - **`INCLUDE` / `INCLUDED`** — always load; register spec via `nameJoin` before interpret (extended, not shadowed).
-- **Host `FLOAD`** — on successful load, registers the user's parse spec in the same list.
+- **Host `FLOAD`** — same registry and interpret loop as `INCLUDED`; differs only in name resolution and host dialog/sandbox hooks.
 
 Registry key is the **exact spec bytes** passed in, not a canonical path. **`MARKER` / `FORGET`** do not prune `INCLUDED-NAMES` (matches ANS reference sample limitation on systems with `MARKER`).
 
-Host extension **`FLOAD`** remains available alongside ANS `INCLUDED` / `INCLUDE-FILE`.
+Host extension **`FILE-ECHO`** applies to all loaded sources (`FLOAD`, `INCLUDE`, `INCLUDE-FILE`, …).
 
 ## Exception (9) — Complete
 

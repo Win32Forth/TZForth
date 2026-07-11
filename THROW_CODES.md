@@ -20,7 +20,7 @@ This document maps TZForth’s internal `errorFlag` error path to ANS Forth 2012
 ### What `errorFlag` does (remaining uses only)
 
 1. **`handleUnhandledThrow`** — after an uncaught `THROW`, sets `errorFlag` so `feedLine` / FLOAD can observe failure.
-2. **`recoverFromError`** — during `FLOAD` (`wasLoading`), leaves `errorFlag` set to stop interpreting further lines in the file.
+2. **`recoverFromError`** — during loaded-source interpret (`wasLoading` / `loadNesting > 0`), leaves `errorFlag` set to stop interpreting further lines in the file.
 3. Host may read `errorFlag` after `loadFile` (e.g. skip bookmark persist on failure).
 
 `errorFlag` is **not** a Forth word and is **not** set on **caught** throws.
@@ -83,7 +83,7 @@ private func kernelThrow(_ code: Cell, message: String? = nil)
 | Case | Reason |
 |------|--------|
 | Uncaught `kernelThrow` / `THROW` | `handleUnhandledThrow` sets `errorFlag` for `feedLine` / FLOAD abort |
-| `recoverFromError` during FLOAD | `wasLoading` leaves `errorFlag` set to stop include |
+| `recoverFromError` during load | `wasLoading` leaves `errorFlag` set to stop include |
 | Soft notes (`DIR` failure) | Not execution faults; no `errorFlag` |
 
 Named **`FLOAD`** file-not-found now **`kernelThrow(-74)`** (CATCH-able). Uncaught load still sets `errorFlag` via `handleUnhandledThrow`. Sandbox hint prints only on uncaught `-74`.
@@ -282,7 +282,7 @@ t-under .            → -3
 
 - [x] All §9.3.1 codes -3…-17 mapped or explicitly exempted (see **Codes not mapped**); file-access -68/-74 for kernel paths
 - [x] `grep errorFlag = true` only `handleUnhandledThrow` + `recoverFromError` (2 sites in `TZForth.swift`)
-- [x] FTEST **273/273** (273 ans spot-checks); `ANS_COMPLIANCE.md` Exception section revised
+- [x] FTEST **279/279** (279 ans spot-checks); unified FLOAD/INCLUDE load loop
 - [x] `ANS-VALIDATE` exception suite (mirrors FTEST CATCH/THROW; nested CATCH, safe-fload, mid-include, `.ERROR` file codes)
 
 ---

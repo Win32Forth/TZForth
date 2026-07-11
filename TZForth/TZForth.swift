@@ -229,6 +229,9 @@ public final class TZForth {
 
     /// Nesting depth of nested EVALUATE (for SOURCE-ID and SAVE-INPUT tagging).
     private var evaluateNesting = 0
+    /// Original c-addr/u passed to the innermost active EVALUATE (for SOURCE inside evaluate).
+    private var evaluateSourceAddr: Cell = 0
+    private var evaluateSourceLen: Cell = 0
 
     /// Identifier for the current input source (SOURCE-ID): -1 terminal, 0 evaluate, 1 file.
     private var currentSourceId: Cell = -1
@@ -297,6 +300,8 @@ public final class TZForth {
     private var fileEchoAddr: Cell = 0
     /// Set when a colon definition stores 0 into >IN (!); outer offset is restored after it returns.
     private var inVarZeroedInColon = false
+    /// Set when @ on >IN runs after inVarZeroedInColon (t6in); suppresses outer-line rescan on return.
+    private var inVarZeroFetchAfterZero = false
 
     /// Address of the INCLUDED-NAMES variable's data cell (list head; 0 = empty).
     private var includedNamesVarAddr: Cell = 0
@@ -328,6 +333,10 @@ public final class TZForth {
     // Using dedicated stack avoids interleaving issues with IF/ELSE/THEN/WHILE markers on data stack.
     private var loopControlStack: [Cell] = []
 
+    // Compile-time stacks for nested WHILE/REPEAT (repeat targets + nested-condition hints).
+    private var whileRepeatStack: [Cell] = []
+    private var whileNestStack: [Cell] = []
+
     /// Saved machine state for each active CATCH (ANS 9.3.2 exception frame).
     private struct ExceptionFrame {
         var dataStackDepth: Cell
@@ -344,6 +353,8 @@ public final class TZForth {
         var inPos: Cell
         var inputQueue: [UInt8]
         var loopControlStack: [Cell]
+        var whileRepeatStack: [Cell]
+        var whileNestStack: [Cell]
         var localFramesDepth: Int
     }
     private var exceptionFrames: [ExceptionFrame] = []
@@ -773,7 +784,7 @@ public final class TZForth {
         ("\\S",     "( -- )",             "stop loading current file (no-op in console) (immediate)"),
         ("FLOAD",   "( -- ) name|dialog", "load .fth file (auto .fth if no ext in name; relative to cwd or abs/~; named uses host for sandbox scope+chdir; bare opens dialog)"),
         ("EDIT",    "( -- ) name|dialog", "open in system text editor (nav dialog or name; auto .fth fallback for bare names like FLOAD; updates cwd to file's folder; no load/interpret)"),
-        ("FILE-ECHO","( -- addr )",       "variable controlling FLOAD source echo (use with ON/OFF)"),
+        ("FILE-ECHO","( -- addr )",       "variable controlling loaded-source echo (FLOAD, INCLUDE, …; use with ON/OFF)"),
         ("ON",      "( addr -- )",        "store 1 at addr (e.g. file-echo ON)"),
         ("OFF",     "( addr -- )",        "store 0 at addr (e.g. file-echo OFF)"),
         ("CHDIR",   "( -- ) path",        "change dir (no arg: folder picker at current); supports ~ and relative"),
@@ -812,6 +823,8 @@ public final class TZForth {
     private var growMemoryAttempted: Bool = false
 
     private var executeID: Cell = 0  // captured ID for EXECUTE so POSTPONE can emit LIT xt EXECUTE for immediates
+    private var postponeImmID: Cell = 0  // (postpone-imm): compile or execute postponed immediate at run time
+    private var postponeCompID: Cell = 0 // (postpone-comp): compile or execute postponed non-immediate at run time
     private var fetchID: Cell = 0    // ID for @
     private var storeID: Cell = 0    // ID for !
     private var twoFetchID: Cell = 0 // ID for 2@ (2VALUE / TO detection)
@@ -1020,14 +1033,76 @@ public final class TZForth {
         }
     }
 
-    /// ANS unsigned single-cell value (32-bit on classic Forth; low 32 bits on wider cells).
+    /// ANS unsigned single-cell value (full cell width; 64-bit on this engine).
     private func unsignedCell(_ n: Cell) -> UInt64 {
-        UInt64(UInt32(bitPattern: Int32(truncatingIfNeeded: n)))
+        UInt64(bitPattern: Int64(n))
     }
 
-    /// ANS unsigned double-cell from two stack cells (low on top).
-    private func unsignedDouble(low: Cell, high: Cell) -> UInt64 {
-        (self.unsignedCell(high) << 32) | self.unsignedCell(low)
+    /// ANS single-cell arithmetic wraps at cell width (modulo 2^N); Swift Int traps without &+/&-/ &*.
+    private func cellAdd(_ a: Cell, _ b: Cell) -> Cell { a &+ b }
+    private func cellSub(_ a: Cell, _ b: Cell) -> Cell { a &- b }
+
+    private func unsignedLess(_ a: Cell, _ b: Cell) -> Bool {
+        self.unsignedCell(a) < self.unsignedCell(b)
+    }
+
+    private func unsignedGreaterOrEqual(_ a: Cell, _ b: Cell) -> Bool {
+        self.unsignedCell(a) >= self.unsignedCell(b)
+    }
+
+    /// ANS DO/+LOOP circular arithmetic (gforth `(+loop)` / Forth-2012 rationale A.6.1.0140).
+    /// Continue when index+delta has not crossed the boundary between limit-1 and limit.
+    private func loopShouldContinue(index: Cell, limit: Cell, delta: Cell) -> Bool {
+        if delta == 0 {
+            return true
+        }
+        let oldDiff = index &- limit
+        let newDiff = oldDiff &+ delta
+        return ((oldDiff ^ newDiff) & (oldDiff ^ delta)) >= 0
+    }
+    private func cellMul(_ a: Cell, _ b: Cell) -> Cell { a &* b }
+    private func cellNegate(_ a: Cell) -> Cell { 0 &- a }
+
+    /// Low cell bits of a signed double-wide value (never traps on overflow).
+    private func cellFromInt128(_ v: Int128) -> Cell {
+        Cell(Int(Int64(bitPattern: UInt64(truncatingIfNeeded: v))))
+    }
+
+    /// Low cell bits of an unsigned double-wide value (never traps on overflow).
+    private func cellFromUInt128(_ v: UInt128) -> Cell {
+        Cell(Int(Int64(bitPattern: UInt64(truncatingIfNeeded: v))))
+    }
+
+    /// Pop the two cells of a double (hi on top, lo below — matches S>D / M* push order in this engine).
+    private func popDoubleStack() -> (lo: Cell, hi: Cell) {
+        let hi = self.pop()
+        let lo = self.pop()
+        return (lo, hi)
+    }
+
+    private func pushDoubleStack(lo: Cell, hi: Cell) {
+        self.push(lo)
+        self.push(hi)
+    }
+
+    private func assembleSignedDouble(lo: Cell, hi: Cell) -> Int128 {
+        (Int128(hi) << 64) | Int128(UInt64(bitPattern: Int64(lo)))
+    }
+
+    private func assembleUnsignedDouble(lo: Cell, hi: Cell) -> UInt128 {
+        (UInt128(self.unsignedCell(hi)) << 64) | UInt128(self.unsignedCell(lo))
+    }
+
+    private func disassembleSignedDouble(_ d: Int128) -> (lo: Cell, hi: Cell) {
+        let lo = Int64(truncatingIfNeeded: d)
+        let hi = Int64(truncatingIfNeeded: d >> 64)
+        return (Cell(lo), Cell(hi))
+    }
+
+    private func disassembleUnsignedDouble(_ d: UInt128) -> (lo: Cell, hi: Cell) {
+        let lo = UInt64(truncatingIfNeeded: d)
+        let hi = UInt64(truncatingIfNeeded: d >> 64)
+        return (Cell(Int64(bitPattern: lo)), Cell(Int64(bitPattern: hi)))
     }
 
     // Pictured numeric output helpers (build string backwards in pno buffer)
@@ -1064,7 +1139,7 @@ public final class TZForth {
         self.throwActive = false
 
         // Prepare the SOURCE buffer and >IN for this line (supports SOURCE, PARSE, >IN tracking).
-        // Each feedLine (REPL or per-line during FLOAD) becomes the "current input source".
+        // Each feedLine (REPL) becomes the "current input source".
         self.currentSourceLen = 0
         let lineBytes = Array(line.utf8)
         let n = min(lineBytes.count, SOURCE_BUFFER_SIZE)
@@ -1096,8 +1171,7 @@ public final class TZForth {
         // Optional per-line debug output (state + stack after each feedLine).
         // Enabled via DEBUG-ON / DEBUG-OFF. Default is off.
         // Changes take effect immediately, including for subsequent lines when
-        // DEBUG-ON/OFF appears inside a file being FLOADed (live flag, checked after
-        // each feedLine, independent of loadNesting).
+        // DEBUG-ON/OFF inside a loaded file (live flag, checked after each REPL line).
         if debugEnabled {
             let stateStr = readCell(STATE) != 0 ? "compiling" : "interpreting"
             let depth = Int(spGet() - 1)
@@ -1135,8 +1209,76 @@ public final class TZForth {
         // In all cases (top-level KEY or after a colon def), give the outer interpreter
         // a chance to finish processing any remaining words on the current top-level line
         // (e.g. nothing, or if somehow more) and print the "OK" if the line completed
-        // (note: OK is suppressed for feeds that happen during FLOAD).
+        // (note: OK is suppressed while loadNesting > 0).
         runInterpreter()
+    }
+
+    // MARK: - FLOAD / INCLUDE shared source loading
+
+    /// Decode file bytes with the same tolerance as legacy FLOAD (UTF-8, Latin-1, replacement).
+    private func readTextFileBytes(from url: URL) -> Data? {
+        guard let data = try? Data(contentsOf: url) else { return nil }
+        let content: String
+        if let utf8 = String(data: data, encoding: .utf8) {
+            content = utf8
+        } else if let latin = String(data: data, encoding: .isoLatin1) {
+            content = latin
+        } else {
+            content = String(decoding: data, as: UTF8.self)
+        }
+        return Data(content.utf8)
+    }
+
+    /// Open a text file for line-at-a-time interpret (FLOAD / INCLUDED / INCLUDE-FILE).
+    private func openTextFileForInterpret(at path: String) -> (fileid: Cell, ior: Cell) {
+        let url = URL(fileURLWithPath: path)
+        guard let data = self.readTextFileBytes(from: url) else {
+            return (0, self.FILE_IO_ERROR)
+        }
+        let fid = self.allocFileId()
+        self.openFiles[fid] = FileEntry(
+            path: path,
+            fam: self.FAM_RDONLY,
+            data: data,
+            position: 0,
+            isOpen: true,
+            writeDirty: false
+        )
+        return (Cell(fid), self.FILE_IO_SUCCESS)
+    }
+
+    /// Echo a source line when FILE-ECHO is on (or the line toggles echo).
+    private func echoSourceLineIfNeeded(_ raw: String) {
+        let echoOn = (self.fileEchoAddr != 0) && (self.readCell(self.fileEchoAddr) != 0)
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        let lower = trimmed.lowercased()
+        let isEchoToggle = lower.hasPrefix("file-echo") && (lower.contains("on") || lower.contains("off"))
+        if echoOn || isEchoToggle {
+            self.tell(raw + "\n")
+        }
+    }
+
+    private func sourceBufferLineString() -> String {
+        var bytes: [UInt8] = []
+        for i in 0..<self.currentSourceLen {
+            bytes.append(self.readByte(self.SOURCE_BUFFER + i))
+        }
+        return String(bytes: bytes, encoding: .utf8) ?? String(decoding: bytes, as: UTF8.self)
+    }
+
+    /// Per-line cleanup after interpreting one loaded source line (matches feedLine tail).
+    private func finishInterpretedLoadLine() {
+        if self.errorFlag {
+            self.recoverFromError()
+        }
+        if self.debugEnabled {
+            let stateStr = self.readCell(self.STATE) != 0 ? "compiling" : "interpreting"
+            let depth = Int(self.spGet() - 1)
+            self.tell("[DEBUG] state=\(stateStr)  stack=<\(depth)> \(self.stackAsString)\n")
+        }
+        if self.readCell(self.STATE) == 0 && !self.waitingForKey {
+            self.ip = 0
+        }
     }
 
     // MARK: - FLOAD support (file loading / including source)
@@ -1225,83 +1367,22 @@ public final class TZForth {
             [url]
 
         for target in candidates {
-            do {
-                let data = try Data(contentsOf: target)
-                // Be tolerant of old source files (e.g. renamed .SEQ from OldSources) that may
-                // not be strict UTF-8 (high-bit chars, legacy encodings, etc.). Fall back so
-                // FLOAD doesn't complain "isn’t in the correct format".
-                let content: String
-                if let utf8 = String(data: data, encoding: .utf8) {
-                    content = utf8
-                } else if let latin = String(data: data, encoding: .isoLatin1) {
-                    content = latin
-                } else {
-                    // Last resort: decode with replacement characters for any bad bytes.
-                    content = String(decoding: data, as: UTF8.self)
-                }
-                // Split on any line ending (handles \n, \r, \r\n etc. cleanly).
-                let rawLines = content.components(separatedBy: .newlines)
-
-                self.loadNesting += 1
-                self.sourceLoadStop = false
-                self.inSlashSlashComment = false
-                self.midFileLoadAborted = false
-                defer {
-                    if self.loadNesting > 0 { self.loadNesting -= 1 }
-                    self.sourceLoadStop = false
-                    self.inSlashSlashComment = false
-                }
-
-                var loadCompleted = true
-                for raw in rawLines {
-                    // Re-evaluate echoOn on every line so that FILE-ECHO ON (or OFF) executed
-                    // from earlier lines in *this* file take effect for subsequent lines.
-                    // Also force-echo the directive line itself so "FILE-ECHO ON" at top of
-                    // file visibly enables echo for the load (and turns on for lines after it).
-                    let echoOn = (fileEchoAddr != 0) && (readCell(fileEchoAddr) != 0)
-                    let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-                    let lower = trimmed.lowercased()
-                    let isEchoToggle = lower.hasPrefix("file-echo") && (lower.contains("on") || lower.contains("off"))
-                    if echoOn || isEchoToggle {
-                        tell(raw + "\n")
-                    }
-                    if !trimmed.isEmpty {
-                        feedLine(raw)
-                        if self.sourceLoadStop {
-                            break
-                        }
-                        if self.throwActive {
-                            self.midFileLoadAborted = true
-                            loadCompleted = false
-                            break
-                        }
-                        if errorFlag {
-                            tell("? FLOAD aborted after error in \(target.lastPathComponent)\n")
-                            errorFlag = false
-                            self.midFileLoadAborted = true
-                            loadCompleted = false
-                            if !self.exceptionFrames.isEmpty {
-                                self.throwFileIOError("? FLOAD aborted after error in \(target.lastPathComponent)")
-                            }
-                            break
-                        }
-                    }
-                }
-                guard loadCompleted else {
-                    self.pendingFloadSpec = ""
-                    return false
-                }
-                let specToRegister = registerSpec ?? self.pendingFloadSpec
-                if !specToRegister.isEmpty {
-                    self.nameJoinSpec(specToRegister)
-                } else {
-                    self.nameJoinSpec(url.lastPathComponent)
-                }
+            let (fid, ior) = self.openTextFileForInterpret(at: target.path)
+            guard ior == self.FILE_IO_SUCCESS else { continue }
+            self.midFileLoadAborted = false
+            self.includeFileInterpret(Int(fid), closeWhenDone: true, loadLabel: "FLOAD")
+            if self.midFileLoadAborted || self.throwActive {
                 self.pendingFloadSpec = ""
-                return true  // success on this candidate
-            } catch {
-                // try next candidate (literal then auto-.fth for bare FLOAD names)
+                return false
             }
+            let specToRegister = registerSpec ?? self.pendingFloadSpec
+            if !specToRegister.isEmpty {
+                self.nameJoinSpec(specToRegister)
+            } else {
+                self.nameJoinSpec(target.lastPathComponent)
+            }
+            self.pendingFloadSpec = ""
+            return true
         }
         self.pendingFloadSpec = ""
         let reportURL = candidates.last ?? url
@@ -1326,42 +1407,35 @@ public final class TZForth {
         return resolvedURL(for: spec)
     }
 
+    /// Push a 64-bit file offset as a double-cell (high = 0).
     private func pushUD(_ ud: UInt64) {
-        push(Cell(ud & 0xffff_ffff))
-        push(Cell((ud >> 32) & 0xffff_ffff))
+        self.push(Cell(Int(ud)))
+        self.push(0)
     }
 
     private func popUD() -> UInt64 {
-        let high = UInt64(bitPattern: Int64(pop()))
-        let low = UInt64(bitPattern: Int64(pop()))
-        return (high << 32) | low
+        _ = self.pop()
+        return self.unsignedCell(self.pop())
     }
 
-    /// Low 32 bits of a double-cell's lower stack item (TZForth double layout).
-    private func doubleLowMask(_ lo: Cell) -> UInt64 {
-        UInt64(bitPattern: Int64(lo)) & 0xffff_ffff
+    private func popSignedDouble() -> Int128 {
+        let pair = self.popDoubleStack()
+        return self.assembleSignedDouble(lo: pair.lo, hi: pair.hi)
     }
 
-    private func popSignedDouble() -> Int64 {
-        let hi = pop()
-        let lo = pop()
-        return (Int64(hi) << 32) | Int64(self.doubleLowMask(lo))
+    private func popUnsignedDouble() -> UInt128 {
+        let pair = self.popDoubleStack()
+        return self.assembleUnsignedDouble(lo: pair.lo, hi: pair.hi)
     }
 
-    private func popUnsignedDouble() -> UInt64 {
-        let hi = UInt64(bitPattern: Int64(pop()))
-        let lo = self.doubleLowMask(pop())
-        return (hi << 32) | lo
+    private func pushSignedDouble(_ d: Int128) {
+        let parts = self.disassembleSignedDouble(d)
+        self.pushDoubleStack(lo: parts.lo, hi: parts.hi)
     }
 
-    private func pushSignedDouble(_ d: Int64) {
-        self.push(Cell(Int(d & 0xffff_ffff)))
-        self.push(Cell(Int((d >> 32) & 0xffff_ffff)))
-    }
-
-    private func pushUnsignedDouble(_ ud: UInt64) {
-        self.push(Cell(Int(ud & 0xffff_ffff)))
-        self.push(Cell(Int((ud >> 32) & 0xffff_ffff)))
+    private func pushUnsignedDouble(_ ud: UInt128) {
+        let parts = self.disassembleUnsignedDouble(ud)
+        self.pushDoubleStack(lo: parts.lo, hi: parts.hi)
     }
 
     private func digitValue(_ ch: Character, base: Int) -> Int? {
@@ -1393,20 +1467,24 @@ public final class TZForth {
         }
         if stem.isEmpty { return nil }
         let b = max(2, min(36, base))
-        var ud: UInt64 = 0
+        var ud: UInt128 = 0
         for ch in stem {
             guard let d = self.digitValue(ch, base: b) else { return nil }
-            ud = ud * UInt64(b) + UInt64(d)
+            ud = ud * UInt128(b) + UInt128(d)
         }
-        var sd = Int64(bitPattern: ud)
+        var sd = Int128(ud)
         if negative { sd = -sd }
-        return (Cell(Int(sd & 0xffff_ffff)), Cell(Int((sd >> 32) & 0xffff_ffff)))
+        let parts = self.disassembleSignedDouble(sd)
+        return (parts.lo, parts.hi)
     }
 
     private func formatSignedDouble(lo: Cell, hi: Cell, base: Cell) -> String {
-        let d = (Int64(hi) << 32) | Int64(self.doubleLowMask(lo))
+        let d = self.assembleSignedDouble(lo: lo, hi: hi)
         let b = Int(max(2, min(36, base)))
-        return String(d, radix: b).uppercased()
+        if d < 0 {
+            return "-" + String(UInt128(-d), radix: b).uppercased()
+        }
+        return String(UInt128(d), radix: b).uppercased()
     }
 
     private func compileDoubleLiteral(_ lo: Cell, _ hi: Cell) {
@@ -1609,7 +1687,11 @@ public final class TZForth {
         if self.evaluateNesting > 0 {
             self.currentSourceId = 0
         } else if self.loadNesting > 0 {
-            self.currentSourceId = 1
+            if self.interpreterInputFileId >= 2 {
+                self.currentSourceId = self.interpreterInputFileId
+            } else {
+                self.currentSourceId = 1
+            }
         } else {
             self.currentSourceId = -1
         }
@@ -1650,7 +1732,7 @@ public final class TZForth {
         interpreterInputFileId = frame.interpreterInputFileId
     }
 
-    private func includeFileInterpret(_ fileId: Int, closeWhenDone: Bool) {
+    private func includeFileInterpret(_ fileId: Int, closeWhenDone: Bool, loadLabel: String = "INCLUDE-FILE") {
         switch self.fileIdStatus(fileId) {
         case .invalid:
             self.throwInvalidFileId("? INCLUDE-FILE: invalid fileid")
@@ -1666,17 +1748,27 @@ public final class TZForth {
         currentSourceId = Cell(fileId)
         loadNesting += 1
         sourceLoadStop = false
+        self.inSlashSlashComment = false
         defer {
             if loadNesting > 0 { loadNesting -= 1 }
             popInputSourceFrame()
+            interpreterInputFileId = 0
             if closeWhenDone {
                 _ = closeFileEntry(fileId, flush: false)
             }
+            self.sourceLoadStop = false
+            self.inSlashSlashComment = false
         }
         self.midFileLoadAborted = false
         while refillFromFile(fileId) {
             validateAndRepairSystemState()
-            runInterpreter()
+            let raw = self.sourceBufferLineString()
+            self.echoSourceLineIfNeeded(raw)
+            let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !trimmed.isEmpty {
+                runInterpreter()
+                self.finishInterpretedLoadLine()
+            }
             // Hayes ~ / successful ?~~ leaves >IN at end-of-line; drop any stale queue tail.
             if Int(self.readCell(self.IN)) >= self.currentSourceLen {
                 self.inputQueue.removeAll(keepingCapacity: true)
@@ -1688,10 +1780,10 @@ public final class TZForth {
             }
             if errorFlag {
                 self.midFileLoadAborted = true
-                self.tell("? INCLUDE-FILE aborted after error in file \(fileId)\n")
+                self.tell("? \(loadLabel) aborted after error in file \(fileId)\n")
                 self.errorFlag = false
                 if !self.exceptionFrames.isEmpty {
-                    self.throwFileIOError("? INCLUDE-FILE aborted after error in file \(fileId)")
+                    self.throwFileIOError("? \(loadLabel) aborted after error in file \(fileId)")
                 }
                 break
             }
@@ -1810,12 +1902,12 @@ public final class TZForth {
         defer { self.currentlyLoadingSpec = nil }
         self.nameJoin(caddr: caddr, u: u)
         let url = self.pathURLFromCounted(caddr, u)
-        let (fid, ior) = self.openFileAtPath(url.path, fam: self.FAM_RDONLY, create: false)
+        let (fid, ior) = self.openTextFileForInterpret(at: url.path)
         if ior != self.FILE_IO_SUCCESS {
             self.throwFileNotFound("? INCLUDED could not open '\(url.lastPathComponent)'")
             return
         }
-        self.includeFileInterpret(Int(fid), closeWhenDone: true)
+        self.includeFileInterpret(Int(fid), closeWhenDone: true, loadLabel: "INCLUDED")
     }
 
     // CHDIR support (used by the CHDIR word)
@@ -2580,9 +2672,9 @@ public final class TZForth {
         swapID = register("SWAP")  { let b = self.pop(); let a = self.pop(); self.push(b); self.push(a) }
         _ = register("OVER")  { let b = self.pop(); let a = self.pop(); self.push(a); self.push(b); self.push(a) }
 
-        _ = register("+")     { let b = self.pop(); let a = self.pop(); self.push(a + b) }
-        _ = register("-")     { let b = self.pop(); let a = self.pop(); self.push(a - b) }
-        _ = register("*")     { let b = self.pop(); let a = self.pop(); self.push(a * b) }
+        _ = register("+")     { let b = self.pop(); let a = self.pop(); self.push(self.cellAdd(a, b)) }
+        _ = register("-")     { let b = self.pop(); let a = self.pop(); self.push(self.cellSub(a, b)) }
+        _ = register("*")     { let b = self.pop(); let a = self.pop(); self.push(self.cellMul(a, b)) }
         _ = register("/MOD")  {
             let b = self.pop(); let a = self.pop()
             if b == 0 {
@@ -2601,61 +2693,69 @@ public final class TZForth {
             let n3 = self.pop(); let n2 = self.pop(); let n1 = self.pop()
             if self.throwActive { return }
             if n3 == 0 { self.throwDivisionByZero(); return }
-            let prod = n1 * n2
-            self.push( prod % n3 ); self.push( prod / n3 )
+            let prod = Int128(n1) * Int128(n2)
+            let divisor = Int128(n3)
+            self.push(self.cellFromInt128(prod % divisor))
+            self.push(self.cellFromInt128(prod / divisor))
         }
         _ = register("*/") {
             let n3 = self.pop(); let n2 = self.pop(); let n1 = self.pop()
             if self.throwActive { return }
             if n3 == 0 { self.throwDivisionByZero(); return }
-            // ANS: M* double-cell product, then divide by n3 (trunc toward zero, same as /).
-            let prod = Int64(n1) * Int64(n2)
-            self.push(Cell(prod / Int64(n3)))
+            let prod = Int128(n1) * Int128(n2)
+            self.push(self.cellFromInt128(prod / Int128(n3)))
         }
         _ = register("2*") { let a = self.pop(); self.push(a << 1) }
         _ = register("2/") { let a = self.pop(); self.push(a >> 1) }
         _ = register("M*") {
             let b = self.pop(); let a = self.pop()
-            let prod = Int64(a) * Int64(b)
-            self.push( Cell( prod & 0xffffffff ) )
-            self.push( Cell( (prod >> 32) & 0xffffffff ) )
+            self.pushSignedDouble(Int128(a) * Int128(b))
         }
         _ = register("FM/MOD") {
-            let n = self.pop(); let dlow = self.pop(); let dhigh = self.pop()
-            let d = (dhigh << 32) | (dlow & 0xffffffff)
+            let n = self.pop()
+            let (dLo, dHi) = self.popDoubleStack()
+            let d = self.assembleSignedDouble(lo: dLo, hi: dHi)
             if n == 0 { self.throwDivisionByZero(); return }
-            var quot = d / n
-            var rem = d % n
-            if (rem < 0) != (n < 0) && rem != 0 { rem += n; quot -= (n > 0 ? 1 : -1) }
-            self.push(rem); self.push(quot)
+            let divisor = Int128(n)
+            var quot = d / divisor
+            var rem = d % divisor
+            if rem != 0 && ((d < 0) != (divisor < 0)) {
+                quot -= 1
+                rem += divisor
+            }
+            self.push(self.cellFromInt128(rem))
+            self.push(self.cellFromInt128(quot))
         }
         _ = register("SM/REM") {
-            let n = self.pop(); let dlow = self.pop(); let dhigh = self.pop()
-            let d = (dhigh << 32) | (dlow & 0xffffffff)
+            let n = self.pop()
+            let (dLo, dHi) = self.popDoubleStack()
+            let d = self.assembleSignedDouble(lo: dLo, hi: dHi)
             if n == 0 { self.throwDivisionByZero(); return }
-            self.push( d % n ); self.push( d / n )
+            let divisor = Int128(n)
+            self.push(self.cellFromInt128(d % divisor))
+            self.push(self.cellFromInt128(d / divisor))
         }
         _ = register("U<") { let b = self.pop(); let a = self.pop(); let ua = self.unsignedCell(a); let ub = self.unsignedCell(b); self.push( ua < ub ? -1 : 0 ) }
         _ = register("U>") { let b = self.pop(); let a = self.pop(); let ua = self.unsignedCell(a); let ub = self.unsignedCell(b); self.push( ua > ub ? -1 : 0 ) }
         _ = register("UM*") {
             let b = self.pop(); let a = self.pop()
-            let prod = self.unsignedCell(a) * self.unsignedCell(b)
-            self.push( Cell( prod & 0xffffffff ) )
-            self.push( Cell( (prod >> 32) & 0xffffffff ) )
+            self.pushUnsignedDouble(UInt128(self.unsignedCell(a)) * UInt128(self.unsignedCell(b)))
         }
         _ = register("UM/MOD") {
-            let u = self.pop(); let dlow = self.pop(); let dhigh = self.pop()
-            let d = self.unsignedDouble(low: dlow, high: dhigh)
+            let u = self.pop()
+            let (dLo, dHi) = self.popDoubleStack()
+            let d = self.assembleUnsignedDouble(lo: dLo, hi: dHi)
             if u == 0 { self.throwDivisionByZero(); return }
-            let uu = self.unsignedCell(u)
-            let quot = d / uu
-            let rem = d % uu
-            self.push( Cell( rem & 0xffffffff ) ); self.push( Cell( quot & 0xffffffff ) )
+            let divisor = UInt128(self.unsignedCell(u))
+            let quot = d / divisor
+            let rem = d % divisor
+            self.push(self.cellFromUInt128(rem))
+            self.push(self.cellFromUInt128(quot))
         }
         _ = register("+!") {
             let addr = Int(self.pop()); let n = self.pop()
             let old = self.readCell(addr)
-            let newVal = old + n
+            let newVal = self.cellAdd(old, n)
             if addr == self.IN {
                 self.writeInOffset(newVal)
                 self.notifyInChanged(storedValue: self.readCell(self.IN), previousValue: old, isStore: false)
@@ -2711,7 +2811,10 @@ public final class TZForth {
             if self.throwActive { return }
             if addr == self.IN {
                 let oldIn = self.readCell(self.IN)
-                if val == 0 && self.returnStackPointer > 1 { self.inVarZeroedInColon = true }
+                if val == 0 && self.returnStackPointer > 1 {
+                    self.inVarZeroedInColon = true
+                    self.inVarZeroFetchAfterZero = false
+                }
                 self.writeInOffset(val)
                 if self.throwActive { return }
                 self.notifyInChanged(storedValue: self.readCell(self.IN), previousValue: oldIn, isStore: true)
@@ -2723,6 +2826,9 @@ public final class TZForth {
         fetchID = register("@")     {
             let addr = Int(self.pop())
             if self.throwActive { return }
+            if addr == self.IN && self.inVarZeroedInColon {
+                self.inVarZeroFetchAfterZero = true
+            }
             let val = self.readCell(addr)
             if self.throwActive { return }
             self.push(val)
@@ -2987,14 +3093,13 @@ public final class TZForth {
             if hdr == 0 { self.kernelThrow(StdThrow.undefinedWord, message: "? POSTPONE ? " + name); return }
             let cfa = self.getCFA(hdr)
             let isImm = (self.readByte(Int(hdr) + 8) & self.FLAG_IMMEDIATE) != 0
+            // Defer compilation semantics to run time (fixes GT4/GT5 and other POSTPONE immediates).
+            self.push(self.litID); self.comma()
+            self.emitCompileReference(xt: cfa)
             if isImm {
-                // Postpone the *execution* semantics: when this def runs, execute the (imm) word.
-                self.push(self.litID); self.comma()
-                self.emitCompileReference(xt: cfa)
-                self.push(self.executeID); self.comma()
+                self.push(self.postponeImmID); self.comma()
             } else {
-                // Normal compile of reference (compilation semantics for non-imm)
-                self.emitCompileReference(xt: cfa)
+                self.push(self.postponeCompID); self.comma()
             }
         }
 
@@ -3051,6 +3156,8 @@ public final class TZForth {
 
             self.writeCell(self.STATE, 0)
             self.loopControlStack.removeAll()  // clean any leftover from unbalanced loops in this def
+            self.whileRepeatStack.removeAll()
+            self.whileNestStack.removeAll()
             self.resetLocalCompileState()
         }
 
@@ -3177,7 +3284,7 @@ public final class TZForth {
                 return
             }
             let here = self.readCell(self.DP_ADDR)
-            self.push(here)   // destination address for backward branches (AGAIN, UNTIL, REPEAT)
+            self.whileRepeatStack.append(here)
         }
 
         _ = register("AGAIN", immediate: true) {
@@ -3185,7 +3292,11 @@ public final class TZForth {
                 self.throwCompileOnly("? AGAIN only allowed while compiling a word")
                 return
             }
-            let dest = self.pop()
+            guard !self.whileRepeatStack.isEmpty else {
+                self.throwInvalidToken("? AGAIN without BEGIN")
+                return
+            }
+            let dest = self.whileRepeatStack.last!
             self.push(self.branchID); self.comma()          // compile the unconditional branch token
             let here = self.readCell(self.DP_ADDR)
             let offset = dest - (here + 8)                  // offset from after the offset cell
@@ -3197,7 +3308,11 @@ public final class TZForth {
                 self.throwCompileOnly("? UNTIL only allowed while compiling a word")
                 return
             }
-            let dest = self.pop()
+            guard !self.whileRepeatStack.isEmpty else {
+                self.throwInvalidToken("? UNTIL without BEGIN")
+                return
+            }
+            let dest = self.whileRepeatStack.last!
             self.push(self.zeroBranchID); self.comma()
             let here = self.readCell(self.DP_ADDR)
             let offset = dest - (here + 8)
@@ -3209,16 +3324,21 @@ public final class TZForth {
                 self.throwCompileOnly("? WHILE only allowed while compiling a word")
                 return
             }
-            // Compile a 0BRANCH with a placeholder offset (0 for now).
-            // The offset will be resolved later by REPEAT.
+            let repeatDest: Cell
+            if !self.whileNestStack.isEmpty {
+                repeatDest = self.whileNestStack.removeLast()
+            } else if !self.whileRepeatStack.isEmpty {
+                repeatDest = self.whileRepeatStack.removeLast()
+            } else {
+                self.throwInvalidToken("? WHILE without BEGIN")
+                return
+            }
             self.push(self.zeroBranchID); self.comma()
-            let placeholderAddr = self.readCell(self.DP_ADDR)  // address of the offset cell we just reserved
-            self.push(0); self.comma()                      // placeholder offset (will be patched by REPEAT)
-
-            // Leave the address of the placeholder on the compile-time stack
-            // so REPEAT can resolve the forward branch.
-            // Stack transition (at compile time):  ... begin-dest   -->   ... begin-dest  placeholderAddr
+            let placeholderAddr = self.readCell(self.DP_ADDR)
+            self.push(0); self.comma()
             self.push(placeholderAddr)
+            self.whileRepeatStack.append(repeatDest)
+            self.whileNestStack.append(self.readCell(self.DP_ADDR))
         }
 
         _ = register("REPEAT", immediate: true) {
@@ -3226,18 +3346,21 @@ public final class TZForth {
                 self.throwCompileOnly("? REPEAT only allowed while compiling a word")
                 return
             }
-            let origPlaceholder = self.pop()   // address of the forward 0BRANCH offset left by WHILE
-            let dest = self.pop()              // the BEGIN destination
+            let origPlaceholder = self.pop()
+            guard !self.whileRepeatStack.isEmpty else {
+                self.throwInvalidToken("? REPEAT without WHILE")
+                return
+            }
+            let repeatDest = self.whileRepeatStack.removeLast()
+            if !self.whileNestStack.isEmpty {
+                _ = self.whileNestStack.removeLast()
+            }
 
-            // First, compile unconditional branch back to BEGIN
             self.push(self.branchID); self.comma()
             let here = self.readCell(self.DP_ADDR)
-            let backOffset = dest - (here + 8)
+            let backOffset = repeatDest - (here + 8)
             self.push(backOffset); self.comma()
 
-            // Now resolve the forward branch that WHILE left behind.
-            // The code after REPEAT (current HERE) is where the 0BRANCH should jump to
-            // when its condition was false.
             let afterRepeat = self.readCell(self.DP_ADDR)
             let forwardOffset = afterRepeat - (origPlaceholder + 8)
             self.writeCell(Int(origPlaceholder), forwardOffset)
@@ -3401,6 +3524,35 @@ public final class TZForth {
             }
         }
 
+        // (postpone-comp) ( xt -- )  Run-time helper for POSTPONE of a non-immediate word.
+        self.postponeCompID = register("(postpone-comp)") {
+            let xt = self.pop()
+            if self.readCell(self.STATE) != 0 {
+                self.emitCompileReference(xt: xt)
+            } else if xt < Cell(self.MAX_BUILTIN_ID) {
+                self.execute(cfa: xt, firstCell: xt)
+            } else {
+                let firstCell = self.readCell(Int(xt))
+                self.execute(cfa: xt, firstCell: firstCell)
+            }
+        }
+
+        // (postpone-imm) ( xt -- )  Run-time helper for POSTPONE of an immediate word.
+        // When compiling, append LIT xt EXECUTE; when interpreting, execute xt.
+        self.postponeImmID = register("(postpone-imm)") {
+            let xt = self.pop()
+            if self.readCell(self.STATE) != 0 {
+                self.push(self.litID); self.comma()
+                self.emitCompileReference(xt: xt)
+                self.push(self.executeID); self.comma()
+            } else if xt < Cell(self.MAX_BUILTIN_ID) {
+                self.execute(cfa: xt, firstCell: xt)
+            } else {
+                let firstCell = self.readCell(Int(xt))
+                self.execute(cfa: xt, firstCell: firstCell)
+            }
+        }
+
         // FIND ( c-addr -- c-addr 0 | xt 1 | xt -1 )
         // c-addr is counted string (as from WORD). Returns 0 + orig if not found,
         // or xt and flag (+1 immediate, -1 not) if found. Uses same xt logic as ' .
@@ -3449,9 +3601,15 @@ public final class TZForth {
                 self.writeByte(self.SOURCE_BUFFER + i, self.readByte(caddr + i))
             }
             self.evaluateNesting += 1
+            self.evaluateSourceAddr = Cell(caddr)
+            self.evaluateSourceLen = Cell(u)
             self.currentSourceId = 0
             self.runInterpreter()
             self.evaluateNesting -= 1
+            if self.evaluateNesting == 0 {
+                self.evaluateSourceAddr = 0
+                self.evaluateSourceLen = 0
+            }
             // Always restore outer input/source (even on caught THROW) before propagating throwActive.
             self.inputQueue = savedQueue
             self.writeCell(self.IN, savedIN)
@@ -3524,9 +3682,8 @@ public final class TZForth {
         _ = register(">NUMBER") {
             let u1 = Int(self.pop())
             let caddr1 = Int(self.pop())
-            let udHigh = self.pop()
-            let udLow = self.pop()
-            var ud = (UInt64(bitPattern: Int64(udHigh)) << 32) | UInt64(bitPattern: Int64(udLow))
+            let (udLow, udHigh) = self.popDoubleStack()
+            var ud = self.assembleUnsignedDouble(lo: udLow, hi: udHigh)
             let b = max(2, min(36, self.readCell(self.BASE)))
             var i = 0
             while i < u1 {
@@ -3536,13 +3693,11 @@ public final class TZForth {
                 else if ch >= 65 && ch <= 90 { d = 10 + Int(ch) - 65 }
                 else if ch >= 97 && ch <= 122 { d = 10 + Int(ch) - 97 }
                 if d < 0 || d >= b { break }
-                ud = ud * UInt64(b) + UInt64(d)
+                ud = ud * UInt128(b) + UInt128(d)
                 i += 1
             }
-            let newHigh = Cell( (ud >> 32) & 0xffffffff )
-            let newLow = Cell( ud & 0xffffffff )
-            self.push(newLow)
-            self.push(newHigh)
+            let parts = self.disassembleUnsignedDouble(ud)
+            self.pushDoubleStack(lo: parts.lo, hi: parts.hi)
             self.push( Cell(caddr1 + i) )
             self.push( Cell(u1 - i) )
         }
@@ -3640,10 +3795,10 @@ public final class TZForth {
         _ = register("DEBUG-OFF") { self.debugEnabled = false }
 
         // === Additional words from help data (ported from GrokForthApp) to satisfy HELP ===
-        onePlusID = register("1+") { let a = self.pop(); self.push(a + 1) }
-        _ = register("1-") { let a = self.pop(); self.push(a - 1) }
-        _ = register("ABS") { let a = self.pop(); self.push( a < 0 ? -a : a ) }
-        _ = register("NEGATE") { let a = self.pop(); self.push( -a ) }
+        onePlusID = register("1+") { let a = self.pop(); self.push(self.cellAdd(a, 1)) }
+        _ = register("1-") { let a = self.pop(); self.push(self.cellSub(a, 1)) }
+        _ = register("ABS") { let a = self.pop(); self.push(a < 0 ? self.cellNegate(a) : a) }
+        _ = register("NEGATE") { let a = self.pop(); self.push(self.cellNegate(a)) }
         _ = register("MIN") { let b = self.pop(); let a = self.pop(); self.push( a < b ? a : b ) }
         _ = register("MAX") { let b = self.pop(); let a = self.pop(); self.push( a > b ? a : b ) }
         _ = register("AND") { let b = self.pop(); let a = self.pop(); self.push( a & b ) }
@@ -3651,7 +3806,16 @@ public final class TZForth {
         _ = register("XOR") { let b = self.pop(); let a = self.pop(); self.push( a ^ b ) }
         _ = register("INVERT") { let a = self.pop(); self.push( ~a ) }
         _ = register("LSHIFT") { let sh = self.pop(); let a = self.pop(); self.push( a << sh ) }
-        _ = register("RSHIFT") { let sh = self.pop(); let a = self.pop(); self.push( a >> sh ) }
+        _ = register("RSHIFT") {
+            let sh = self.pop()
+            let a = self.pop()
+            // ANS: logical right shift (zero-fill MSBs). Swift >> on Int is arithmetic.
+            if sh < 0 || sh >= Cell.bitWidth {
+                self.push(0)
+            } else {
+                self.push(Int(UInt(bitPattern: a) >> UInt(sh)))
+            }
+        }
         _ = register("ARSHIFT") { let sh = self.pop(); let a = self.pop(); self.push( a >> sh ) }
 
         toR_ID = register(">R") { self.rpush( self.pop() ) }
@@ -3760,20 +3924,28 @@ public final class TZForth {
             self.tell(s)
         }
         _ = register("M+") {
-            let n = Int64(self.pop())
+            let n = Int128(self.pop())
             let d = self.popSignedDouble()
-            self.pushSignedDouble(d &+ n)
+            self.pushSignedDouble(d + n)
         }
         _ = register("M*/") {
-            let u3 = UInt64(bitPattern: Int64(self.pop()))
-            let u2 = UInt64(bitPattern: Int64(self.pop()))
-            let u1 = UInt64(bitPattern: Int64(self.pop()))
-            if u3 == 0 {
+            let u3c = self.pop()
+            let u2c = self.pop()
+            let (dLo, dHi) = self.popDoubleStack()
+            let d = self.assembleSignedDouble(lo: dLo, hi: dHi)
+            if u3c == 0 {
                 self.throwDivisionByZero()
                 return
             }
-            let prod = u1 &* u2
-            self.pushUnsignedDouble(prod / u3)
+            let u2 = Int128(self.unsignedCell(u2c))
+            let u3 = Int128(self.unsignedCell(u3c))
+            let prod = d * u2
+            var quot = prod / u3
+            let rem = prod % u3
+            if rem != 0 && ((prod < 0) != (u3 < 0)) {
+                quot -= 1
+            }
+            self.pushSignedDouble(quot)
         }
         _ = register("2ROT") {
             let f = self.pop(); let e = self.pop(); let d = self.pop()
@@ -3804,9 +3976,9 @@ public final class TZForth {
 
         self.twoFetchID = register("2@") {
             let a = Int(self.pop())
-            let x2 = self.readCell(a)
-            let x1 = self.readCell(a + 8)
-            self.push(x1); self.push(x2)
+            let lo = self.readCell(a)
+            let hi = self.readCell(a + 8)
+            self.push(lo); self.push(hi)
         }
         self.twoStoreID = register("2!") {
             let a = Int(self.pop())
@@ -3824,7 +3996,15 @@ public final class TZForth {
 
         _ = register("WITHIN") {
             let hi = self.pop(); let lo = self.pop(); let n = self.pop()
-            self.push( (lo <= n && n < hi) ? -1 : 0 )
+            let inside: Bool
+            if lo == hi {
+                inside = false
+            } else if self.unsignedLess(lo, hi) {
+                inside = self.unsignedGreaterOrEqual(n, lo) && self.unsignedLess(n, hi)
+            } else {
+                inside = self.unsignedGreaterOrEqual(n, lo) || self.unsignedLess(n, hi)
+            }
+            self.push(inside ? -1 : 0)
         }
 
         _ = register("SPACES") { let n = Int(self.pop()); for _ in 0..<n { self.putkey(32) } }
@@ -3866,30 +4046,26 @@ public final class TZForth {
         // Pictured numeric output (core)
         _ = register("<#") { self.startPictured() }
         _ = register("#") {
-            let high = self.pop()
-            let low = self.pop()
+            let pair = self.popDoubleStack()
             let b = max(2, min(36, self.readCell(self.BASE)))
-            var ud = (UInt64(bitPattern: Int64(high)) << 32) | UInt64(bitPattern: Int64(low))
-            let digit = ud % UInt64(b)
-            ud /= UInt64(b)
-            let nh = Cell( (ud >> 32) & 0xffffffff )
-            let nl = Cell( ud & 0xffffffff )
-            self.push(nl); self.push(nh)
-            self.picturedAddDigit( Cell(digit) )
+            var ud = self.assembleUnsignedDouble(lo: pair.lo, hi: pair.hi)
+            let digit = ud % UInt128(b)
+            ud /= UInt128(b)
+            let parts = self.disassembleUnsignedDouble(ud)
+            self.pushDoubleStack(lo: parts.lo, hi: parts.hi)
+            self.picturedAddDigit(Cell(Int(digit)))
         }
         _ = register("#S") {
-            let high = self.pop()
-            let low = self.pop()
+            let pair = self.popDoubleStack()
             let b = max(2, min(36, self.readCell(self.BASE)))
-            var ud = (UInt64(bitPattern: Int64(high)) << 32) | UInt64(bitPattern: Int64(low))
+            var ud = self.assembleUnsignedDouble(lo: pair.lo, hi: pair.hi)
             repeat {
-                let digit = ud % UInt64(b)
-                ud /= UInt64(b)
-                self.picturedAddDigit( Cell(digit) )
+                let digit = ud % UInt128(b)
+                ud /= UInt128(b)
+                self.picturedAddDigit(Cell(Int(digit)))
             } while ud != 0
-            let nh = Cell( (ud >> 32) & 0xffffffff )
-            let nl = Cell( ud & 0xffffffff )
-            self.push(nl); self.push(nh)
+            let parts = self.disassembleUnsignedDouble(ud)
+            self.pushDoubleStack(lo: parts.lo, hi: parts.hi)
         }
         _ = register("#>") {
             _ = self.pop()
@@ -4149,12 +4325,14 @@ public final class TZForth {
             let xt = self.pop()
             let first = self.readCell( Int(xt) )
             let dataAddr: Cell
-            if first == self.docolID {
-                dataAddr = self.readCell( Int(xt) + 16 )
-            } else if first == self.createRuntimeID || first == self.dodoesID {
-                dataAddr = self.readCell( Int(xt) + 8 )
+            if first == self.createRuntimeID {
+                dataAddr = self.readCell(Int(xt) + 8)
+            } else if first == self.dodoesID {
+                dataAddr = xt + 16
+            } else if first == self.docolID {
+                dataAddr = self.readCell(Int(xt) + 16)
             } else {
-                dataAddr = self.readCell( Int(xt) + 16 )
+                dataAddr = self.readCell(Int(xt) + 16)
             }
             self.push( dataAddr )
         }
@@ -4190,11 +4368,16 @@ public final class TZForth {
         // SOURCE ( -- c-addr u )  Current input buffer (the line from last feedLine or EVALUATE).
         // >IN is the offset (in chars) consumed so far into it. Used by PARSE, WORD etc.
         _ = register("SOURCE") {
-            self.push( Cell( self.SOURCE_BUFFER ) )
-            self.push( Cell( self.currentSourceLen ) )
+            if self.evaluateNesting > 0 {
+                self.push(self.evaluateSourceAddr)
+                self.push(self.evaluateSourceLen)
+            } else {
+                self.push(Cell(self.SOURCE_BUFFER))
+                self.push(Cell(self.currentSourceLen))
+            }
         }
 
-        // SOURCE-ID ( -- id )  Core Ext — -1 terminal, 0 evaluate string, 1 file (FLOAD).
+        // SOURCE-ID ( -- id )  Core Ext — -1 terminal, 0 evaluate string, ≥2 open fileid.
         _ = register("SOURCE-ID") {
             self.push(self.currentSourceId)
         }
@@ -4355,8 +4538,8 @@ public final class TZForth {
             // rstack: ... limit index(top)
             let index = self.rpop()
             let limit = self.rpop()
-            let newIndex = index + 1
-            if newIndex < limit {
+            let newIndex = self.cellAdd(index, 1)
+            if self.loopShouldContinue(index: index, limit: limit, delta: 1) {
                 self.rpush(limit)
                 self.rpush(newIndex)
                 self.ip += backOffset
@@ -4374,9 +4557,8 @@ public final class TZForth {
             self.ip += 8
             let index = self.rpop()
             let limit = self.rpop()
-            let newIndex = index + delta
-            let continueLoop = (delta >= 0) ? (newIndex < limit) : (newIndex > limit)
-            if continueLoop {
+            let newIndex = self.cellAdd(index, delta)
+            if self.loopShouldContinue(index: index, limit: limit, delta: delta) {
                 self.rpush(limit)
                 self.rpush(newIndex)
                 self.ip += backOffset
@@ -5911,7 +6093,7 @@ public final class TZForth {
         self.feedLine("VOCABULARY ASSEMBLER")
 
         // file-echo variable (user can do: file-echo ON   or   file-echo OFF ).
-        // Controls whether FLOAD echoes each source line to the console as it loads.
+        // Controls whether FLOAD / INCLUDE / INCLUDE-FILE echo each source line as it loads.
         // Created via the VARIABLE word so it appears in WORDS / SEE / FORGET etc.
         // Default is 0 (off) because the data cell lives in the zeroed memory area.
         self.feedLine("VARIABLE FILE-ECHO")
@@ -6024,14 +6206,23 @@ public final class TZForth {
                     let watchInZero = !compiling && first == self.docolID
                     let savedOuterIn = watchInZero ? self.readCell(self.IN) : nil
                     let savedOuterQueue = watchInZero ? self.inputQueue : []
-                    if watchInZero { self.inVarZeroedInColon = false }
+                    if watchInZero {
+                        self.inVarZeroedInColon = false
+                        self.inVarZeroFetchAfterZero = false
+                    }
                     execute(cfa: cfa, firstCell: first)
                     if watchInZero,
                        self.inVarZeroedInColon,
                        let saved = savedOuterIn,
                        self.returnStackPointer <= 1,
-                       self.inputQueue == savedOuterQueue {
+                       self.inputQueue == savedOuterQueue,
+                       self.inVarZeroFetchAfterZero {
                         self.writeCell(self.IN, saved)
+                        self.realignInputQueueFromSource()
+                    } else if watchInZero,
+                              self.inVarZeroedInColon,
+                              self.returnStackPointer <= 1,
+                              !self.inVarZeroFetchAfterZero {
                         self.realignInputQueueFromSource()
                     } else if watchInZero, let saved = savedOuterIn, !self.inputQueue.isEmpty {
                         let nowIn = self.readCell(self.IN)
@@ -6076,8 +6267,8 @@ public final class TZForth {
 
         // Classic Forth behavior: after successfully interpreting a complete *interactive*
         // (top-level REPL) line in interpret mode, print "OK" followed by newline.
-        // During FLOAD (loadNesting > 0), we never emit these per-line OKs -- only
-        // explicit FILE-ECHO source lines (if enabled) + whatever regular output the
+        // During loaded-source interpret (loadNesting > 0), we never emit per-line OKs --
+        // only explicit FILE-ECHO source lines (if enabled) + whatever regular output the
         // interpreted source actually produces (., TYPE, EMIT, etc.).
         //
         // (No leading space so that after ".s" or CR it doesn't look indented,
@@ -6109,13 +6300,12 @@ public final class TZForth {
     /// Called when the >IN offset variable is modified (! / +!) so the byte queue matches SOURCE.
     /// Hayes prelimtest uses >IN +! / SOURCE >IN ! inside colon words (?~~, Error, ~).
     private func notifyInChanged(storedValue: Cell, previousValue: Cell, isStore: Bool) {
-        if isStore && storedValue == 0 && previousValue > 0 {
-            // t6in / RESCAN?: do not rewind the byte queue to line start.
-            return
-        }
         if storedValue != previousValue {
-            self.realignInputQueueFromSource()
-            self.adjustHayesTildeSkipIfNeeded()
+            let evalRestart = isStore && storedValue == 0 && previousValue > 0 && self.evaluateNesting > 0
+            if storedValue != 0 || evalRestart {
+                self.realignInputQueueFromSource()
+                self.adjustHayesTildeSkipIfNeeded()
+            }
         }
     }
 
@@ -6328,7 +6518,7 @@ public final class TZForth {
     }
 
     // Helper used by WORD and CHAR (and string parsers). Consumes from inputQueue
-    // (which receives appended lines from feedLine, whether REPL or FLOAD content).
+    // (which receives appended lines from feedLine for REPL, or refillFromFile for loaded files).
     // Skips leading exact delims, collects until delim or line-end, builds counted string
     // (len byte + chars + trailing NUL) in the next STRING_BUFFER slot. Returns c-addr.
     // The trailing delim (if any) is left in queue. Transient — ring may reuse slots.
@@ -6373,6 +6563,10 @@ public final class TZForth {
         // Skip opening double-quote (ascii or smart)
         while !self.inputQueue.isEmpty {
             if !self.consumeDelim(34) { break }
+        }
+        // Skip leading spaces before the string body (matches S" / WORD rules; Hayes SSQ*).
+        while let b = self.inputQueue.first, b <= 32 && b != 10 && b != 13 {
+            _ = self.consumeInput()
         }
 
         var collected: [UInt8] = []
@@ -6472,6 +6666,8 @@ public final class TZForth {
             inPos: self.readCell(self.IN),
             inputQueue: self.inputQueue,
             loopControlStack: self.loopControlStack,
+            whileRepeatStack: self.whileRepeatStack,
+            whileNestStack: self.whileNestStack,
             localFramesDepth: self.localFrames.count
         )
     }
@@ -6491,6 +6687,8 @@ public final class TZForth {
         }
         self.inputQueue = frame.inputQueue
         self.loopControlStack = frame.loopControlStack
+        self.whileRepeatStack = frame.whileRepeatStack
+        self.whileNestStack = frame.whileNestStack
         while self.localFrames.count > frame.localFramesDepth {
             self.localFrames.removeLast()
         }
@@ -7043,6 +7241,8 @@ public final class TZForth {
         pendingFloadSpec = ""
         currentlyLoadingSpec = nil
         loopControlStack.removeAll()
+        whileRepeatStack.removeAll()
+        whileNestStack.removeAll()
         self.clearAllLocalFrames()
         self.exceptionFrames.removeAll()
         self.throwActive = false
@@ -7094,6 +7294,8 @@ public final class TZForth {
         pendingEditURL = nil
         pendingLoadURL = nil
         loopControlStack.removeAll()
+        whileRepeatStack.removeAll()
+        whileNestStack.removeAll()
         self.inSlashSlashComment = false
         self.sourceLoadStop = false
         self.pnoPtr = self.pnoBufferAddr + self.PNO_BUFFER_SIZE
@@ -7102,7 +7304,7 @@ public final class TZForth {
         writeCell(CURRENT, LATEST)
 
         let wasLoading = self.loadNesting > 0
-        // Do not zero loadNesting here; the loadFileContents defer (or its error path) will
+        // Do not zero loadNesting here; includeFileInterpret's defer (or its error path) will
         // handle the decrement when the load aborts/ends. Zeroing here could make later \S
         // in the same file see nesting==0 and fail to stop.
 

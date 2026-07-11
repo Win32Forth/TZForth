@@ -506,6 +506,9 @@ public final class TZForth {
         ("COMPARE", "( c-addr1 u1 c-addr2 u2 -- n )", "compare strings (-1/0/1)"),
         ("/STRING", "( c-addr u n -- c-addr' u' )", "adjust string by n characters"),
         ("-TRAILING","( c-addr u -- c-addr' u' )", "remove trailing spaces"),
+        ("REPLACES", "( c-addr1 u1 c-addr2 u2 -- )", "define text substitution for %name%"),
+        ("SUBSTITUTE","( c-addr1 u1 c-addr2 u2 -- c-addr2 u3 n )", "apply %name% substitutions"),
+        ("UNESCAPE", "( c-addr1 u1 c-addr2 -- c-addr2 u2 )", "double each % in string"),
         ("SEARCH",  "( c-addr1 u1 c-addr2 u2 -- c-addr3 u3 flag )", "search for substring"),
         ("SLITERAL","( c-addr u -- )",    "compile string literal (immediate; run-time c-addr u)"),
         ("ALLOCATE","( u -- a-addr ior )","allocate u bytes from heap (ior 0 = success)"),
@@ -833,6 +836,9 @@ public final class TZForth {
     private var abortQuoteID: Cell = 0  // runtime for (ABORT")
     /// Next offset within STRING_BUFFER for ring allocation (512-byte slots, wraps at 4 KB).
     private var stringBufferAllocOffset: Int = 0
+    /// REPLACES / SUBSTITUTE substitution table (name → replacement bytes).
+    private var textSubstitutions: [String: [UInt8]] = [:]
+    private static let maxSubstitutionTextLen = 255
 
     // MARK: - Init
 
@@ -2369,6 +2375,117 @@ public final class TZForth {
         return u1 < u2 ? -1 : 1
     }
 
+    private func substitutionNameFromMemory(caddr: Int, u: Int) -> String? {
+        if u <= 0 { return "" }
+        var bytes: [UInt8] = []
+        bytes.reserveCapacity(u)
+        for i in 0..<u {
+            let b = self.readByte(caddr + i)
+            if b == 37 { return nil } // '%' in substitution name is ambiguous
+            bytes.append(b)
+        }
+        return String(bytes: bytes, encoding: .utf8) ?? String(bytes: bytes, encoding: .ascii)
+    }
+
+    private func lookupSubstitutionText(name: String) -> [UInt8]? {
+        self.textSubstitutions[name]
+    }
+
+    /// ANS SUBSTITUTE — left-to-right, non-recursive %name% expansion.
+    private func substituteText(srcCaddr: Int, srcLen: Int, destCaddr: Int, destCap: Int) -> (u3: Int, n: Cell)? {
+        if srcCaddr == destCaddr { return nil }
+        if srcLen > 0 && destCap > 0 {
+            let srcEnd = srcCaddr + srcLen
+            let destEnd = destCaddr + destCap
+            if srcCaddr < destEnd && destCaddr < srcEnd { return nil } // overlapping buffers
+        }
+        var out = 0
+        var subs = 0
+        var pos = 0
+        let pct: UInt8 = 37
+        while pos < srcLen {
+            let ch = self.readByte(srcCaddr + pos)
+            if ch != pct {
+                if out >= destCap { return nil }
+                self.writeByte(destCaddr + out, ch)
+                out += 1
+                pos += 1
+                continue
+            }
+            if pos + 1 >= srcLen {
+                if out >= destCap { return nil }
+                self.writeByte(destCaddr + out, pct)
+                out += 1
+                pos += 1
+                continue
+            }
+            let next = self.readByte(srcCaddr + pos + 1)
+            if next == pct {
+                if out >= destCap { return nil }
+                self.writeByte(destCaddr + out, pct)
+                out += 1
+                pos += 2
+                continue
+            }
+            var end = pos + 1
+            while end < srcLen && self.readByte(srcCaddr + end) != pct {
+                end += 1
+            }
+            if end >= srcLen {
+                let tailLen = srcLen - pos
+                if out + tailLen > destCap { return nil }
+                for i in 0..<tailLen {
+                    self.writeByte(destCaddr + out + i, self.readByte(srcCaddr + pos + i))
+                }
+                out += tailLen
+                break
+            }
+            let nameLen = end - (pos + 1)
+            if nameLen == 0 {
+                if out >= destCap { return nil }
+                self.writeByte(destCaddr + out, pct)
+                out += 1
+                pos += 2
+                continue
+            }
+            if let name = self.substitutionNameFromMemory(caddr: srcCaddr + pos + 1, u: nameLen),
+               let repl = self.lookupSubstitutionText(name: name) {
+                if out + repl.count > destCap { return nil }
+                for (i, b) in repl.enumerated() {
+                    self.writeByte(destCaddr + out + i, b)
+                }
+                out += repl.count
+                subs += 1
+                pos = end + 1
+            } else {
+                let span = end + 1 - pos
+                if out + span > destCap { return nil }
+                for i in 0..<span {
+                    self.writeByte(destCaddr + out + i, self.readByte(srcCaddr + pos + i))
+                }
+                out += span
+                pos = end + 1
+            }
+        }
+        return (out, Cell(subs))
+    }
+
+    /// ANS UNESCAPE — copy src to dest, doubling each % character.
+    private func unescapeText(srcCaddr: Int, srcLen: Int, destCaddr: Int) -> Int? {
+        var out = 0
+        let pct: UInt8 = 37
+        for i in 0..<srcLen {
+            let ch = self.readByte(srcCaddr + i)
+            if ch == pct {
+                self.writeByte(destCaddr + out, pct)
+                out += 1
+            }
+            self.writeByte(destCaddr + out, ch)
+            out += 1
+        }
+        return out
+    }
+
     /// ANS SEARCH — first occurrence; empty needle matches at start.
     private func searchCharacterStrings(hayCaddr: Int, hayLen: Int, needleCaddr: Int, needleLen: Int) -> (caddr: Int, u: Int, found: Bool) {
         if needleLen == 0 {
@@ -3471,7 +3588,9 @@ public final class TZForth {
                     self.push(toEmit); self.comma()
                 }
             }
+            // Case value is compiled before OF (e.g. LIT 1 or R@ LIT 1). Compare selector (under TOS) with value (TOS).
             emitRef("OVER")
+            emitRef("SWAP")
             emitRef("=")
             // The IF emit:
             self.push(self.zeroBranchID); self.comma()
@@ -3492,7 +3611,7 @@ public final class TZForth {
             let newPhAddr = self.readCell(self.DP_ADDR)
             self.push(0); self.comma()
             self.push(newPhAddr)
-            // resolve prev to after the branch we just emitted
+            // False OF branches land after this BRANCH (start of next case or default).
             let here = self.readCell(self.DP_ADDR)
             let off = here - (prevPh + 8)
             self.writeCell(Int(prevPh), off)
@@ -3503,8 +3622,15 @@ public final class TZForth {
                 self.throwCompileOnly("? ENDCASE only allowed while compiling a word")
                 return
             }
-            // Resolve the pending forward branches from ENDOFs (and last false OF) to the cleanup point.
-            // At this moment HERE is right after the default code (if any). Patch targets the upcoming DROP.
+            // Emit DROP first (default path still has the selector on stack).
+            let hdr = self.findWord("DROP")
+            if hdr != 0 {
+                let cfa = self.getCFA(hdr)
+                let first = self.readCell(Int(cfa))
+                let toEmit = (first < Cell(self.MAX_BUILTIN_ID) && first != self.docolID) ? first : cfa
+                self.push(toEmit); self.comma()
+            }
+            // Resolve ENDOF forward branches to *after* the DROP so matched cases keep their result.
             while true {
                 let s = self.spGet()
                 if s <= 1 { break }
@@ -3513,14 +3639,6 @@ public final class TZForth {
                 let here = self.readCell(self.DP_ADDR)
                 let off = here - (x + 8)
                 self.writeCell(Int(x), off)
-            }
-            // Now emit the final DROP (cleans the case selector for default path and after patches).
-            let hdr = self.findWord("DROP")
-            if hdr != 0 {
-                let cfa = self.getCFA(hdr)
-                let first = self.readCell(Int(cfa))
-                let toEmit = (first < Cell(self.MAX_BUILTIN_ID) && first != self.docolID) ? first : cfa
-                self.push(toEmit); self.comma()
             }
         }
 
@@ -4213,6 +4331,59 @@ public final class TZForth {
             self.push(Cell(hit.caddr))
             self.push(Cell(hit.u))
             self.push(hit.found ? -1 : 0)
+        }
+
+        _ = register("REPLACES") {
+            if self.readCell(self.STATE) != 0 {
+                self.kernelThrow(StdThrow.compileOnly, message: "? REPLACES not allowed while compiling")
+                return
+            }
+            let nameLen = Int(self.pop())
+            let nameCaddr = Int(self.pop())
+            let textLen = Int(self.pop())
+            let textCaddr = Int(self.pop())
+            guard let name = self.substitutionNameFromMemory(caddr: nameCaddr, u: nameLen) else {
+                self.kernelThrow(StdThrow.illegalArgument, message: "? REPLACES name contains %")
+                return
+            }
+            if textLen > Self.maxSubstitutionTextLen {
+                self.kernelThrow(StdThrow.illegalArgument, message: "? REPLACES text too long")
+                return
+            }
+            var bytes: [UInt8] = []
+            bytes.reserveCapacity(textLen)
+            for i in 0..<textLen {
+                bytes.append(self.readByte(textCaddr + i))
+            }
+            self.textSubstitutions[name] = bytes
+        }
+
+        _ = register("SUBSTITUTE") {
+            let destCap = Int(self.pop())
+            let destCaddr = Int(self.pop())
+            let srcLen = Int(self.pop())
+            let srcCaddr = Int(self.pop())
+            if let result = self.substituteText(srcCaddr: srcCaddr, srcLen: srcLen, destCaddr: destCaddr, destCap: destCap) {
+                self.push(Cell(destCaddr))
+                self.push(Cell(result.u3))
+                self.push(result.n)
+            } else {
+                self.push(Cell(destCaddr))
+                self.push(0)
+                self.push(-1)
+            }
+        }
+
+        _ = register("UNESCAPE") {
+            let destCaddr = Int(self.pop())
+            let srcLen = Int(self.pop())
+            let srcCaddr = Int(self.pop())
+            if let outLen = self.unescapeText(srcCaddr: srcCaddr, srcLen: srcLen, destCaddr: destCaddr) {
+                self.push(Cell(destCaddr))
+                self.push(Cell(outLen))
+            } else {
+                self.kernelThrow(StdThrow.illegalArgument, message: "? UNESCAPE destination too small")
+            }
         }
 
         // === ANS Forth 2012 Memory-Allocation word set (Section 14) ===

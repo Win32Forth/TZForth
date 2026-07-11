@@ -936,10 +936,18 @@ public final class TZForth {
     }
 
     private func readByte(_ addr: Int) -> UInt8 {
-        memory[addr]
+        if addr < 0 || addr >= memory.count {
+            self.throwInvalidAddress("? Memory read out of range (addr=\(addr))")
+            return 0
+        }
+        return memory[addr]
     }
 
     private func writeByte(_ addr: Int, _ value: UInt8) {
+        if addr < 0 || addr >= memory.count {
+            self.throwInvalidAddress("? Memory write out of range (addr=\(addr))")
+            return
+        }
         memory[addr] = value
     }
 
@@ -1086,7 +1094,8 @@ public final class TZForth {
     }
 
     private func assembleSignedDouble(lo: Cell, hi: Cell) -> Int128 {
-        (Int128(hi) << 64) | Int128(UInt64(bitPattern: Int64(lo)))
+        let bits = UInt128(self.unsignedCell(lo)) | (UInt128(self.unsignedCell(hi)) << 64)
+        return Int128(bitPattern: bits)
     }
 
     private func assembleUnsignedDouble(lo: Cell, hi: Cell) -> UInt128 {
@@ -1094,15 +1103,40 @@ public final class TZForth {
     }
 
     private func disassembleSignedDouble(_ d: Int128) -> (lo: Cell, hi: Cell) {
-        let lo = Int64(truncatingIfNeeded: d)
-        let hi = Int64(truncatingIfNeeded: d >> 64)
-        return (Cell(lo), Cell(hi))
+        let bits = UInt128(bitPattern: d)
+        let lo = UInt64(truncatingIfNeeded: bits)
+        let hi = UInt64(truncatingIfNeeded: bits >> 64)
+        return (Cell(Int64(bitPattern: lo)), Cell(Int64(bitPattern: hi)))
     }
 
     private func disassembleUnsignedDouble(_ d: UInt128) -> (lo: Cell, hi: Cell) {
         let lo = UInt64(truncatingIfNeeded: d)
         let hi = UInt64(truncatingIfNeeded: d >> 64)
         return (Cell(Int64(bitPattern: lo)), Cell(Int64(bitPattern: hi)))
+    }
+
+    /// ANS M*/ ( d u2 u3 -- d ): (d * u2) / u3 with truncating division.
+    /// Never forms d * u2 directly — Int128.max * 8 traps in Swift. Uses
+    /// (d/u3)*u2 + (d%u3)*u2/u3 with an overflow guard on the quotient term.
+    private func mStarDivide(dLo: Cell, dHi: Cell, u2c: Cell, u3c: Cell) -> Int128 {
+        let d = self.assembleSignedDouble(lo: dLo, hi: dHi)
+        let u2 = Int128(u2c)
+        let u3 = Int128(self.unsignedCell(u3c))
+        let rem = d % u3
+        let tail = (rem * u2) / u3
+        let quot = d / u3
+        if quot == 0 { return tail }
+        let absQ = quot < 0 ? -quot : quot
+        let absU2 = u2 < 0 ? -u2 : u2
+        if absU2 == 0 { return tail }
+        if absQ <= Int128.max / absU2 {
+            return quot * u2 + tail
+        }
+        // Rare: |quot|*|u2| exceeds Int128 — use unsigned magnitudes (Hayes large M*/ cases).
+        let neg = (quot < 0) != (u2 < 0)
+        let mag = UInt128(bitPattern: absQ) * UInt128(bitPattern: absU2)
+            + UInt128(bitPattern: (rem < 0 ? -rem : rem) * absU2 / u3)
+        return neg ? -Int128(bitPattern: mag) : Int128(bitPattern: mag)
     }
 
     // Pictured numeric output helpers (build string backwards in pno buffer)
@@ -3932,15 +3966,11 @@ public final class TZForth {
             let u3c = self.pop()
             let u2c = self.pop()
             let (dLo, dHi) = self.popDoubleStack()
-            let d = self.assembleSignedDouble(lo: dLo, hi: dHi)
             if u3c == 0 {
                 self.throwDivisionByZero()
                 return
             }
-            let u2 = Int128(u2c)
-            let u3 = Int128(self.unsignedCell(u3c))
-            let prod = d * u2
-            self.pushSignedDouble(prod / u3)
+            self.pushSignedDouble(self.mStarDivide(dLo: dLo, dHi: dHi, u2c: u2c, u3c: u3c))
         }
         _ = register("2ROT") {
             let f = self.pop(); let e = self.pop(); let d = self.pop()

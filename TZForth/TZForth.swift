@@ -766,7 +766,7 @@ public final class TZForth {
         ("CREATE-FILE","( c-addr u fam -- fileid ior )", "create/truncate a file"),
         ("DELETE-FILE","( c-addr u -- ior )", "delete a file"),
         ("READ-FILE", "( c-addr u fileid -- u2 ior )", "read u bytes from file"),
-        ("WRITE-FILE","( c-addr u fileid -- u2 ior )", "write u bytes to file"),
+        ("WRITE-FILE","( c-addr u fileid -- ior )", "write u bytes to file"),
         ("READ-LINE", "( c-addr u fileid -- u2 flag ior )", "read a line from file"),
         ("WRITE-LINE","( c-addr u fileid -- ior )", "write a line to file (adds newline)"),
         ("FILE-POSITION","( fileid -- ud ior )", "current file position as unsigned double"),
@@ -780,7 +780,7 @@ public final class TZForth {
         ("REQUIRE", "( -- name )",        "PARSE-NAME REQUIRED (load once per spec string)"),
         ("INCLUDED-NAMES", "( -- addr )", "variable: head of load-once name list (ANS REQUIRED registry)"),
         (".INCLUDED", "( -- )",            "list file specs registered in INCLUDED-NAMES"),
-        ("FILE-STATUS","( fileid -- fl ior )", "implementation-defined file status"),
+        ("FILE-STATUS","( c-addr u -- x ior )", "file existence status by path spec"),
         ("FLUSH-FILE","( fileid -- ior )",  "flush buffered file data to disk"),
         ("RENAME-FILE","( c-addr1 u1 c-addr2 u2 -- ior )", "rename file"),
 
@@ -3486,7 +3486,13 @@ public final class TZForth {
                 self.throwInvalidToken("? UNTIL without BEGIN")
                 return
             }
-            let dest = self.whileRepeatStack.last!
+            let dest: Cell
+            if self.spGet() > 1,
+               self.peekStackItem(0) == self.whileRepeatStack.last! {
+                dest = self.pop()
+            } else {
+                dest = self.whileRepeatStack.last!
+            }
             self.push(self.zeroBranchID); self.comma()
             let here = self.readCell(self.DP_ADDR)
             let offset = dest - (here + 8)
@@ -3771,7 +3777,8 @@ public final class TZForth {
             self.evaluateNesting += 1
             self.evaluateSourceAddr = Cell(caddr)
             self.evaluateSourceLen = Cell(u)
-            self.currentSourceId = 0
+            // Hayes/coreext expects SOURCE-ID -1 during EVALUATE of a short string (not 0).
+            self.currentSourceId = -1
             self.runInterpreter()
             self.evaluateNesting -= 1
             if self.evaluateNesting == 0 {
@@ -4591,7 +4598,11 @@ public final class TZForth {
 
         // SOURCE-ID ( -- id )  Core Ext — -1 terminal, 0 evaluate string, ≥2 open fileid.
         _ = register("SOURCE-ID") {
-            self.push(self.currentSourceId)
+            if self.loadNesting > 0, self.interpreterInputFileId >= 2 {
+                self.push(self.interpreterInputFileId)
+            } else {
+                self.push(self.currentSourceId)
+            }
         }
 
         // SAVE-INPUT ( -- x1 ... xn n )  Core Ext
@@ -4632,6 +4643,7 @@ public final class TZForth {
                 return
             }
             self.writeCell(self.IN, args[0])
+            self.currentSourceId = snap.sourceId
             self.currentSourceLen = snap.sourceLen
             for i in 0..<snap.sourceLen {
                 self.writeByte(self.SOURCE_BUFFER + i, snap.sourceBytes[i])
@@ -5387,7 +5399,7 @@ public final class TZForth {
             }
             var items: [Cell] = []
             for _ in 0..<n { items.append(self.pop()) }
-            for item in items { self.rpush(item) }
+            for item in items.reversed() { self.rpush(item) }
             self.rpush(Cell(n))
         }
 
@@ -5402,7 +5414,10 @@ public final class TZForth {
                 self.throwIllegalArgument("? NR> mismatch with N>R")
                 return
             }
-            for _ in 0..<n { self.push(self.rpop()) }
+            var items: [Cell] = []
+            for _ in 0..<n { items.append(self.rpop()) }
+            for item in items.reversed() { self.push(item) }
+            self.push(Cell(n))
         }
 
         // CS-PICK / CS-ROLL — control-flow stack is the data stack during compilation.
@@ -5412,7 +5427,12 @@ public final class TZForth {
                 return
             }
             let u = Int(self.pop())
-            let picked = self.peekStackItem(u)
+            let picked: Cell
+            if u == 0, let begin = self.whileRepeatStack.last {
+                picked = begin
+            } else {
+                picked = self.peekStackItem(u)
+            }
             self.push(picked)
         }
 
@@ -6072,7 +6092,7 @@ public final class TZForth {
             let caddr = Int(self.pop())
             guard u1 >= 0, u1 <= self.memory.count,
                   var entry = self.openFiles[fileId], entry.isOpen, self.famAllowsWrite(entry.fam) else {
-                self.push(0); self.push(self.FILE_IO_ERROR); return
+                self.push(self.FILE_IO_ERROR); return
             }
             let needed = entry.position + u1
             if needed > entry.data.count {
@@ -6087,7 +6107,6 @@ public final class TZForth {
             entry.position += u1
             entry.writeDirty = true
             self.openFiles[fileId] = entry
-            self.push(Cell(u1))
             self.push(self.FILE_IO_SUCCESS)
         }
 
@@ -6177,14 +6196,12 @@ public final class TZForth {
         }
 
         _ = register("FILE-STATUS") {
-            let fileId = Int(self.pop())
-            if self.openFiles[fileId]?.isOpen == true {
-                self.push(0)
-                self.push(self.FILE_IO_SUCCESS)
-            } else {
-                self.push(-1)
-                self.push(self.FILE_IO_ERROR)
-            }
+            let u = Int(self.pop())
+            let caddr = Int(self.pop())
+            let path = self.pathURLFromCounted(caddr, u).path
+            let exists = FileManager.default.fileExists(atPath: path)
+            self.push(exists ? 0 : -1)
+            self.push(exists ? self.FILE_IO_SUCCESS : self.FILE_IO_ERROR)
         }
 
         _ = register("FLUSH-FILE") {

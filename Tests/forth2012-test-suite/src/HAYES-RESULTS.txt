@@ -1,5 +1,5 @@
 
- Running ANS Forth tests for TZForth â Block and Facility omitted 
+ Running ANS Forth tests for TZForth â Block omitted 
 OK
 FILE-ECHO OFF
  debug-bootstrap: loading Hayes harness... 
@@ -234,6 +234,13 @@ TESTING the nested results
 
  End of File-Access word set tests
 OK
+TESTING Facility words
+TESTING BEGIN-STRUCTURE END-STRUCTURE +FIELD
+TESTING FIELD: CFIELD:
+TESTING Nested structures
+
+ End of Facility word tests
+OK
 TESTING Locals word set
 TESTING null locals
 TESTING <arg>s and TO <arg>
@@ -316,7 +323,7 @@ Core extension          0
 Block                   -
 Double number           0
 Exception               0
-Facility                -
+Facility                0
 File-access             0
 Locals                  0
 Memory-allocation       0

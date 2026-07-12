@@ -582,6 +582,11 @@ public final class TZForth {
         ("EMIT",    "( c -- )",           "print character by code"),
         ("KEY",     "( -- c )",           "wait for and return next key code"),
         ("KEY?",    "( -- flag )",        "true if a key is available now"),
+        ("BEGIN-STRUCTURE","( \"name\" -- )", "start structure layout (immediate)"),
+        ("END-STRUCTURE","( -- )",          "end structure; create size constant (immediate)"),
+        ("+FIELD",  "( u \"name\" -- )",   "add u-byte field at current offset (immediate)"),
+        ("FIELD:",  "( \"name\" -- )",     "add cell-aligned field (immediate)"),
+        ("CFIELD:", "( \"name\" -- )",     "add 1-char field (immediate)"),
         ("TYPE",    "( addr len -- )",    "print len characters from addr"),
         ("U.",      "( u -- )",           "print unsigned number"),
         ("H.",      "( u -- )",           "print unsigned as uppercase hex (ignores BASE)"),
@@ -879,12 +884,19 @@ public final class TZForth {
     private var allocateEverUsed: Bool = false
     private var growMemoryAttempted: Bool = false
 
+    /// Facility BEGIN-STRUCTURE / +FIELD compile-time offset accumulator (ANS 10.6.2).
+    private var structureOffset: Cell = 0
+    private var structureActive: Bool = false
+    /// Name parsed by BEGIN-STRUCTURE; consumed by END-STRUCTURE (Hayes facilitytest layout).
+    private var structurePendingName: String = ""
+
     private var executeID: Cell = 0  // captured ID for EXECUTE so POSTPONE can emit LIT xt EXECUTE for immediates
     private var postponeImmID: Cell = 0  // (postpone-imm): compile or execute postponed immediate at run time
     private var postponeCompID: Cell = 0 // (postpone-comp): compile or execute postponed non-immediate at run time
     private var deferredCsPickID: Cell = 0 // deferred CS-PICK for immediate-colon meta definitions
     private var deferredCsRollID: Cell = 0 // deferred CS-ROLL for immediate-colon meta definitions
     private var fetchID: Cell = 0    // ID for @
+    private var plusID: Cell = 0     // ID for + (structure field DOES> @ +)
     private var storeID: Cell = 0    // ID for !
     private var twoFetchID: Cell = 0 // ID for 2@ (2VALUE / TO detection)
     private var twoStoreID: Cell = 0 // ID for 2!
@@ -2792,6 +2804,7 @@ public final class TZForth {
         "LOCALS",
         "#LOCALS",
         "PROGRAMMING-TOOLS",
+        "FACILITY",
     ]
 
     /// ANS ENVIRONMENT? values for a query string, or nil if unsupported.
@@ -2807,7 +2820,7 @@ public final class TZForth {
             return [255, -1]
         case "WORDLISTS":
             return [Cell(MAX_VOCABS), -1]
-        case "FILE", "FILE-ACCESS", "FILE-EXT", "EXCEPTION", "STRING", "MEMORY-ALLOCATION", "DOUBLE", "LOCALS", "PROGRAMMING-TOOLS":
+        case "FILE", "FILE-ACCESS", "FILE-EXT", "EXCEPTION", "STRING", "MEMORY-ALLOCATION", "DOUBLE", "LOCALS", "PROGRAMMING-TOOLS", "FACILITY":
             return [-1]
         case "#LOCALS":
             return [Cell(Self.MAX_LOCALS_PER_DEF), -1]
@@ -3340,7 +3353,7 @@ public final class TZForth {
         swapID = register("SWAP")  { let b = self.pop(); let a = self.pop(); self.push(b); self.push(a) }
         _ = register("OVER")  { let b = self.pop(); let a = self.pop(); self.push(a); self.push(b); self.push(a) }
 
-        _ = register("+")     { let b = self.pop(); let a = self.pop(); self.push(self.cellAdd(a, b)) }
+        plusID = register("+")     { let b = self.pop(); let a = self.pop(); self.push(self.cellAdd(a, b)) }
         _ = register("-")     { let b = self.pop(); let a = self.pop(); self.push(self.cellSub(a, b)) }
         _ = register("*")     { let b = self.pop(); let a = self.pop(); self.push(self.cellMul(a, b)) }
         _ = register("/MOD")  {
@@ -5096,6 +5109,12 @@ public final class TZForth {
             self.writeCell(self.DP_ADDR, h)
         }
         _ = register("ALIGNED") {
+            // During BEGIN-STRUCTURE … END-STRUCTURE, ALIGNED aligns the structure
+            // offset (Hayes facilitytest: `ALIGNED STRCT3 +FIELD`); leave struct-sys on stack.
+            if self.structureActive {
+                self.alignStructureOffset()
+                return
+            }
             var a = self.pop()
             while (a & 7) != 0 { a += 1 }
             self.push(a)
@@ -5887,8 +5906,8 @@ public final class TZForth {
             self.clearScreenRequested = true
         }
 
-        // ANS-VALIDATE — run the 2012 ANS Forth validation tests (281 spot-checks: Core,
-        // Core Ext, File-Access, String, Exception, Memory, Double, Locals, Programming-Tools;
+        // ANS-VALIDATE — run the 2012 ANS Forth validation tests (287 spot-checks: Core,
+        // Core Ext, File-Access, String, Facility, Exception, Memory, Double, Locals, Programming-Tools;
         // ported from TestTZForth FTEST, originally TestLBForth.swift) and write ANS-VALIDATE.txt
         // in the folder containing the TestTZForth.swift (i.e. next to the tests source).
         // The runner impl is in TZForthTests.swift (split for file size); sources/lets remain here.
@@ -6744,7 +6763,114 @@ public final class TZForth {
             // return early (via rpop) so the does code is not executed in the parent's context.
         }
 
+        registerFacilityWords()
         registerFileAccessWords()
+    }
+
+    // MARK: - Facility word registrations (ANS word set 10 — structures)
+
+    private func alignStructureOffset() {
+        while (self.structureOffset & 7) != 0 {
+            self.structureOffset += 1
+        }
+    }
+
+    /// Patch the latest CREATE word to DOES> @ + (field offset stored in its data cell).
+    private func patchLatestCreateWithDoesFetchPlus() {
+        let defsHeadCell = self.readCell(self.CURRENT)
+        let latest = self.readCell(defsHeadCell)
+        if latest == 0 {
+            self.throwIllegalArgument("? +FIELD without CREATE")
+            return
+        }
+        let cfa = self.getCFA(latest)
+        let doesStart = self.readCell(self.DP_ADDR)
+        self.push(self.docolID); self.comma()
+        self.push(self.fetchID); self.comma()
+        self.push(self.plusID); self.comma()
+        self.push(self.exitID); self.comma()
+        let doesCodeAddr = doesStart
+        self.writeCell(Int(cfa), self.dodoesID)
+        self.writeCell(Int(cfa) + 8, doesCodeAddr)
+    }
+
+    /// ANS +FIELD — ( u "<spaces>name" -- ) immediate; create offset field word, advance structure size.
+    private func addStructureField(size: Cell, name: String) {
+        if name.isEmpty {
+            self.throwZeroLengthName("? +FIELD needs a name")
+            return
+        }
+        let offset = self.structureOffset
+        self.createWord(name: name, immediate: false)
+        let dataAddr = self.readCell(self.DP_ADDR) + 16
+        self.push(self.createRuntimeID); self.comma()
+        self.push(dataAddr); self.comma()
+        self.writeCell(dataAddr, offset)
+        self.writeCell(self.DP_ADDR, dataAddr + 8)
+        self.patchLatestCreateWithDoesFetchPlus()
+        self.structureOffset += size
+    }
+
+    /// ANS END-STRUCTURE — create size constant from accumulated structure offset.
+    private func finishStructure(name: String) {
+        if name.isEmpty {
+            self.throwZeroLengthName("? END-STRUCTURE needs a name")
+            return
+        }
+        let size = self.structureOffset
+        self.createWord(name: name, immediate: false)
+        self.push(self.docolID); self.comma()
+        self.push(self.litID); self.comma()
+        self.push(size); self.comma()
+        self.push(self.exitID); self.comma()
+        self.structureOffset = 0
+        self.structureActive = false
+    }
+
+    private func registerFacilityWords() {
+        _ = register("BEGIN-STRUCTURE", immediate: true) {
+            let name = self.parseWord()
+            if name.isEmpty {
+                self.throwZeroLengthName("? BEGIN-STRUCTURE needs a name")
+                return
+            }
+            self.structurePendingName = name
+            self.structureOffset = 0
+            self.structureActive = true
+            // struct-sys placeholder (consumed by END-STRUCTURE per ANS usage).
+            self.push(0)
+        }
+
+        _ = register("END-STRUCTURE", immediate: true) {
+            if self.spGet() > 1 {
+                _ = self.pop()
+            }
+            let name = self.structurePendingName
+            if name.isEmpty {
+                self.throwZeroLengthName("? END-STRUCTURE without BEGIN-STRUCTURE name")
+                return
+            }
+            self.finishStructure(name: name)
+            self.structurePendingName = ""
+        }
+
+        _ = register("+FIELD", immediate: true) {
+            let size = self.pop()
+            if self.throwActive { return }
+            let name = self.parseWord()
+            self.addStructureField(size: size, name: name)
+        }
+
+        _ = register("FIELD:", immediate: true) {
+            self.alignStructureOffset()
+            let name = self.parseWord()
+            self.addStructureField(size: 8, name: name)
+        }
+
+        _ = register("CFIELD:", immediate: true) {
+            let name = self.parseWord()
+            self.addStructureField(size: 1, name: name)
+        }
     }
 
     // MARK: - File-Access word registrations (ANS word set 11)

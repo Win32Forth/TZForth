@@ -1,7 +1,7 @@
 \ TZForth runner for the Hayes / forth2012-test-suite
-\ Omits word sets TZForth does not implement (Block, Facility).
+\ Omits word sets TZForth does not implement (Block).
 
-CR .( Running ANS Forth tests for TZForth — Block and Facility omitted ) CR
+CR .( Running ANS Forth tests for TZForth — Block omitted ) CR
 
 S" prelimtest.fth" INCLUDED
 S" tester.fr" INCLUDED
@@ -14,7 +14,7 @@ S" coreexttest.fth" INCLUDED
 \ S" blocktest.fth" INCLUDED
 S" doubletest.fth" INCLUDED
 S" exceptiontest.fth" INCLUDED
-\ S" facilitytest.fth" INCLUDED
+S" facilitytest.fth" INCLUDED
 S" filetest.fth" INCLUDED
 S" localstest.fth" INCLUDED
 S" memorytest.fth" INCLUDED

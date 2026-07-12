@@ -2,7 +2,7 @@
 
 This document tracks implementation status of the 2012 ANS Forth Standard word sets in TZForth (Swift port of the lbForth model). Generated from codebase inspection (`TZForth/TZForth.swift`, `TestTZForth.swift`, `TZForthTests.swift`).
 
-Last update: Hayes forth2012-test-suite **0 errors** (Block/Facility omitted); `>IN +!` skip (Hayes prelimtest); FTEST / `ANS-VALIDATE` **281/281**.
+Last update: Hayes forth2012-test-suite **0 errors** (Block omitted); Facility structures (Hayes `facilitytest.fth`); FTEST / `ANS-VALIDATE` **287/287**.
 
 ## Summary
 
@@ -18,9 +18,10 @@ Last update: Hayes forth2012-test-suite **0 errors** (Block/Facility omitted); `
 | **Memory-Allocation (14)** | Complete — 14.6.1 (`ALLOCATE`, `FREE`, `RESIZE`); extension `GROWMEMORYMB` |
 | **Double-Number (8)** | Complete — 8.6.1 + 8.6.2 (`2ROT`, `2VALUE`, `DU<`); trailing `.` literals |
 | **Locals (13)** | Complete — `(LOCAL)`, `LOCALS|`, `{:`; `TO` for locals; max 32 (`#LOCALS`) |
-| **Other optional sets** | Mostly absent — Float, Facility, Block, Extended-Character, etc. |
+| **Facility (10)** | Partial — 10.6.2 structures (`BEGIN-STRUCTURE`, `END-STRUCTURE`, `+FIELD`, `FIELD:`, `CFIELD:`); Hayes 0 errors; `KEY?` done; terminal (`AT-XY`, `PAGE`) and EKEY extensions not yet |
+| **Other optional sets** | Mostly absent — Float, Block, Extended-Character, etc. |
 
-FTEST harness: run with `FTEST=1 swift /tmp/combined.swift` (concatenate `TZForth.swift`, `TZForthTests.swift`, `TestTZForth.swift`). Current count: **281/281** TEST6 spot-checks (273 `ansTest` calls + 8 harness-only checks) plus block-comment / FLOAD / INCLUDE load tests. In-app **`ANS-VALIDATE`** runs the same suite and overwrites **`TZForth/ANS-VALIDATE.txt`** (tracked baseline in the Xcode project; excluded from the app bundle so it stays writable).
+FTEST harness: run with `FTEST=1 swift /tmp/combined.swift` (concatenate `TZForth.swift`, `TZForthTests.swift`, `TestTZForth.swift`). Current count: **287/287** TEST6 spot-checks (279 `ansTest` calls + 8 harness-only checks) plus block-comment / FLOAD / INCLUDE load tests. In-app **`ANS-VALIDATE`** runs the same suite and overwrites **`TZForth/ANS-VALIDATE.txt`** (tracked baseline in the Xcode project; excluded from the app bundle so it stays writable).
 
 ## Core (6.1) — Complete
 
@@ -177,7 +178,7 @@ Unhandled `THROW` with no active `CATCH`: `-1` → print `Aborted!`, reset stack
 
 FTEST / `ANS-VALIDATE` cover `ABORT`/`ABORT"` with and without `CATCH`, standard kernel codes, compile `STATE` preservation, file faults, nested `CATCH`, `['] fload catch` (safe-fload), mid-file `INCLUDE-FILE`, user **-40**, and `.ERROR` for file codes. Colon definitions that compile `CATCH` then `>R` (Hayes `exceptiontest` `C6`) resume correctly after `EXIT` and nested `deliverThrow`.
 
-John Hayes **forth2012-test-suite** (Block/Facility omitted): **0 total errors** across Core, Core Ext, Double, Exception, File-access, Locals, Memory-allocation, Search-order, String, and Programming-tools subsets. Run with `HAYES=1 swift /tmp/combined.swift` from the repo root, or `fload debug-bootstrap.fth` from `Tests/forth2012-test-suite/src/`. Results: **`HAYES-RESULTS.txt`**.
+John Hayes **forth2012-test-suite** (Block omitted): **0 total errors** across Core, Core Ext, Double, Exception, **Facility** (structures), File-access, Locals, Memory-allocation, Search-order, String, and Programming-tools subsets. Run with `HAYES=1 swift /tmp/combined.swift` from the repo root, or `fload runtests-tzforth.fth` from `Tests/forth2012-test-suite/src/`. Results: **`HAYES-RESULTS.txt`**.
 
 **Standard THROW codes (Phases 1–5, complete):** Runtime (-3…-9), memory (-7), compile-only (-14), control (-15/-16), limits (-17), search order (-20), names (-10), undefined (-13), dictionary misuse (-20), file-access (-67 closed file, -68 invalid file-id, -70 I/O abort, -74 not found). User range from **-40**. **`OPEN-FILE`** and related words still return **`ior`** on the stack (ANS file-access). Named **`FLOAD`** loads synchronously (`onPerformNamedLoad` in the app) so parsing words can be wrapped with `['] fload catch`. Mid-file line errors propagate the **specific** fault code to the enclosing `CATCH`. Full map: **`THROW_CODES.md`**.
 
@@ -310,12 +311,30 @@ Example: `' DUP >HEADER 32 DUMP` · `' DUP H.` · `' DUP >XID .` → `8`.
 
 `FLOAD` (synchronous named load, catchable `-74`), `EDIT`, `CHDIR`, `DIR`, `FILE-ECHO`, `DEBUG-ON`/`DEBUG-OFF`, `RESET`, `CLS`, `BYE`, `ANS-VALIDATE`, `.ENVIRONMENT`, `.ERROR` (spaced throw message), `.INCLUDED` (list `INCLUDED-NAMES` registry), `CATCH-EVALUATE`, `LOCATE` (SEE alias), `FORGET-WORD`, `>LFA`, `>HEADER`, `>NFA`, `>XID`, `ID.`, `H.` (unsigned hex print, ignores `BASE`), `\\` (block comment to `{`), `\\S`, `DP`, high-level `HERE` (`DP @`), `ERASE` (`0 FILL`), `GROWMEMORYMB`, etc.
 
+## Facility (10) — Partial (structures complete for Hayes)
+
+ANS 10.6.2 structure words (Hayes `facilitytest.fth`):
+
+| Word | Notes |
+|------|-------|
+| `BEGIN-STRUCTURE` | Immediate; parse structure name; reset offset; push `struct-sys` |
+| `END-STRUCTURE` | Immediate; pop `struct-sys`; `CREATE` size constant from pending name |
+| `+FIELD` | Immediate; `( u "name" -- )` — field offset word with `DOES> @ +` |
+| `FIELD:` | Immediate; cell-aligned field (`1 CELLS +FIELD`) |
+| `CFIELD:` | Immediate; char field (`1 CHARS +FIELD`) |
+
+During an active structure, **`ALIGNED`** aligns the structure offset (for `ALIGNED STRCT3 +FIELD` nested layouts). `ENVIRONMENT?` answers `FACILITY`.
+
+### Not yet implemented (Facility)
+
+- **10.6.1:** `AT-XY`, `PAGE` (`KEY?` done; `CLS` host hook exists)
+- **10.6.2:** `MS`, `TIME&DATE`, `EKEY` / `EKEY?` / `EKEY>CHAR` / `EKEY>FKEY`, `EMIT?`, `K-*` key constants
+
 ## Missing optional / future word sets
 
 Not implemented (no current plan unless requested):
 
 - **Float**
-- **Facility** (`AT-XY`, `TIME&DATE`, …)
 - **Block**
 - **Extended-Character**
 - Remaining **Programming-Tools** (`NEEDS`, Gforth-style source `LOCATE`, …)

@@ -12,7 +12,7 @@
 //      # For automated tests (\\ block comments, \S, FLOAD behavior + 281 ANS spot-checks):
 //      FTEST=1 swift /tmp/combined.swift
 //
-//      # For John Hayes / forth2012-test-suite (Block + Facility omitted; 0 T{ failures):
+//      # For John Hayes / forth2012-test-suite (Block omitted; 0 T{ failures):
 //      HAYES=1 swift /tmp/combined.swift
 //
 //  Note: The ANS validation test logic (runANSValidation + test sources) was split to
@@ -715,6 +715,19 @@ fload \(fnInnerLate.lastPathComponent)
     ansTest("SLITERAL", "t17sl TYPE", "hello")
     ansTest("ENVIRONMENT? STRING", "S\" STRING\" ENVIRONMENT? .", "-1")
 
+    // Facility (10): BEGIN-STRUCTURE / +FIELD / FIELD: (Hayes facilitytest subset)
+    forth.feedLine("BEGIN-STRUCTURE T6S1 END-STRUCTURE")
+    ansTest("empty structure", "T6S1 .", "0")
+    forth.feedLine("BEGIN-STRUCTURE T6S2 1 CHARS +FIELD T6A 1 CELLS +FIELD T6B END-STRUCTURE")
+    ansTest("structure size", "T6S2 .", "9")
+    forth.feedLine("CREATE T6I T6S2 ALLOT")
+    ansTest("structure field C!", "77 T6I T6A C! T6I T6A C@ .", "77")
+    forth.feedLine("BEGIN-STRUCTURE T6S3 FIELD: T6X FIELD: T6Y END-STRUCTURE")
+    ansTest("FIELD: offset", "0 T6Y .", "8")
+    forth.feedLine("BEGIN-STRUCTURE T6S4 T6S2 +FIELD T6N ALIGNED T6S3 +FIELD T6M END-STRUCTURE")
+    ansTest("nested structure size", "T6S4 .", "32")
+    ansTest("ENVIRONMENT? FACILITY", "S\" FACILITY\" ENVIRONMENT? .", "-1")
+
     // Memory-Allocation (14): GROWMEMORYMB first (once per session), then ALLOCATE FREE RESIZE
     ansTest("GROWMEMORYMB grow", "4 GROWMEMORYMB UNUSED 3000000 > .", "-1")
     ansTest("ALLOCATE", "64 ALLOCATE DROP DUP 42 SWAP ! DUP @ .", "42")
@@ -1048,7 +1061,7 @@ if ProcessInfo.processInfo.environment["HAYES"] == "1" {
     collected = ""
     forth.resetRuntimeState()
 
-    forth.feedLine("CR .( Running ANS Forth tests for TZForth — Block and Facility omitted ) CR")
+    forth.feedLine("CR .( Running ANS Forth tests for TZForth — Block omitted ) CR")
 
     // Match the console test.fth workflow: bootstrap, VERBOSE on, per-file fload + #ERRORS reset.
     let bootstrap = suiteSrc.appendingPathComponent("debug-bootstrap.fth")
@@ -1056,6 +1069,7 @@ if ProcessInfo.processInfo.environment["HAYES"] == "1" {
     let hayesFiles = [
         "coreplustest.fth",
         "coreexttest.fth", "doubletest.fth", "exceptiontest.fth", "filetest.fth",
+        "facilitytest.fth",
         "localstest.fth", "memorytest.fth", "toolstest.fth",
         "searchordertest.fth", "stringtest.fth",
         "toolstest.fth",

@@ -17,7 +17,7 @@ import Foundation
 
 extension TZForth {
     // The runANSValidation (and its nested helpers) implement the full port of
-    // the FTEST ANS spot-checks (281 checks) so that "ANS-VALIDATE" works from
+    // the FTEST ANS spot-checks (287 checks) so that "ANS-VALIDATE" works from
     // within Forth (writes ANS-VALIDATE.txt next to TestTZForth.swift when CHDIRed there).
     public func runANSValidation() -> String {
         // Snapshot the "current" dir at start (the folder of the test .swift as user set via CHDIR or launch).
@@ -37,7 +37,7 @@ extension TZForth {
         let preValidationSearchOrder = self.searchOrder
         let preValidationEnvironment = self.captureSessionEnvironment()
 
-        var results = "=== ANS-VALIDATE: 2012 ANS Forth validation (281 spot-checks: Core, Core Ext, File-Access, String, Exception, Memory, Double, Locals, Programming-Tools; from TestTZForth FTEST) ===\n\n"
+        var results = "=== ANS-VALIDATE: 2012 ANS Forth validation (287 spot-checks: Core, Core Ext, File-Access, String, Facility, Exception, Memory, Double, Locals, Programming-Tools; from TestTZForth FTEST) ===\n\n"
         var collected = ""
 
         let originalOnOutput = self.onOutput
@@ -640,6 +640,19 @@ fload \(fnInnerLate.lastPathComponent)
         self.feedLine(": t17sl [ S\" hello\" SLITERAL ] ;")
         ansTest("SLITERAL", "t17sl TYPE", "hello")
         ansTest("ENVIRONMENT? STRING", "S\" STRING\" ENVIRONMENT? .", "-1")
+
+        // Facility (10): BEGIN-STRUCTURE / +FIELD / FIELD: / CFIELD: (Hayes facilitytest subset)
+        self.feedLine("BEGIN-STRUCTURE T6S1 END-STRUCTURE")
+        ansTest("empty structure", "T6S1 .", "0")
+        self.feedLine("BEGIN-STRUCTURE T6S2 1 CHARS +FIELD T6A 1 CELLS +FIELD T6B END-STRUCTURE")
+        ansTest("structure size", "T6S2 .", "9")
+        self.feedLine("CREATE T6I T6S2 ALLOT")
+        ansTest("structure field C!", "77 T6I T6A C! T6I T6A C@ .", "77")
+        self.feedLine("BEGIN-STRUCTURE T6S3 FIELD: T6X FIELD: T6Y END-STRUCTURE")
+        ansTest("FIELD: offset", "0 T6Y .", "8")
+        self.feedLine("BEGIN-STRUCTURE T6S4 T6S2 +FIELD T6N ALIGNED T6S3 +FIELD T6M END-STRUCTURE")
+        ansTest("nested structure size", "T6S4 .", "32")
+        ansTest("ENVIRONMENT? FACILITY", "S\" FACILITY\" ENVIRONMENT? .", "-1")
 
         // Memory-Allocation (14): GROWMEMORYMB first (once per session), then ALLOCATE FREE RESIZE
         ansTest("GROWMEMORYMB grow", "4 GROWMEMORYMB UNUSED 3000000 > .", "-1")

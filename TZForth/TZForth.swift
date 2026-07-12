@@ -96,7 +96,7 @@ public final class TZForth {
 
     // MARK: - Memory and state
 
-    private var memory: [UInt8]
+    internal var memory: [UInt8]  // TZForthBlock.swift (PRINT-SETTINGS / SAVE-SETTINGS)
 
     // System variables live at the bottom of memory (classic layout)
     internal var LATEST:  Int { 0 }  // internal so TZForthTests.swift (and combined.swift for FTEST) can access for runANSValidation snapshots

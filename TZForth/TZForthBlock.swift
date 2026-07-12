@@ -215,8 +215,7 @@ extension TZForth {
 
     func ensureCurrentBlockFile() {
         let current = Int(self.readCell(self.blockFileVarAddr))
-        if current != 0, var entry = self.openBlockFiles[current], entry.isOpen {
-            _ = entry
+        if current != 0, let entry = self.openBlockFiles[current], entry.isOpen {
             return
         }
         let spec = self.settings.defaultBlocksFileName
@@ -239,7 +238,7 @@ extension TZForth {
     }
 
     func useBlockFile(_ bid: Int) {
-        guard var entry = self.openBlockFiles[bid], entry.isOpen else {
+        guard let entry = self.openBlockFiles[bid], entry.isOpen else {
             self.throwInvalidFileId("? USE-BLOCK-FILE: invalid block file")
             return
         }
@@ -248,13 +247,11 @@ extension TZForth {
             self.blockFlushVolume(fileId: prev, toDisk: true)
         }
         self.writeCell(self.blockFileVarAddr, Cell(bid))
-        _ = entry
     }
 
     func createBlockFileCounted(caddr: Int, u: Int, blockCount: Int) -> (Cell, Cell) {
         let spec = self.stringFromAddr(caddr, u)
         let path = self.normalizedBlockPath(spec)
-        let url = self.pathURLFromCounted(caddr, u)
         let resolved = self.resolvedURL(for: path)
         return self.createBlockFileAtPath(resolved.path, blockCount: max(1, blockCount))
     }
@@ -297,7 +294,7 @@ extension TZForth {
             return (0, self.FILE_IO_ERROR)
         }
         do {
-            var data = try Data(contentsOf: URL(fileURLWithPath: path))
+            let data = try Data(contentsOf: URL(fileURLWithPath: path))
             if data.count % bs != 0 {
                 return (0, self.FILE_IO_ERROR)
             }
@@ -762,7 +759,7 @@ extension TZForth {
                 if !self.blockRestoreResumeTail.isEmpty,
                    self.blockInterpretBlockNum == self.blockRestoreResumeBlock,
                    self.blockInterpretLine == self.blockRestoreResumeLine {
-                    var tail = self.blockRestoreResumeTail
+                    let tail = self.blockRestoreResumeTail
                     self.blockRestoreResumeTail = []
                     self.blockRestoreResumeBlock = -1
                     self.blockRestoreResumeLine = -1

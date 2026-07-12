@@ -7108,7 +7108,7 @@ public final class TZForth {
             let ms = max(0, Int(self.pop()))
             if let cb = self.onMsDelayRequested {
                 self.waitingForMs = true
-                cb(ms) { [weak self] in self?.resumeAfterMs() }
+                cb(ms) { self.resumeAfterMs() }
                 return
             }
             if ms > 0 {

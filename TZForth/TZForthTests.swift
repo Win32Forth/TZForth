@@ -43,9 +43,14 @@ extension TZForth {
 
         let originalOnOutput = self.onOutput
         let originalOnPerformNamedLoad = self.onPerformNamedLoad
+        let originalOnMsDelayRequested = self.onMsDelayRequested
         self.onOutput = { text in
             collected += text
         }
+        // ANS-VALIDATE feeds lines synchronously (ansTest checks output immediately after
+        // feedLine). ConsoleView's async onMsDelayRequested would leave MS suspended with
+        // no trailing " OK" yet — use the engine's Thread.sleep fallback instead.
+        self.onMsDelayRequested = nil
 
         self.onPerformNamedLoad = { url in
             self.loadFile(url)
@@ -90,6 +95,7 @@ extension TZForth {
             results += "TEST write fail: \(error)\n"
             self.onOutput = originalOnOutput
             self.onPerformNamedLoad = originalOnPerformNamedLoad
+            self.onMsDelayRequested = originalOnMsDelayRequested
             return results
         }
 
@@ -1057,6 +1063,7 @@ fload \(fnInnerLate.lastPathComponent)
 
         self.onOutput = originalOnOutput
         self.onPerformNamedLoad = originalOnPerformNamedLoad
+        self.onMsDelayRequested = originalOnMsDelayRequested
 
         results += "\n=== ANS-VALIDATE complete ===\n"
         return results

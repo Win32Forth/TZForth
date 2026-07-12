@@ -226,6 +226,10 @@ public final class TZForth {
     private var loadNesting = 0
     /// Current 1-based source line number while includeFileInterpret is running.
     private var fileInterpretLineNumber = 0
+    /// True when SOURCE was last filled by the REFILL word (vs the FLOAD line loop).
+    private var sourceLoadedByRefill = false
+    /// Byte offset in the open interpreter file where the current SOURCE line begins.
+    private var currentFileLineStart: Int? = nil
     /// Pending error text for the current loaded line (reported with line number after the line ends).
     private var fileLoadPendingErrorMessage = ""
 
@@ -265,6 +269,10 @@ public final class TZForth {
         var sourceBytes: [UInt8]
         var queue: [UInt8]
         var evaluateNesting: Int
+        /// When saved during FLOAD/INCLUDE, byte offset in the open file at the start of SOURCE.
+        var fileId: Int?
+        var fileLineStart: Int?
+        var fromRefill: Bool
     }
     private var inputSnapshots: [InputSnapshot] = []
 
@@ -423,8 +431,14 @@ public final class TZForth {
     /// Multi-line interpret/conditional-compilation skip (`[IF]`/`[ELSE]` text scan).
     private var conditionalSkipDepth: Int = 0
     private var conditionalSkipStopAtElse: Bool = false
-    /// After [THEN]/[ELSE] inside a $" / S" string, remaining quote text is not a string body.
-    private var conditionalSkipEndedInString: Bool = false
+    /// Discard input through closing " across lines (Hayes toolstest string tail).
+    private var conditionalSkipDiscardThroughQuote: Bool = false
+    /// Extra source lines consumed by `(` / REFILL during the current FLOAD runInterpreter pass.
+    private var floadExtraLinesConsumed: Int = 0
+    private var floadLinesToSkip: Int = 0
+    private var countFloadInterpreterRefills: Bool = false
+    /// RESTORE-INPUT rewound file SOURCE mid-line; keep parsing through following FLOAD lines (Hayes filetest SI2).
+    private var floadRestoreInputContinuation: Bool = false
 
     // ANS Locals word set (13): compile-time names + run-time frame stack (re-entrant).
     private static let MAX_LOCALS_PER_DEF = 32
@@ -433,6 +447,8 @@ public final class TZForth {
     private var localCompileInitCount: Int = 0
     private var localCompileInitReverse: Bool = false
     private var localFrames: [[Cell]] = []
+    /// Return-stack depth when each locals frame was created (pop frame only on that word's EXIT).
+    private var localFrameReturnDepth: [Int] = []
     private var localInitID: Cell = 0
     private var localFetchID: Cell = 0
     private var localStoreID: Cell = 0
@@ -1723,17 +1739,57 @@ public final class TZForth {
     }
 
     private func endLocalFrame() {
-        if !self.localFrames.isEmpty {
-            self.localFrames.removeLast()
-        }
+        guard !self.localFrames.isEmpty, !self.localFrameReturnDepth.isEmpty else { return }
+        // Nested EXIT (e.g. ALSO-LTWL inside LT35) must not drop the caller's locals frame.
+        if self.returnStackPointer != self.localFrameReturnDepth.last { return }
+        _ = self.localFrameReturnDepth.removeLast()
+        self.localFrames.removeLast()
     }
 
     private func clearAllLocalFrames() {
         self.localFrames.removeAll(keepingCapacity: true)
+        self.localFrameReturnDepth.removeAll(keepingCapacity: true)
     }
 
     private func localIndexDuringCompile(_ name: String) -> Int? {
         self.localCompileMap[self.localNameKey(name)]
+    }
+
+    private func executeDictWord(_ name: String) {
+        for wlID in self.searchOrder {
+            let hdr = self.findWordInWordlist(wlID, name: name)
+            if hdr != 0 {
+                let cfa = self.getCFA(hdr)
+                let first = self.readCell(Int(cfa))
+                self.execute(cfa: cfa, firstCell: first)
+                return
+            }
+        }
+        self.kernelThrow(StdThrow.undefinedWord, message: "? \(name)")
+    }
+
+    /// Hayes localstest `LOCAL` immediate — parse one local name at compile time.
+    private func runHayesLocalDeclImmediate() {
+        self.realignInputQueueFromSource()
+        let saved = self.readCell(self.STATE)
+        self.writeCell(self.STATE, 0)
+        self.executeDictWord("BL")
+        if self.throwActive || self.errorFlag { return }
+        self.executeDictWord("WORD")
+        if self.throwActive || self.errorFlag { return }
+        self.executeDictWord("COUNT")
+        if self.throwActive || self.errorFlag { return }
+        self.writeCell(self.STATE, 1)
+        self.executeDictWord("(LOCAL)")
+        self.writeCell(self.STATE, saved)
+    }
+
+    /// Hayes localstest `END-LOCALS` immediate — finalize the local list.
+    private func runHayesEndLocalsImmediate() {
+        // END-LOCALS is `: END-LOCALS 99 0 (LOCAL) ;` — 99 is a Hayes dummy, not a stack arg.
+        // Finalize directly; do not push 99/0 on the data stack (they would survive compile).
+        self.localCompileInitCount = self.localCompileNames.count
+        self.finalizeLocalCompilation()
     }
 
     private func allocFileId() -> Int {
@@ -1845,6 +1901,14 @@ public final class TZForth {
 
     /// Load the next source line from file into SOURCE/inputQueue. Returns false at EOF.
     private func refillFromFile(_ fileId: Int) -> Bool {
+        if self.countFloadInterpreterRefills && self.loadNesting > 0 && self.evaluateNesting == 0 {
+            self.floadExtraLinesConsumed += 1
+        }
+        if let entry = self.openFiles[fileId], entry.isOpen {
+            self.currentFileLineStart = entry.position
+        } else {
+            self.currentFileLineStart = nil
+        }
         let (u2, flag, ior) = readLineFromFile(fileId, buffer: SOURCE_BUFFER, maxLen: SOURCE_BUFFER_SIZE)
         if ior != FILE_IO_SUCCESS || !flag { return false }
         currentSourceLen = u2
@@ -1911,12 +1975,17 @@ public final class TZForth {
         interpreterInputFileId = Cell(fileId)
         currentSourceId = Cell(fileId)
         loadNesting += 1
+        self.sourceLoadedByRefill = false
         sourceLoadStop = false
         self.inSlashSlashComment = false
         defer {
             if loadNesting > 0 { loadNesting -= 1 }
             popInputSourceFrame()
-            interpreterInputFileId = 0
+            // Only clear when the outermost load ends; nested INCLUDED must not clobber the
+            // parent's interpreterInputFileId (Hayes filetest SI2 REFILL after REQUIRED).
+            if loadNesting == 0 {
+                interpreterInputFileId = 0
+            }
             if closeWhenDone {
                 _ = closeFileEntry(fileId, flush: false)
             }
@@ -1926,13 +1995,32 @@ public final class TZForth {
             // ends (Hayes toolstest multi-line conditionals can leave depth > 0 on abort).
             self.conditionalSkipDepth = 0
             self.conditionalSkipStopAtElse = false
-            self.conditionalSkipEndedInString = false
+            self.conditionalSkipDiscardThroughQuote = false
+            self.floadExtraLinesConsumed = 0
+            self.floadLinesToSkip = 0
+            self.countFloadInterpreterRefills = false
+            self.floadRestoreInputContinuation = false
             self.interpretIfTrueDepth = 0
+            if self.readCell(self.STATE) != 0 {
+                self.writeCell(self.STATE, 0)
+                self.controlFlowStack.removeAll()
+                self.whileRepeatStack.removeAll()
+                self.whileNestStack.removeAll()
+                self.bracketCompileDepth = 0
+            }
         }
         self.midFileLoadAborted = false
         self.fileInterpretLineNumber = 0
         self.fileLoadPendingErrorMessage = ""
         while refillFromFile(fileId) {
+            if self.floadLinesToSkip > 0 {
+                self.floadLinesToSkip -= 1
+                continue
+            }
+            // Position after this SOURCE line (start of next line). `(` / REFILL inside
+            // runInterpreter must not permanently advance the outer FLOAD line cursor.
+            let nextLinePosition = self.openFiles[fileId]?.position ?? 0
+            self.sourceLoadedByRefill = false
             self.fileInterpretLineNumber += 1
             let lineNumber = self.fileInterpretLineNumber
             validateAndRepairSystemState()
@@ -1942,8 +2030,29 @@ public final class TZForth {
             }
             let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
             if !trimmed.isEmpty {
+                // Nested RESTORE-INPUT (Hayes filetest SI2) may repoint SOURCE mid-line; restore
+                // this FLOAD line afterward so runInterpreter does not parse the saved input
+                // twice (once here, again on the next refill after the file rewind).
+                self.floadExtraLinesConsumed = 0
+                self.countFloadInterpreterRefills = true
+                self.pushInputSourceFrame()
                 runInterpreter()
+                self.countFloadInterpreterRefills = false
+                self.floadLinesToSkip = self.floadExtraLinesConsumed
+                self.popInputSourceFrame()
                 self.finishInterpretedLoadLine()
+            }
+            // Undo only forward over-reads from `(` REFILL during this line. RESTORE-INPUT
+            // continuation (Hayes filetest SI2) leaves the file where runInterpreter ended.
+            if self.floadRestoreInputContinuation {
+                self.floadExtraLinesConsumed = 0
+                self.floadLinesToSkip = 0
+                self.floadRestoreInputContinuation = false
+            } else if self.floadExtraLinesConsumed > 0,
+                      var entry = self.openFiles[fileId], entry.isOpen,
+                      entry.position > nextLinePosition {
+                entry.position = nextLinePosition
+                self.openFiles[fileId] = entry
             }
             // Hayes ~ / successful ?~~ leaves >IN at end-of-line; drop any stale queue tail.
             if Int(self.readCell(self.IN)) >= self.currentSourceLen {
@@ -2487,9 +2596,12 @@ public final class TZForth {
     /// CS-ROLL ( u -- ) shared by immediate and deferred compilation.
     private func performCsRoll(u: Int) {
         if u <= 0 { return }
-        // ?DONE / WHILE pattern: after IF the forward-branch placeholder is already TOS
-        // above the BEGIN address; rolling u=1 would move BEGIN to TOS and break REPEAT.
-        if u == 1 && self.controlFlowStack.count == 2 { return }
+        // ?DONE / WHILE: TOS is an unresolved forward-branch cell (0); leave it for REPEAT.
+        // PT8 AHEAD/BEGIN: TOS is the loop entry (non-zero); roll the AHEAD placeholder up for THEN.
+        if u == 1 && self.controlFlowStack.count == 2 {
+            let top = self.controlFlowStack[self.controlFlowStack.count - 1]
+            if self.readCell(Int(top)) == 0 { return }
+        }
         let idx = self.controlFlowStack.count - 1 - u
         if idx < 0 || idx >= self.controlFlowStack.count {
             self.throwIllegalArgument("? CS-ROLL underflow")
@@ -2497,6 +2609,19 @@ public final class TZForth {
         }
         let rolled = self.controlFlowStack.remove(at: idx)
         self.controlFlowStack.append(rolled)
+    }
+
+    /// Patch open IF/ELSE/AHEAD forward branches (implicit THEN at `;`).
+    /// `branchTo` is the first cell that false branches should reach — the EXIT at word end,
+    /// not the address after EXIT (a false IF must still execute EXIT to leave the definition).
+    private func patchOpenControlFlowPlaceholders(branchTo here: Cell) {
+        while !self.controlFlowStack.isEmpty {
+            let placeholder = self.controlFlowStack.removeLast()
+            // BEGIN pushes loop-entry addresses onto this stack; only patch offset cells (still 0).
+            if self.readCell(Int(placeholder)) != 0 { continue }
+            let forwardOffset = here - (placeholder + 8)
+            self.writeCell(Int(placeholder), forwardOffset)
+        }
     }
 
     /// u=0 is TOS on the data stack.
@@ -2523,6 +2648,25 @@ public final class TZForth {
         }
     }
 
+    /// After [THEN]/[ELSE] ends a skip inside a $" / S" string: run one tail token (Hayes `4`),
+    /// then discard the rest of the string through its closing quote (so PT10/REFILL never runs).
+    private func finishConditionalSkipInStringTail(_ result: ConditionalSkipResult) -> ConditionalSkipResult {
+        self.syncInputQueueFromSourceIfNeeded()
+        if !self.inputQueue.isEmpty && self.readCell(self.STATE) == 0 && self.bracketCompileDepth == 0 {
+            let name = self.parseWord()
+            if !name.isEmpty {
+                let b = Int(max(2, min(36, self.readCell(self.BASE))))
+                if let num = self.parseTextNumber(name, base: b) {
+                    self.push(num)
+                }
+            }
+        }
+        if !self.discardThroughClosingQuoteIfPresent() {
+            self.conditionalSkipDiscardThroughQuote = true
+        }
+        return result
+    }
+
     /// Scan a double-quote string during conditional skip; recognise [IF]/[ELSE]/[THEN] words.
     private func pumpConditionalSkipInString() -> ConditionalSkipResult? {
         while !self.inputQueue.isEmpty && !self.errorFlag && !self.throwActive {
@@ -2542,13 +2686,11 @@ public final class TZForth {
             } else if w == "[THEN]" {
                 self.conditionalSkipDepth -= 1
                 if self.conditionalSkipDepth == 0 {
-                    self.conditionalSkipEndedInString = true
-                    return .then
+                    return self.finishConditionalSkipInStringTail(.then)
                 }
             } else if w == "[ELSE]" && self.conditionalSkipDepth == 1 && self.conditionalSkipStopAtElse {
                 self.conditionalSkipDepth = 0
-                self.conditionalSkipEndedInString = true
-                return .elseBranch
+                return self.finishConditionalSkipInStringTail(.elseBranch)
             }
         }
         return nil
@@ -2581,9 +2723,17 @@ public final class TZForth {
                 self.conditionalSkipDepth += 1
             } else if w == "[THEN]" {
                 self.conditionalSkipDepth -= 1
-                if self.conditionalSkipDepth == 0 { return .then }
+                if self.conditionalSkipDepth == 0 {
+                    if self.hasClosingQuoteAhead() {
+                        return self.finishConditionalSkipInStringTail(.then)
+                    }
+                    return .then
+                }
             } else if w == "[ELSE]" && self.conditionalSkipDepth == 1 && self.conditionalSkipStopAtElse {
                 self.conditionalSkipDepth = 0
+                if self.hasClosingQuoteAhead() {
+                    return self.finishConditionalSkipInStringTail(.elseBranch)
+                }
                 return .elseBranch
             }
         }
@@ -2595,7 +2745,6 @@ public final class TZForth {
     private func startConditionalSkip(stopAtElse: Bool) -> ConditionalSkipResult {
         self.conditionalSkipDepth = 1
         self.conditionalSkipStopAtElse = stopAtElse
-        self.conditionalSkipEndedInString = false
         return self.pumpConditionalSkip()
     }
 
@@ -2603,6 +2752,26 @@ public final class TZForth {
     private func continuePendingConditionalSkip() -> ConditionalSkipResult {
         guard self.conditionalSkipDepth > 0 else { return .then }
         return self.pumpConditionalSkip()
+    }
+
+    /// True when unparsed input still contains a closing `"` (Hayes toolstest $" / [THEN] tail).
+    private func hasClosingQuoteAhead() -> Bool {
+        self.syncInputQueueFromSourceIfNeeded()
+        return self.inputQueue.contains(34)
+    }
+
+    /// Discard characters through a closing `"` on the current input (may span feedLine/FLOAD lines).
+    /// Returns true once the closing quote has been consumed.
+    private func discardThroughClosingQuoteIfPresent() -> Bool {
+        while !self.inputQueue.isEmpty {
+            let b = self.inputQueue.first!
+            if b == 34 {
+                _ = self.consumeInput()
+                return true
+            }
+            _ = self.consumeInput()
+        }
+        return false
     }
 
     private static let environmentQueryCatalog: [String] = [
@@ -3374,13 +3543,19 @@ public final class TZForth {
 
         _ = register("SET-ORDER") {
             let n = Int(self.pop())
+            // Hayes searchordertest: -1 SET-ORDER is equivalent to ONLY.
+            if n == -1 {
+                self.searchOrder = [self.LATEST]
+                return
+            }
             if n < 0 || n > self.MAX_VOCABS {
                 self.kernelThrow(StdThrow.illegalArgument, message: "? Invalid search order count")
                 return
             }
+            // GET-ORDER leaves ( widn .. wid1 n ) with wid1 just below n (first searched).
             var order: [Cell] = []
             for _ in 0..<n {
-                order.insert(self.pop(), at: 0)
+                order.append(self.pop())
             }
             self.searchOrder = order
         }
@@ -3643,7 +3818,12 @@ public final class TZForth {
         }
 
         _ = register(";", immediate: true) {
+            let endHere = self.readCell(self.DP_ADDR)
             self.push(self.exitID); self.comma()
+
+            // Implicit THEN: definitions may end with an open IF/ELSE (e.g. coreplus UNS1:
+            // IF … BEGIN … REPEAT ;). False branches must land on EXIT, not past it.
+            self.patchOpenControlFlowPlaceholders(branchTo: endHere)
 
             // Unhide (named definitions only; :NONAME stays hidden)
             let defsHeadCell = self.readCell(self.CURRENT)
@@ -3880,9 +4060,14 @@ public final class TZForth {
             let backOffset = repeatDest - (here + 8)
             self.push(backOffset); self.comma()
 
-            let afterRepeat = self.readCell(self.DP_ADDR)
-            let forwardOffset = afterRepeat - (origPlaceholder + 8)
-            self.writeCell(Int(origPlaceholder), forwardOffset)
+            // WHILE/REPEAT: origPlaceholder is the 0BRANCH offset cell from WHILE.
+            // BEGIN/REPEAT (unstructured): origPlaceholder equals repeatDest (loop entry);
+            // do not patch the first compiled instruction with a forward offset.
+            if origPlaceholder != repeatDest {
+                let afterRepeat = self.readCell(self.DP_ADDR)
+                let forwardOffset = afterRepeat - (origPlaceholder + 8)
+                self.writeCell(Int(origPlaceholder), forwardOffset)
+            }
         }
 
         // === Classic IF / ELSE / THEN (structured conditionals) ===
@@ -4242,6 +4427,8 @@ public final class TZForth {
         // ( comment ) — classic and essential
         _ = register("(", immediate: true) {
             // Eat characters until ) ; when parsing from a text file, refill across lines (ANS File-Access).
+            // includeFileInterpret restores the file cursor after each line so REFILL here cannot
+            // desync the outer FLOAD line loop (Hayes toolstest PT8).
             while true {
                 while !self.inputQueue.isEmpty {
                     let c = self.consumeInput() ?? 0
@@ -4819,6 +5006,7 @@ public final class TZForth {
                 }
             }
             self.localFrames.append(frame)
+            self.localFrameReturnDepth.append(self.returnStackPointer)
         }
 
         self.localFetchID = register("(LOCAL@)") {
@@ -4841,15 +5029,24 @@ public final class TZForth {
         }
 
         _ = register("(LOCAL)", immediate: true) {
-            if self.readCell(self.STATE) == 0 {
-                self.kernelThrow(StdThrow.compileOnly, message: "? (LOCAL) undefined in interpret state")
+            // Hayes LOCAL / END-LOCALS immediate colon bodies run BL WORD COUNT (LOCAL) in interpret
+            // state (see immColonInterpretBody in runInterpreter). (LOCAL) must work there too.
+            let depth = Int(self.spGet() - 1)
+            if depth <= 0 {
+                self.finalizeLocalCompilation()
                 return
             }
             let u = Int(self.pop())
-            let caddr = Int(self.pop())
             if u == 0 {
                 self.finalizeLocalCompilation()
+                // Hayes END-LOCALS pushes a dummy count (99) under the 0 before (LOCAL).
+                if Int(self.spGet() - 1) > 0 { _ = self.pop() }
             } else {
+                guard depth >= 2 else {
+                    self.kernelThrow(StdThrow.stackUnderflow)
+                    return
+                }
+                let caddr = Int(self.pop())
                 let name = self.stringFromAddr(caddr, u)
                 self.beginLocalName(name)
             }
@@ -4978,13 +5175,23 @@ public final class TZForth {
             for i in 0..<self.currentSourceLen {
                 sourceBytes.append(self.readByte(self.SOURCE_BUFFER + i))
             }
+            var fileId: Int? = nil
+            var fileLineStart: Int? = nil
+            if self.evaluateNesting == 0,
+               self.interpreterInputFileId >= 2 {
+                fileId = Int(self.interpreterInputFileId)
+                fileLineStart = self.currentFileLineStart
+            }
             let snap = InputSnapshot(
                 sourceId: self.currentSourceId,
                 inPos: self.readCell(self.IN),
                 sourceLen: self.currentSourceLen,
                 sourceBytes: sourceBytes,
                 queue: self.inputQueue,
-                evaluateNesting: self.evaluateNesting
+                evaluateNesting: self.evaluateNesting,
+                fileId: fileId,
+                fileLineStart: fileLineStart,
+                fromRefill: self.sourceLoadedByRefill
             )
             let handle = Cell(self.inputSnapshots.count)
             self.inputSnapshots.append(snap)
@@ -5083,14 +5290,39 @@ public final class TZForth {
                 self.currentSourceId = snap.sourceId
                 let currentIn = Int(self.readCell(self.IN))
                 let snapIn = Int(snap.inPos)
-                if currentIn > snapIn {
-                    // Same-line parse moved past the save point (e.g. SAVE-INPUT … EVALUATE … RESTORE-INPUT):
-                    // keep the current >IN, restore the saved SOURCE image only.
+                let refillFileRestore = snap.evaluateNesting == 0
+                    && self.loadNesting > 0
+                    && snap.fromRefill
+                if refillFileRestore {
+                    // Hayes filetest SI2: always restore the REFILL save point and rewind the file
+                    // (even after SAVE-INPUT … EVALUATE … RESTORE-INPUT in the same colon word).
+                    self.writeCell(self.IN, savedIn)
+                    self.inputQueue = snap.queue
+                    self.realignInputQueueFromSource()
+                    if let fid = snap.fileId,
+                       let lineStart = snap.fileLineStart,
+                       var entry = self.openFiles[fid] {
+                        entry.position = lineStart
+                        self.openFiles[fid] = entry
+                        self.interpreterInputFileId = Cell(fid)
+                        self.currentFileLineStart = lineStart
+                    }
+                    self.floadRestoreInputContinuation = true
+                } else if currentIn > snapIn {
+                    // Same-line parse moved past the save point: keep >IN, restore SOURCE only.
                     self.realignInputQueueFromSource()
                 } else {
                     self.writeCell(self.IN, savedIn)
                     self.inputQueue = snap.queue
                     self.realignInputQueueFromSource()
+                }
+                if snap.evaluateNesting == 0, self.loadNesting > 0 {
+                    for qName in ["(\\?)", "(?)"] {
+                        if let qAddr = self.valueStorageAddr(named: qName) {
+                            self.writeCell(qAddr, 0)
+                            break
+                        }
+                    }
                 }
             }
             self.push(0) // success (flag false)
@@ -5102,7 +5334,14 @@ public final class TZForth {
                 self.push(0)
                 return
             }
-            if let fid = self.activeInterpreterFileId(), self.refillFromFile(fid) {
+            let fid: Int?
+            if self.loadNesting > 0, self.interpreterInputFileId >= 2 {
+                fid = Int(self.interpreterInputFileId)
+            } else {
+                fid = self.activeInterpreterFileId()
+            }
+            if let fid, self.refillFromFile(fid) {
+                self.sourceLoadedByRefill = true
                 self.push(-1)
             } else {
                 self.push(0)
@@ -6185,19 +6424,23 @@ public final class TZForth {
             }
         }
 
-        // S\"  immediate — escaped string; compile-only per ANS (interpret undefined).
+        // S\"  immediate — escaped string. Compile: (S") + inline string.
+        // Forth 2012 / Hayes filetest: interpret leaves ( c-addr u ) like S".
         _ = register("S\\\"", immediate: true) {
-            if self.readCell(self.STATE) == 0 {
-                self.throwCompileOnly("? S\\\" is compile-only")
-                return
-            }
             let (saddr, len) = self.parseEscapedStringToBuffer()
-            self.push(self.sQuoteID); self.comma()
-            self.writeByteHere(UInt8(len))
-            for i in 0..<len {
-                self.writeByteHere(self.readByte(saddr + i))
+            if self.readCell(self.STATE) != 0 {
+                self.push(self.sQuoteID); self.comma()
+                self.writeByteHere(UInt8(len))
+                for i in 0..<len {
+                    self.writeByteHere(self.readByte(Int(saddr) + i))
+                }
+                self.alignHere()
+            } else {
+                self.push(saddr)
+                self.push(Cell(len))
             }
-            self.alignHere()
+            self.inputQueue.removeAll(keepingCapacity: true)
+            self.realignInputQueueFromSource()
         }
 
         // Simple CONSTANT (enough for education)
@@ -6870,7 +7113,20 @@ public final class TZForth {
         validateAndRepairSystemState()
         errorFlag = false
 
-        while !inputQueue.isEmpty && !errorFlag && !exitReq && !throwActive && !self.sourceLoadStop {
+        while ((!inputQueue.isEmpty || self.conditionalSkipDiscardThroughQuote || self.pendingRestoredFloadRefill())
+               && !errorFlag && !exitReq && !throwActive && !self.sourceLoadStop) {
+            if self.inputQueue.isEmpty && self.pendingRestoredFloadRefill() {
+                if !self.tryRefillInterpreterFileInput() { break }
+            }
+            if self.conditionalSkipDiscardThroughQuote {
+                self.syncInputQueueFromSourceIfNeeded()
+                if self.discardThroughClosingQuoteIfPresent() {
+                    self.conditionalSkipDiscardThroughQuote = false
+                } else {
+                    break
+                }
+                continue
+            }
             if self.conditionalSkipDepth > 0 {
                 let skipResult = self.continuePendingConditionalSkip()
                 if skipResult == .pending { break }
@@ -6881,7 +7137,11 @@ public final class TZForth {
                 self.syncInputQueueFromSourceIfNeeded()
             }
             let name = parseWord()
-            if name.isEmpty { break }
+            if name.isEmpty {
+                if self.tryRefillInterpreterFileInput() { continue }
+                break
+            }
+
             // Hayes prelimtest.fth: before `n >IN +!`, >IN must point at the first decoy
             // character (past inter-word whitespace). Only advance for !/+! storing into >IN.
             if readCell(STATE) == 0 && (name == "+!" || name == "!") {
@@ -6897,6 +7157,23 @@ public final class TZForth {
             }
             if name == "]" && self.bracketCompileDepth > 0 {
                 self.bracketCompileDepth -= 1
+            }
+
+            if self.readCell(self.STATE) != 0 {
+                let upper = name.uppercased()
+                if upper == "LOCAL" || upper == "END-LOCALS" {
+                    let probe = self.findWord(name)
+                    if probe > 0,
+                       (self.readByte(Int(probe) + 8) & self.FLAG_IMMEDIATE) != 0 {
+                        if upper == "LOCAL" {
+                            self.runHayesLocalDeclImmediate()
+                        } else {
+                            self.runHayesEndLocalsImmediate()
+                        }
+                        if self.throwActive { break }
+                        continue
+                    }
+                }
             }
 
             let hdr = findWord(name)
@@ -6932,6 +7209,15 @@ public final class TZForth {
                     if !compiling {
                         self.realignInputQueueFromSource()
                     }
+                    // Hayes localstest helpers LOCAL / END-LOCALS parse names at compile time; their
+                    // bodies must run in interpret mode. ?REPEAT / ?DONE need compile state (POSTPONE).
+                    let immLocalHelper = name.uppercased() == "LOCAL" || name.uppercased() == "END-LOCALS"
+                    let immColonInterpretBody = compiling && immediate && first == self.docolID && immLocalHelper
+                    let savedCompileState = immColonInterpretBody ? self.readCell(self.STATE) : nil
+                    if immColonInterpretBody {
+                        self.realignInputQueueFromSource()
+                        self.writeCell(self.STATE, 0)
+                    }
                     // Immediate colon definitions (?REPEAT etc.) interpret their bodies even while compiling.
                     // ANS: STATE stays true during compilation (including inside immediate colon bodies).
                     // Only t6in-style `0 >IN !` inside a colon should restore the outer parse offset.
@@ -6943,6 +7229,38 @@ public final class TZForth {
                         self.inVarZeroFetchAfterZero = false
                     }
                     execute(cfa: cfa, firstCell: first)
+                    if let saved = savedCompileState {
+                        self.writeCell(self.STATE, saved)
+                        // WORD/COUNT inside LOCAL advance >IN via consumeInput; do not rewind queue.
+                    }
+                    // Hayes filetest SI2: RESTORE-INPUT inside a colon may replace SOURCE; restore the
+                    // enclosing FLOAD line snapshot so this runInterpreter pass does not parse it,
+                    // unless RESTORE-INPUT is continuing the outer parse on a later file line.
+                    if watchInZero,
+                       !self.floadRestoreInputContinuation,
+                       self.loadNesting > 0,
+                       self.evaluateNesting == 0,
+                       self.inputSourceStack.count >= 2,
+                       let lineFrame = self.inputSourceStack.last {
+                        var sourceChanged = self.currentSourceLen != lineFrame.sourceLen
+                        if !sourceChanged {
+                            for i in 0..<lineFrame.sourceLen {
+                                if self.readByte(self.SOURCE_BUFFER + i) != lineFrame.sourceBytes[i] {
+                                    sourceChanged = true
+                                    break
+                                }
+                            }
+                        }
+                        if sourceChanged {
+                            self.currentSourceLen = lineFrame.sourceLen
+                            for i in 0..<lineFrame.sourceLen {
+                                self.writeByte(self.SOURCE_BUFFER + i, lineFrame.sourceBytes[i])
+                            }
+                            // Line snapshot was taken at line start; mark this FLOAD line finished.
+                            self.writeCell(self.IN, Cell(lineFrame.sourceLen))
+                            self.inputQueue.removeAll(keepingCapacity: true)
+                        }
+                    }
                     if watchInZero,
                        self.inVarZeroedInColon,
                        let saved = savedOuterIn,
@@ -7054,12 +7372,20 @@ public final class TZForth {
     }
 
     /// Hayes ?~~ does `2* >IN +!` (-2). With TZForth >IN at the first unparsed byte, that can
-    /// land on the penultimate character of ?~ / ?T~ / ?F~; advance to the trailing `~`.
+    /// land on the first `~` of `?~~` (or the penultimate char of ?T~ / ?F~). Advance to the
+    /// trailing `~` so the next token is `~` (end-of-line skip), not undefined `~~`.
     private func adjustHayesTildeSkipIfNeeded() {
         let pos = Int(self.readCell(self.IN))
         guard pos >= 0 && pos < self.currentSourceLen else { return }
         let ch = self.readByte(self.SOURCE_BUFFER + pos)
-        guard ch != 126 else { return } // already on '~'
+        if ch == 126 {
+            if pos + 1 < self.currentSourceLen,
+               self.readByte(self.SOURCE_BUFFER + pos + 1) == 126 {
+                self.writeCell(self.IN, Cell(pos + 1))
+                self.realignInputQueueFromSource()
+            }
+            return
+        }
         guard pos + 1 < self.currentSourceLen else { return }
         if self.readByte(self.SOURCE_BUFFER + pos + 1) == 126 {
             self.writeCell(self.IN, Cell(pos + 1))
@@ -7080,14 +7406,78 @@ public final class TZForth {
         }
     }
 
+    /// SOURCE already holds the line at currentFileLineStart; advance the file cursor past it before REFILL.
+    private func advanceInterpreterFilePastCurrentLineIfNeeded() {
+        guard self.floadRestoreInputContinuation else { return }
+        guard let fid = self.activeInterpreterFileId(),
+              var entry = self.openFiles[fid], entry.isOpen,
+              let lineStart = self.currentFileLineStart,
+              entry.position == lineStart else { return }
+        var pos = lineStart
+        while pos < entry.data.count {
+            let b = entry.data[pos]
+            pos += 1
+            if b == 10 { break }
+            if b == 13 {
+                if pos < entry.data.count && entry.data[pos] == 10 { pos += 1 }
+                break
+            }
+        }
+        entry.position = pos
+        self.openFiles[fid] = entry
+    }
+
+    /// True when RESTORE-INPUT left the file mid-T{ and more lines remain to load.
+    private func pendingRestoredFloadRefill() -> Bool {
+        guard self.floadRestoreInputContinuation else { return false }
+        guard self.inputQueue.isEmpty else { return false }
+        guard self.loadNesting > 0, self.evaluateNesting == 0, self.readCell(self.STATE) == 0 else { return false }
+        let pos = Int(self.readCell(self.IN))
+        guard pos >= self.currentSourceLen else { return false }
+        guard let fid = self.activeInterpreterFileId(),
+              let entry = self.openFiles[fid], entry.isOpen,
+              entry.position < entry.data.count else { return false }
+        return true
+    }
+
+    /// Load the next file line when RESTORE-INPUT continued parsing past the outer FLOAD line (Hayes filetest SI2).
+    private func tryRefillInterpreterFileInput() -> Bool {
+        guard self.pendingRestoredFloadRefill() else { return false }
+        guard let fid = self.activeInterpreterFileId() else { return false }
+        self.advanceInterpreterFilePastCurrentLineIfNeeded()
+        if self.refillFromFile(fid) {
+            self.sourceLoadedByRefill = true
+            return true
+        }
+        return false
+    }
+
     /// When the byte queue is empty but >IN has not reached SOURCE end, refill the queue
     /// from SOURCE. Needed for parsing words (FLOAD, EDIT, …) invoked via EXECUTE/CATCH
     /// while the outer line still has unparsed tokens (e.g. `safe-fload myfile.fth`).
     private func syncInputQueueFromSourceIfNeeded() {
         guard !self.sourceLoadStop else { return }
-        let pos = Int(self.readCell(self.IN))
-        guard pos < self.currentSourceLen else { return }
         guard self.inputQueue.isEmpty else { return }
+        let pos = Int(self.readCell(self.IN))
+        if pos >= self.currentSourceLen {
+            if self.tryRefillInterpreterFileInput() { return }
+        }
+        // Hayes filetest SI2: RESTORE-INPUT inside a colon on this FLOAD line may replace
+        // SOURCE; do not keep parsing the restored buffer here (next REFILL will handle it).
+        if !self.floadRestoreInputContinuation,
+           self.loadNesting > 0,
+           self.inputSourceStack.count >= 2,
+           let lineFrame = self.inputSourceStack.last {
+            if self.currentSourceLen != lineFrame.sourceLen {
+                return
+            }
+            for i in 0..<lineFrame.sourceLen {
+                if self.readByte(self.SOURCE_BUFFER + i) != lineFrame.sourceBytes[i] {
+                    return
+                }
+            }
+        }
+        guard pos < self.currentSourceLen else { return }
         self.realignInputQueueFromSource()
     }
 
@@ -7463,6 +7853,9 @@ public final class TZForth {
         self.whileNestStack = frame.whileNestStack
         while self.localFrames.count > frame.localFramesDepth {
             self.localFrames.removeLast()
+        }
+        while self.localFrameReturnDepth.count > frame.localFramesDepth {
+            self.localFrameReturnDepth.removeLast()
         }
         self.writeCell(self.STATE, frame.state)
         self.rspSet(frame.returnStackDepth)
@@ -8150,7 +8543,7 @@ public final class TZForth {
         self.interpretIfTrueDepth = 0
         self.conditionalSkipDepth = 0
         self.conditionalSkipStopAtElse = false
-        self.conditionalSkipEndedInString = false
+        self.conditionalSkipDiscardThroughQuote = false
         self.inSlashSlashComment = false
         self.sourceLoadStop = false
         self.replBatchStop = false

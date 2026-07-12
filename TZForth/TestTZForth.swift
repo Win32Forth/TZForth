@@ -1050,13 +1050,15 @@ if ProcessInfo.processInfo.environment["HAYES"] == "1" {
 
     forth.feedLine("CR .( Running ANS Forth tests for TZForth — Block and Facility omitted ) CR")
 
-    // Bootstrap via nested FLOAD (prelimtest ?~~ / ~ skips need parent-file load context).
-    // Remaining word-set files load at top level after harness is ready.
+    // Match the console test.fth workflow: bootstrap, VERBOSE on, per-file fload + #ERRORS reset.
     let bootstrap = suiteSrc.appendingPathComponent("debug-bootstrap.fth")
+    // Same order as Tests/forth2012-test-suite/src/test.fth (coreplus first; toolstest again at end).
     let hayesFiles = [
-        "coreplustest.fth", "coreexttest.fth", "doubletest.fth", "exceptiontest.fth",
-        "filetest.fth", "localstest.fth", "memorytest.fth", "toolstest.fth",
+        "coreplustest.fth",
+        "coreexttest.fth", "doubletest.fth", "exceptiontest.fth", "filetest.fth",
+        "localstest.fth", "memorytest.fth", "toolstest.fth",
         "searchordertest.fth", "stringtest.fth",
+        "toolstest.fth",
     ]
     var ok = true
     guard fm.fileExists(atPath: bootstrap.path) else {
@@ -1066,6 +1068,9 @@ if ProcessInfo.processInfo.environment["HAYES"] == "1" {
     if !forth.loadFile(bootstrap) {
         ok = false
     }
+    if ok {
+        forth.feedLine("TRUE VERBOSE !")
+    }
     for name in hayesFiles where ok {
         let url = suiteSrc.appendingPathComponent(name)
         guard fm.fileExists(atPath: url.path) else {
@@ -1073,6 +1078,7 @@ if ProcessInfo.processInfo.environment["HAYES"] == "1" {
             ok = false
             break
         }
+        forth.feedLine("0 #ERRORS !")
         if !forth.loadFile(url) {
             ok = false
             break

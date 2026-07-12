@@ -8705,6 +8705,26 @@ public final class TZForth {
     /// SAVE-INPUT snapshots paired with SessionEnvironmentSnapshot (private InputSnapshot type).
     private var sessionInputSnapshotsBackup: [InputSnapshot] = []
 
+    /// Snapshot user dictionary bytes [kernelHere, here) for ANS-VALIDATE restore.
+    /// Pointer restore (LATEST/HERE) alone is not enough: validation tests can scribble on
+    /// link fields below the saved HERE (e.g. after FLOAD TEST / Hayes), breaking search.
+    internal func captureValidationDictionaryBytes(upTo here: Cell) -> [UInt8] {
+        let from = Int(self.kernelHere != 0 ? self.kernelHere : (self.rstackBase + self.RSTACK_SIZE * self.CELL_SIZE))
+        let to = Int(here)
+        guard from < to, to <= self.memory.count else { return [] }
+        return Array(self.memory[from..<to])
+    }
+
+    /// Restore bytes captured by captureValidationDictionaryBytes(upTo:).
+    internal func restoreValidationDictionaryBytes(_ bytes: [UInt8], upTo here: Cell) {
+        let from = Int(self.kernelHere != 0 ? self.kernelHere : (self.rstackBase + self.RSTACK_SIZE * self.CELL_SIZE))
+        let to = Int(here)
+        guard from < to, bytes.count == to - from else { return }
+        for i in 0..<bytes.count {
+            self.memory[from + i] = bytes[i]
+        }
+    }
+
     /// Snapshot kernel variables and session flags (FILE-ECHO, BASE, memory growth, etc.).
     internal func captureSessionEnvironment() -> SessionEnvironmentSnapshot {
         var snap = SessionEnvironmentSnapshot()

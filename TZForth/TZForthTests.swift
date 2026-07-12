@@ -35,6 +35,7 @@ extension TZForth {
         let preValidationHere = self.readCell(self.DP_ADDR)
         let preValidationCurrent = self.readCell(self.CURRENT)
         let preValidationSearchOrder = self.searchOrder
+        let preValidationDictBytes = self.captureValidationDictionaryBytes(upTo: preValidationHere)
         let preValidationEnvironment = self.captureSessionEnvironment()
 
         var results = "=== ANS-VALIDATE: 2012 ANS Forth validation (290 spot-checks: Core, Core Ext, File-Access, String, Facility, Exception, Memory, Double, Locals, Programming-Tools; from TestTZForth FTEST) ===\n\n"
@@ -985,17 +986,20 @@ fload \(fnInnerLate.lastPathComponent)
 
         // Restore dict to exactly the state before this ANS-VALIDATE run. All the test-only
         // words defined during the ansTest feeds (t6mem, t6if, t6until, t6do, t6dop, etc.)
-        // are forgotten and the dictionary pointer (HERE) is reclaimed. This prevents the
-        // "dictionary corrupted / polluted" symptom after running ANS-VALIDATE.
+        // are forgotten and the dictionary pointer (HERE) is reclaimed. Also restore the
+        // user dictionary bytes — validation can corrupt link fields below the saved HERE
+        // (common after FLOAD TEST / Hayes), which breaks word lookup even when LATEST/HERE
+        // pointers look correct.
+        self.restoreValidationDictionaryBytes(preValidationDictBytes, upTo: preValidationHere)
         self.writeCell(self.LATEST, preValidationLatest)
         self.writeCell(self.DP_ADDR, preValidationHere)
-        self.writeCell(self.CURRENT, preValidationCurrent)
 
         // Make sure runtime state (stacks, STATE, flags, etc.) is clean too.
         self.resetRuntimeState()
 
-        // resetRuntimeState() resets searchOrder to [LATEST]; restore the user's order.
+        // resetRuntimeState() resets searchOrder/CURRENT; restore the user's order.
         self.searchOrder = preValidationSearchOrder
+        self.writeCell(self.CURRENT, preValidationCurrent)
 
         // Restore kernel variables and session flags (FILE-ECHO, BASE, GROWMEMORYMB, etc.).
         self.restoreSessionEnvironment(preValidationEnvironment)

@@ -1617,6 +1617,15 @@ public final class TZForth {
         return (parts.lo, parts.hi)
     }
 
+    /// Hayes / classic: 'c' is a single-character literal (ASCII value), not tick.
+    private func parseCharLiteralToken(_ name: String) -> Int? {
+        guard name.count == 3,
+              name.first == "'",
+              name.last == "'",
+              let ch = name.dropFirst().dropLast().first else { return nil }
+        return Int(ch.asciiValue ?? UInt8(ch.unicodeScalars.first?.value ?? 0))
+    }
+
     private func parseTextNumber(_ name: String, base defaultBase: Int) -> Int? {
         guard let parsed = self.parsePrefixedNumericStem(name, defaultBase: defaultBase) else { return nil }
         let b = max(2, min(36, parsed.base))
@@ -6961,6 +6970,13 @@ public final class TZForth {
                         // The UI will later call provideKey when the user supplies a character.
                         break
                     }
+                }
+            } else if let charLit = self.parseCharLiteralToken(name) {
+                if self.readCell(self.STATE) != 0 {
+                    self.push(litID); self.comma()
+                    self.push(Cell(charLit)); self.comma()
+                } else {
+                    self.push(Cell(charLit))
                 }
             } else {
                 // Try number, respecting current BASE (supports 2..36, signs, letters A-Z).

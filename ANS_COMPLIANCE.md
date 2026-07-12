@@ -62,6 +62,10 @@ All Core words required for conformance are implemented. Notable details:
 | `S\"` | compile: parse escaped `"`-string, compile `(S")` + literal; interpret undefined per ANS |
 | `REFILL` | `( -- flag )` — refill input buffer; false when no further line available (line-oriented REPL) |
 
+### Hayes character-literal token (not an ANS word)
+
+ANS Core provides **`CHAR`** / **`[CHAR]`** and **`'`** (tick, execution token of a name). The John Hayes **forth2012-test-suite** also uses a **non-ANS token form** `'c'` — apostrophe, one character, apostrophe — which the text interpreter treats as an ASCII cell literal (e.g. `'z'` → `122`). This is **not** a dictionary entry and **not** tick: whitespace still separates `' T10` (tick + name) from `'z'` (one token). In compile state, `'c'` compiles as `LIT` + value like other numeric literals.
+
 ### Previously added (Tier 1 and earlier)
 
 `.R`, `C"`, `PARSE-NAME`, `UNUSED`, `.FREE`, `HOLDS`, `BUFFER:`, `<>`, `U>`, `0<>`, `VALUE`, `IS`, `TO`, `DEFER`, `DEFER!`, `DEFER@`, `CASE`/`OF`/`ENDOF`/`ENDCASE`, `COMPILE,`, `ERASE`, pictured numeric (`<#` `#` `#S` `#>` `HOLD` `SIGN`), `S"`, loops/control (`?DO` `+LOOP` `UNLOOP` `LEAVE`, `2>R` `2R@` `2R>`, `NIP` `PICK` `ROLL` `TUCK`, `U.R`, `WITHIN`, `AGAIN`, etc.).

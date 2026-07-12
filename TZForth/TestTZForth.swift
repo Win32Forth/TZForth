@@ -1049,17 +1049,24 @@ if ProcessInfo.processInfo.environment["HAYES"] == "1" {
     forth.resetRuntimeState()
 
     forth.feedLine("CR .( Running ANS Forth tests for TZForth — Block and Facility omitted ) CR")
-    forth.feedLine("FILE-ECHO ON")
-    
-    // Load via feedLine (FLOAD path). INCLUDED/REFILL mis-syncs >IN for Hayes ?~~ skips.
+
+    // Bootstrap via nested FLOAD (prelimtest ?~~ / ~ skips need parent-file load context).
+    // Remaining word-set files load at top level after harness is ready.
+    let bootstrap = suiteSrc.appendingPathComponent("debug-bootstrap.fth")
     let hayesFiles = [
-        "prelimtest.fth", "tester.fr", "core.fr", "coreplustest.fth", "utilities.fth",
-        "errorreport.fth", "coreexttest.fth", "doubletest.fth", "exceptiontest.fth",
+        "coreplustest.fth", "coreexttest.fth", "doubletest.fth", "exceptiontest.fth",
         "filetest.fth", "localstest.fth", "memorytest.fth", "toolstest.fth",
         "searchordertest.fth", "stringtest.fth",
     ]
     var ok = true
-    for name in hayesFiles {
+    guard fm.fileExists(atPath: bootstrap.path) else {
+        print("ERROR: missing Hayes bootstrap \(bootstrap.path)")
+        exit(1)
+    }
+    if !forth.loadFile(bootstrap) {
+        ok = false
+    }
+    for name in hayesFiles where ok {
         let url = suiteSrc.appendingPathComponent(name)
         guard fm.fileExists(atPath: url.path) else {
             print("ERROR: missing Hayes file \(name)")

@@ -810,14 +810,24 @@ extension TZForth {
         let bufCount = self.effectiveBlockBufferCount()
         let defBlocks = self.effectiveDefaultBlockCount()
         let memMB = self.memory.count / (1024 * 1024)
+        let poolBytes = bs * bufCount
+        let settingsPath = TZForthSettings.storageURL().path
         self.tell("TZForth settings (session / persisted):\n")
-        self.tell("  BLOCK-SIZE @           = \(bs) (restart to resize pool)\n")
-        self.tell("  BLOCK-BUFFER-COUNT @   = \(bufCount) (restart to resize pool)\n")
+        self.tell("  BLOCK-SIZE @           = \(bs)\n")
+        self.tell("    change: n BLOCK-SIZE ! SAVE-SETTINGS (restart to apply pool size)\n")
+        self.tell("  BLOCK-BUFFER-COUNT @   = \(bufCount)\n")
+        self.tell("    change: n BLOCK-BUFFER-COUNT ! SAVE-SETTINGS (restart; also moves block pool)\n")
         self.tell("  DEFAULT-BLOCK-COUNT @  = \(defBlocks)\n")
+        self.tell("    change: n DEFAULT-BLOCK-COUNT ! SAVE-SETTINGS (new .blk default size)\n")
         self.tell("  memory bytes           = \(self.memory.count) (\(memMB) MB)\n")
+        self.tell("    change: n GROWMEMORYMB once per session before ALLOCATE; SAVE-SETTINGS stores MB for next boot\n")
         self.tell("  default blocks file    = \(self.settings.defaultBlocksFileName)\n")
-        self.tell("  block pool base        = \(self.blockPoolBase)\n")
+        self.tell("    change: edit \"defaultBlocksFileName\" in \(settingsPath) then restart\n")
+        self.tell("    (or OPEN-BLOCK-FILE / USE-BLOCK-FILE for this session only)\n")
+        self.tell("  block pool base        = \(self.blockPoolBase) (\(poolBytes) bytes = BLOCK-SIZE * BLOCK-BUFFER-COUNT)\n")
+        self.tell("    read-only: recalculated below PNO on restart when buffer count or block size changes\n")
         self.tell("  current BLOCK-FILE @   = \(self.currentBlockFileId())\n")
+        self.tell("  persisted settings     = \(settingsPath)\n")
     }
 
     func saveSettingsFromVariables() {

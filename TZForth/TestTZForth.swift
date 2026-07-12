@@ -9,7 +9,7 @@
 //      cat TZForth/TZForth.swift TZForth/TZForthTests.swift TZForth/TestTZForth.swift > /tmp/combined.swift
 //      swift /tmp/combined.swift
 //
-//      # For automated tests (\\ block comments, \S, FLOAD behavior + 290 ANS spot-checks):
+//      # For automated tests (\\ block comments, \S, FLOAD behavior + 299 ANS spot-checks):
 //      FTEST=1 swift /tmp/combined.swift
 //
 //      # For John Hayes / forth2012-test-suite (Block omitted; 0 T{ failures):
@@ -760,6 +760,40 @@ fload \(fnInnerLate.lastPathComponent)
     } else {
         print("TEST6 AT-XY EMIT: FAIL short screen")
     }
+
+    // Facility Phase 3: MS / TIME&DATE / EKEY* / EMIT? / K-*
+    ansTest("EMIT?", "EMIT? .", "-1")
+    ansTest("K-LEFT", "K-LEFT .", "1")
+    let tdYear = Calendar.current.component(.year, from: Date())
+    ansTest("TIME&DATE year", "TIME&DATE .", "\(tdYear)")
+    ansTest("EKEY>CHAR a", "\(TZForth.makeCharKeyEvent(97)) EKEY>CHAR . .", "-1")
+    ansTest("EKEY>FKEY left", "\(TZForth.makeFKeyEvent(TZForth.FacilityFKey.left)) EKEY>FKEY . .", "-1")
+    ansTest("EKEY? empty", "EKEY? .", "0")
+    resetTest()
+    forth.enqueueExtendedKey(TZForth.makeCharKeyEvent(66, mods: 0))
+    collected = ""
+    forth.feedLine("EKEY? .")
+    ansTotal += 1
+    if collected.contains("-1") {
+        ansPassed += 1
+        print("TEST6 EKEY? queued: pass")
+    } else {
+        print("TEST6 EKEY? queued: FAIL got '\(collected.trimmingCharacters(in: .whitespacesAndNewlines))'")
+    }
+    resetTest()
+    forth.feedLine("EKEY EKEY>CHAR DROP .")
+    ansTotal += 1
+    if forth.waitingForExtendedKey {
+        forth.provideExtendedKey(TZForth.makeCharKeyEvent(65, mods: 0))
+    }
+    let ekeyOut = collected.trimmingCharacters(in: .whitespacesAndNewlines)
+    if ekeyOut.contains("65") {
+        ansPassed += 1
+        print("TEST6 EKEY char: pass")
+    } else {
+        print("TEST6 EKEY char: FAIL got '\(ekeyOut)'")
+    }
+    ansTest("MS brief", "1 MS", "OK")
 
     // Memory-Allocation (14): GROWMEMORYMB first (once per session), then ALLOCATE FREE RESIZE
     ansTest("GROWMEMORYMB grow", "4 GROWMEMORYMB UNUSED 3000000 > .", "-1")

@@ -2,7 +2,7 @@
 
 This document tracks implementation status of the 2012 ANS Forth Standard word sets in TZForth (Swift port of the lbForth model). Generated from codebase inspection (`TZForth/TZForth.swift`, `TestTZForth.swift`, `TZForthTests.swift`).
 
-Last update: Hayes forth2012-test-suite **0 errors** (Block omitted); Facility structures + terminal (`PAGE`/`AT-XY`); FTEST / `ANS-VALIDATE` **290/290**.
+Last update: Hayes forth2012-test-suite **0 errors** (Block omitted); Facility complete on TZForth host; FTEST / `ANS-VALIDATE` **299/299**.
 
 ## Summary
 
@@ -18,10 +18,10 @@ Last update: Hayes forth2012-test-suite **0 errors** (Block omitted); Facility s
 | **Memory-Allocation (14)** | Complete — 14.6.1 (`ALLOCATE`, `FREE`, `RESIZE`); extension `GROWMEMORYMB` |
 | **Double-Number (8)** | Complete — 8.6.1 + 8.6.2 (`2ROT`, `2VALUE`, `DU<`); trailing `.` literals |
 | **Locals (13)** | Complete — `(LOCAL)`, `LOCALS|`, `{:`; `TO` for locals; max 32 (`#LOCALS`) |
-| **Facility (10)** | Partial — 10.6.1 `PAGE`/`AT-XY`/`KEY?`; 10.6.2 structures; Hayes 0 errors; EKEY/`MS`/`TIME&DATE` not yet |
+| **Facility (10)** | Complete (TZForth host) — structures, `PAGE`/`AT-XY`, `MS`, `TIME&DATE`, `EKEY*`, `EMIT?`, `K-*`; Hayes `facilitytest.fth` 0 errors |
 | **Other optional sets** | Mostly absent — Float, Block, Extended-Character, etc. |
 
-FTEST harness: run with `FTEST=1 swift /tmp/combined.swift` (concatenate `TZForth.swift`, `TZForthTests.swift`, `TestTZForth.swift`). Current count: **290/290** TEST6 spot-checks (280 `ansTest` calls + 10 harness-only checks) plus block-comment / FLOAD / INCLUDE load tests. In-app **`ANS-VALIDATE`** runs the same suite and overwrites **`TZForth/ANS-VALIDATE.txt`** (tracked baseline in the Xcode project; excluded from the app bundle so it stays writable).
+FTEST harness: run with `FTEST=1 swift /tmp/combined.swift` (concatenate `TZForth.swift`, `TZForthTests.swift`, `TestTZForth.swift`). Current count: **299/299** TEST6 spot-checks (289 `ansTest` calls + 10 harness-only checks) plus block-comment / FLOAD / INCLUDE load tests. In-app **`ANS-VALIDATE`** runs the same suite and overwrites **`TZForth/ANS-VALIDATE.txt`** (tracked baseline in the Xcode project; excluded from the app bundle so it stays writable).
 
 ## Core (6.1) — Complete
 
@@ -335,9 +335,16 @@ During an active structure, **`ALIGNED`** aligns the structure offset (for `ALIG
 
 `CLS` deactivates the facility buffer and clears scrollback (TZForth host). `EMIT`/`TYPE`/`CR`/`SPACES` route to the buffer while terminal mode is active (after `PAGE` or `AT-XY`).
 
-### Not yet implemented (Facility extensions)
+### Facility extensions (10.6.2) — done
 
-- **10.6.2:** `MS`, `TIME&DATE`, `EKEY` / `EKEY?` / `EKEY>CHAR` / `EKEY>FKEY`, `EMIT?`, `K-*` key constants
+| Word | Notes |
+|------|-------|
+| `MS` | Async delay via `onMsDelayRequested` (ConsoleView); CLI/FTEST falls back to `Thread.sleep` |
+| `TIME&DATE` | Local wall clock — `( -- sec min hr day mon yr )`, year on top |
+| `EKEY` / `EKEY?` | Extended key queue; blocking `provideExtendedKey` from ConsoleView |
+| `EKEY>CHAR` / `EKEY>FKEY` | Decode TZForth event encoding (char tag `0x01xxxxxx`, fkey tag `0x02xxxxxx`) |
+| `EMIT?` | Always true (`-1`) in console host |
+| `K-*` | `K-LEFT`…`K-F12`, `K-PRIOR`/`K-NEXT`, `K-INSERT`/`K-DELETE`, shift/ctrl/alt masks |
 
 ## Missing optional / future word sets
 

@@ -17,7 +17,7 @@ import Foundation
 
 extension TZForth {
     // The runANSValidation (and its nested helpers) implement the full port of
-    // the FTEST ANS spot-checks (290 checks) so that "ANS-VALIDATE" works from
+    // the FTEST ANS spot-checks (299 checks) so that "ANS-VALIDATE" works from
     // within Forth (writes ANS-VALIDATE.txt next to TestTZForth.swift when CHDIRed there).
     public func runANSValidation() -> String {
         // Snapshot the "current" dir at start (the folder of the test .swift as user set via CHDIR or launch).
@@ -38,7 +38,7 @@ extension TZForth {
         let preValidationDictBytes = self.captureValidationDictionaryBytes(upTo: preValidationHere)
         let preValidationEnvironment = self.captureSessionEnvironment()
 
-        var results = "=== ANS-VALIDATE: 2012 ANS Forth validation (290 spot-checks: Core, Core Ext, File-Access, String, Facility, Exception, Memory, Double, Locals, Programming-Tools; from TestTZForth FTEST) ===\n\n"
+        var results = "=== ANS-VALIDATE: 2012 ANS Forth validation (299 spot-checks: Core, Core Ext, File-Access, String, Facility, Exception, Memory, Double, Locals, Programming-Tools; from TestTZForth FTEST) ===\n\n"
         var collected = ""
 
         let originalOnOutput = self.onOutput
@@ -687,6 +687,40 @@ fload \(fnInnerLate.lastPathComponent)
         } else {
             results += "TEST6 AT-XY EMIT: FAIL short screen\n"
         }
+
+        // Facility Phase 3: MS / TIME&DATE / EKEY* / EMIT? / K-*
+        ansTest("EMIT?", "EMIT? .", "-1")
+        ansTest("K-LEFT", "K-LEFT .", "1")
+        let tdYear = Calendar.current.component(.year, from: Date())
+        ansTest("TIME&DATE year", "TIME&DATE .", "\(tdYear)")
+        ansTest("EKEY>CHAR a", "\(TZForth.makeCharKeyEvent(97)) EKEY>CHAR . .", "-1")
+        ansTest("EKEY>FKEY left", "\(TZForth.makeFKeyEvent(TZForth.FacilityFKey.left)) EKEY>FKEY . .", "-1")
+        ansTest("EKEY? empty", "EKEY? .", "0")
+        resetTest()
+        self.enqueueExtendedKey(TZForth.makeCharKeyEvent(66, mods: 0))
+        collected = ""
+        self.feedLine("EKEY? .")
+        ansTotal += 1
+        if collected.contains("-1") {
+            ansPassed += 1
+            results += "TEST6 EKEY? queued: pass\n"
+        } else {
+            results += "TEST6 EKEY? queued: FAIL got '\(collected.trimmingCharacters(in: .whitespacesAndNewlines))'\n"
+        }
+        resetTest()
+        self.feedLine("EKEY EKEY>CHAR DROP .")
+        ansTotal += 1
+        if self.waitingForExtendedKey {
+            self.provideExtendedKey(TZForth.makeCharKeyEvent(65, mods: 0))
+        }
+        let ekeyOut = collected.trimmingCharacters(in: .whitespacesAndNewlines)
+        if ekeyOut.contains("65") {
+            ansPassed += 1
+            results += "TEST6 EKEY char: pass\n"
+        } else {
+            results += "TEST6 EKEY char: FAIL got '\(ekeyOut)'\n"
+        }
+        ansTest("MS brief", "1 MS", "OK")
 
         // Memory-Allocation (14): GROWMEMORYMB first (once per session), then ALLOCATE FREE RESIZE
         ansTest("GROWMEMORYMB grow", "4 GROWMEMORYMB UNUSED 3000000 > .", "-1")

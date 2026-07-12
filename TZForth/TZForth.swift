@@ -174,6 +174,63 @@ public final class TZForth {
     /// normal line interpretation.
     public var waitingForKey = false
 
+    /// True when EKEY is blocked waiting for an extended keyboard event from the host.
+    public var waitingForExtendedKey = false
+
+    /// True when MS is waiting for an asynchronous host delay (see onMsDelayRequested).
+    public var waitingForMs = false
+
+    /// Host schedules MS delays without blocking the UI thread. Invoked with milliseconds and a
+    /// completion handler that must call resumeAfterMs() on the engine (done automatically if
+    /// the closure only calls the passed completion).
+    public var onMsDelayRequested: ((Int, @escaping () -> Void) -> Void)?
+
+    /// ANS Facility K-* / EKEY>FKEY identifiers (implementation-defined; stable within TZForth).
+    public enum FacilityFKey {
+        public static let shiftMask = 1 << 13
+        public static let ctrlMask = 1 << 14
+        public static let altMask = 1 << 15
+        public static let left = 1
+        public static let right = 2
+        public static let up = 3
+        public static let down = 4
+        public static let home = 5
+        public static let end = 6
+        public static let prior = 7
+        public static let next = 8
+        public static let insert = 9
+        public static let delete = 10
+        public static let f1 = 11
+        public static let f2 = 12
+        public static let f3 = 13
+        public static let f4 = 14
+        public static let f5 = 15
+        public static let f6 = 16
+        public static let f7 = 17
+        public static let f8 = 18
+        public static let f9 = 19
+        public static let f10 = 20
+        public static let f11 = 21
+        public static let f12 = 22
+    }
+
+    /// EKEY character event: modifiers in bits 8..23, character in low 8 bits.
+    public static func makeCharKeyEvent(_ char: Int, mods: Int = 0) -> Int {
+        (1 << 24) | ((mods & 0xFFFF) << 8) | (char & 0xFF)
+    }
+
+    /// EKEY function-key event for EKEY>FKEY / K-* constants.
+    public static func makeFKeyEvent(_ fkeyId: Int) -> Int {
+        (2 << 24) | (fkeyId & 0xFFFFFF)
+    }
+
+    /// True when the interpreter is suspended waiting for host input or an MS delay.
+    public var isBlockingOnHost: Bool {
+        self.waitingForKey || self.waitingForExtendedKey || self.waitingForMs
+    }
+
+    private var extendedKeyQueue: [Int] = []
+
     /// Set by FLOAD when invoked with no filename argument. The host UI observes this flag
     /// (typically via onOutput or post-feed checks) and presents a file dialog. After the user
     /// picks a file (or cancels), the host calls loadFile(_:) or clears the flag.
@@ -594,6 +651,13 @@ public final class TZForth {
         ("CFIELD:", "( \"name\" -- )",     "add 1-char field (immediate)"),
         ("PAGE",    "( -- )",              "clear facility terminal and home cursor"),
         ("AT-XY",   "( u1 u2 -- )",        "facility terminal cursor to column u1 row u2"),
+        ("MS",      "( u -- )",            "wait at least u milliseconds"),
+        ("TIME&DATE","( -- sec min hr day mon yr )", "local wall-clock components"),
+        ("EKEY",    "( -- x )",            "blocking extended keyboard event"),
+        ("EKEY?",   "( -- flag )",         "true if extended key event available"),
+        ("EKEY>CHAR","( x -- x 0 | char -1 )", "decode event to character"),
+        ("EKEY>FKEY","( x -- x 0 | u -1 )", "decode event to K-* function key id"),
+        ("EMIT?",   "( -- flag )",         "true when output device can accept a character"),
         ("TYPE",    "( addr len -- )",    "print len characters from addr"),
         ("U.",      "( u -- )",           "print unsigned number"),
         ("H.",      "( u -- )",           "print unsigned as uppercase hex (ignores BASE)"),
@@ -1356,36 +1420,62 @@ public final class TZForth {
         // interpret mode. This prevents a dirty IP (leftover from errors, FLOAD
         // recursion, or previous bad threaded runs) from being rpush'ed as the
         // return frame for the *next* command line's colon executions.
-        if readCell(STATE) == 0 && !waitingForKey {
+        if readCell(STATE) == 0 && !self.isBlockingOnHost {
             ip = 0
         }
         self.flushTerminalRefreshIfNeeded()
+    }
+
+    private func resumeBlockingPrimitive(pushValue: Int? = nil) {
+        if let v = pushValue {
+            self.push(v)
+        }
+        if self.returnStackPointer > 1 {
+            self.ip += 8
+            self.innerThread()
+        }
+        self.runInterpreter()
     }
 
     /// Called by the host UI (ConsoleView) when the user types a character while
     /// a KEY is waiting (waitingForKey == true). This supplies the character to the
     /// pending KEY and resumes interpretation (outer or threaded) from the suspension point.
     public func provideKey(_ char: Int) {
-        if !waitingForKey { return }
-        waitingForKey = false
+        if !self.waitingForKey { return }
+        self.waitingForKey = false
+        self.resumeBlockingPrimitive(pushValue: char)
+    }
 
-        // Provide the value as if the KEY primitive itself had pushed it.
-        push(char)
+    /// Called by the host when EKEY is waiting. Supplies an extended keyboard event.
+    public func provideExtendedKey(_ event: Int) {
+        if !self.waitingForExtendedKey { return }
+        self.waitingForExtendedKey = false
+        self.resumeBlockingPrimitive(pushValue: event)
+    }
 
-        // Resume execution.
-        // - If we were inside a colon definition (return stack has frames), re-enter
-        //   innerThread. Because we rewound ip in innerThread on suspend, we must now
-        //   advance past the KEY cell (we have already injected the value via push).
-        //   This avoids re-executing the KEY primitive.
-        if returnStackPointer > 1 {
-            ip += 8
-            innerThread()
-        }
-        // In all cases (top-level KEY or after a colon def), give the outer interpreter
-        // a chance to finish processing any remaining words on the current top-level line
-        // (e.g. nothing, or if somehow more) and print the "OK" if the line completed
-        // (note: OK is suppressed while loadNesting > 0).
-        runInterpreter()
+    /// Resume after an asynchronous MS delay (invoked from onMsDelayRequested completion).
+    public func resumeAfterMs() {
+        if !self.waitingForMs { return }
+        self.waitingForMs = false
+        self.resumeBlockingPrimitive()
+    }
+
+    /// Queue an extended key event (used by host pre-buffering and test harness).
+    internal func enqueueExtendedKey(_ event: Int) {
+        self.extendedKeyQueue.append(event)
+    }
+
+    private func dequeueExtendedKey() -> Int? {
+        if self.extendedKeyQueue.isEmpty { return nil }
+        return self.extendedKeyQueue.removeFirst()
+    }
+
+    private func isCharKeyEvent(_ x: Int) -> Bool {
+        (x & (3 << 24)) == (1 << 24)
+    }
+
+    private func isFKeyEvent(_ x: Int) -> Bool {
+        (x & (3 << 24)) == (2 << 24)
     }
 
     // MARK: - FLOAD / INCLUDE shared source loading
@@ -1455,7 +1545,7 @@ public final class TZForth {
             let depth = Int(self.spGet() - 1)
             self.tell("[DEBUG] state=\(stateStr)  stack=<\(depth)> \(self.stackAsString)\n")
         }
-        if self.readCell(self.STATE) == 0 && !self.waitingForKey {
+        if self.readCell(self.STATE) == 0 && !self.isBlockingOnHost {
             self.ip = 0
         }
     }
@@ -5934,7 +6024,7 @@ public final class TZForth {
             self.clearScreenRequested = true
         }
 
-        // ANS-VALIDATE — run the 2012 ANS Forth validation tests (290 spot-checks: Core,
+        // ANS-VALIDATE — run the 2012 ANS Forth validation tests (299 spot-checks: Core,
         // Core Ext, File-Access, String, Facility, Exception, Memory, Double, Locals, Programming-Tools;
         // ported from TestTZForth FTEST, originally TestLBForth.swift) and write ANS-VALIDATE.txt
         // in the folder containing the TestTZForth.swift (i.e. next to the tests source).
@@ -6947,6 +7037,14 @@ public final class TZForth {
         self.structureActive = false
     }
 
+    private func registerFacilityConstant(_ name: String, _ value: Cell) {
+        self.createWord(name: name, immediate: false)
+        self.push(self.docolID); self.comma()
+        self.push(self.litID); self.comma()
+        self.push(value); self.comma()
+        self.push(self.exitID); self.comma()
+    }
+
     private func registerFacilityWords() {
         _ = register("BEGIN-STRUCTURE", immediate: true) {
             let name = self.parseWord()
@@ -7005,6 +7103,101 @@ public final class TZForth {
             if self.throwActive { return }
             self.facilityTerminal.atXY(col: col, row: row)
         }
+
+        _ = register("MS") {
+            let ms = max(0, Int(self.pop()))
+            if let cb = self.onMsDelayRequested {
+                self.waitingForMs = true
+                cb(ms) { [weak self] in self?.resumeAfterMs() }
+                return
+            }
+            if ms > 0 {
+                Thread.sleep(forTimeInterval: Double(ms) / 1000.0)
+            }
+        }
+
+        _ = register("TIME&DATE") {
+            let now = Date()
+            let cal = Calendar.current
+            let sec = cal.component(.second, from: now)
+            let min = cal.component(.minute, from: now)
+            let hr = cal.component(.hour, from: now)
+            let day = cal.component(.day, from: now)
+            let mon = cal.component(.month, from: now)
+            let yr = cal.component(.year, from: now)
+            self.push(Cell(sec))
+            self.push(Cell(min))
+            self.push(Cell(hr))
+            self.push(Cell(day))
+            self.push(Cell(mon))
+            self.push(Cell(yr))
+        }
+
+        _ = register("EKEY") {
+            if let ev = self.dequeueExtendedKey() {
+                self.push(ev)
+                return
+            }
+            self.waitingForExtendedKey = true
+            return
+        }
+
+        _ = register("EKEY?") {
+            self.push(self.extendedKeyQueue.isEmpty ? 0 : -1)
+        }
+
+        _ = register("EKEY>CHAR") {
+            let x = Int(self.pop())
+            if self.isCharKeyEvent(x) {
+                self.push(x & 0xFF)
+                self.push(-1)
+            } else {
+                self.push(x)
+                self.push(0)
+            }
+        }
+
+        _ = register("EKEY>FKEY") {
+            let x = Int(self.pop())
+            if self.isFKeyEvent(x) {
+                self.push(x & 0xFFFFFF)
+                self.push(-1)
+            } else {
+                self.push(x)
+                self.push(0)
+            }
+        }
+
+        _ = register("EMIT?") {
+            self.push(-1)
+        }
+
+        let fk = TZForth.FacilityFKey.self
+        self.registerFacilityConstant("K-LEFT", Cell(fk.left))
+        self.registerFacilityConstant("K-RIGHT", Cell(fk.right))
+        self.registerFacilityConstant("K-UP", Cell(fk.up))
+        self.registerFacilityConstant("K-DOWN", Cell(fk.down))
+        self.registerFacilityConstant("K-HOME", Cell(fk.home))
+        self.registerFacilityConstant("K-END", Cell(fk.end))
+        self.registerFacilityConstant("K-PRIOR", Cell(fk.prior))
+        self.registerFacilityConstant("K-NEXT", Cell(fk.next))
+        self.registerFacilityConstant("K-INSERT", Cell(fk.insert))
+        self.registerFacilityConstant("K-DELETE", Cell(fk.delete))
+        self.registerFacilityConstant("K-F1", Cell(fk.f1))
+        self.registerFacilityConstant("K-F2", Cell(fk.f2))
+        self.registerFacilityConstant("K-F3", Cell(fk.f3))
+        self.registerFacilityConstant("K-F4", Cell(fk.f4))
+        self.registerFacilityConstant("K-F5", Cell(fk.f5))
+        self.registerFacilityConstant("K-F6", Cell(fk.f6))
+        self.registerFacilityConstant("K-F7", Cell(fk.f7))
+        self.registerFacilityConstant("K-F8", Cell(fk.f8))
+        self.registerFacilityConstant("K-F9", Cell(fk.f9))
+        self.registerFacilityConstant("K-F10", Cell(fk.f10))
+        self.registerFacilityConstant("K-F11", Cell(fk.f11))
+        self.registerFacilityConstant("K-F12", Cell(fk.f12))
+        self.registerFacilityConstant("K-SHIFT-MASK", Cell(fk.shiftMask))
+        self.registerFacilityConstant("K-CTRL-MASK", Cell(fk.ctrlMask))
+        self.registerFacilityConstant("K-ALT-MASK", Cell(fk.altMask))
     }
 
     // MARK: - File-Access word registrations (ANS word set 11)
@@ -7544,10 +7737,8 @@ public final class TZForth {
                         }
                     }
                     if throwActive { break }
-                    if waitingForKey {
-                        // A blocking input word (currently only KEY) has suspended.
-                        // Break out of the line interpreter so control returns to the UI.
-                        // The UI will later call provideKey when the user supplies a character.
+                    if self.isBlockingOnHost {
+                        // A blocking input/delay word (KEY / EKEY / MS) has suspended.
                         break
                     }
                 }
@@ -7600,7 +7791,7 @@ public final class TZForth {
         //
         // Do not print OK if we suspended for a blocking input word like KEY;
         // the OK will be printed when the line is resumed and completed after provideKey.
-        if !errorFlag && readCell(STATE) == 0 && !waitingForKey && loadNesting == 0 && evaluateNesting == 0 {
+        if !errorFlag && readCell(STATE) == 0 && !self.isBlockingOnHost && loadNesting == 0 && evaluateNesting == 0 {
             tell("OK\n")
         }
 
@@ -8377,11 +8568,8 @@ public final class TZForth {
                     self.innerThreadStopRsp = -1
                     break
                 }
-                if waitingForKey {
-                    // A blocking primitive (KEY) has decided to wait for host input.
-                    // Rewind IP so the next innerThread() call will hit this cell again.
-                    // In provideKey we will advance past it after injecting the value,
-                    // so we do not re-execute the KEY primitive.
+                if self.isBlockingOnHost {
+                    // Blocking primitive (KEY / EKEY / MS): rewind IP; host resumes via provide* / resumeAfterMs.
                     ip -= 8
                     break
                 }
@@ -8808,6 +8996,9 @@ public final class TZForth {
         facilityTerminal.deactivate()
         terminalRefreshPending = false
         waitingForKey = false
+        waitingForExtendedKey = false
+        waitingForMs = false
+        extendedKeyQueue.removeAll(keepingCapacity: true)
         fileLoadRequested = false
         fileEditRequested = false
         pendingEditURL = nil
@@ -9080,7 +9271,7 @@ public final class TZForth {
     }
 
     // MARK: - ANS Validation Tests (ported/adapted from TestTZForth.swift FTEST, originally TestLBForth.swift)
-    // These sources and runner allow the ANS-VALIDATE word to run 290 ANS spot-checks
+    // These sources and runner allow the ANS-VALIDATE word to run 299 ANS spot-checks
     // (Core, Core Ext, File-Access, String, Exception, Memory, Double, Locals, Programming-Tools)
     // from inside the interpreter and write results to ANS-VALIDATE.txt next to TestTZForth.swift.
     // The test logic and sources originated in the standalone tester; we respect the lbForth model origins internally.

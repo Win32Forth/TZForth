@@ -105,12 +105,58 @@ struct ConsoleView: View {
                 keepCursorVisible()
             }
             .onKeyPress(.upArrow) {
+                if forth.waitingForExtendedKey {
+                    forth.provideExtendedKey(TZForth.makeFKeyEvent(TZForth.FacilityFKey.up))
+                    return .handled
+                }
                 recallHistory(up: true)
                 return .handled
             }
             .onKeyPress(.downArrow) {
+                if forth.waitingForExtendedKey {
+                    forth.provideExtendedKey(TZForth.makeFKeyEvent(TZForth.FacilityFKey.down))
+                    return .handled
+                }
                 recallHistory(up: false)
                 return .handled
+            }
+            .onKeyPress(.leftArrow) {
+                guard forth.waitingForExtendedKey else { return .ignored }
+                forth.provideExtendedKey(TZForth.makeFKeyEvent(TZForth.FacilityFKey.left))
+                return .handled
+            }
+            .onKeyPress(.rightArrow) {
+                guard forth.waitingForExtendedKey else { return .ignored }
+                forth.provideExtendedKey(TZForth.makeFKeyEvent(TZForth.FacilityFKey.right))
+                return .handled
+            }
+            .onKeyPress(.home) {
+                guard forth.waitingForExtendedKey else { return .ignored }
+                forth.provideExtendedKey(TZForth.makeFKeyEvent(TZForth.FacilityFKey.home))
+                return .handled
+            }
+            .onKeyPress(.end) {
+                guard forth.waitingForExtendedKey else { return .ignored }
+                forth.provideExtendedKey(TZForth.makeFKeyEvent(TZForth.FacilityFKey.end))
+                return .handled
+            }
+            .onKeyPress(.pageUp) {
+                guard forth.waitingForExtendedKey else { return .ignored }
+                forth.provideExtendedKey(TZForth.makeFKeyEvent(TZForth.FacilityFKey.prior))
+                return .handled
+            }
+            .onKeyPress(.pageDown) {
+                guard forth.waitingForExtendedKey else { return .ignored }
+                forth.provideExtendedKey(TZForth.makeFKeyEvent(TZForth.FacilityFKey.next))
+                return .handled
+            }
+            .onKeyPress(phases: .down) { press in
+                guard forth.waitingForExtendedKey else { return .ignored }
+                if let ev = facilityKeyEvent(from: press) {
+                    forth.provideExtendedKey(ev)
+                    return .handled
+                }
+                return .ignored
             }
             .onKeyPress(.delete) {
                 if handleDelete() {
@@ -170,6 +216,11 @@ struct ConsoleView: View {
                     } else {
                         DispatchQueue.main.async(execute: applyOutput)
                     }
+                }
+
+                forth.onMsDelayRequested = { ms, completion in
+                    let delay = DispatchTimeInterval.milliseconds(max(0, ms))
+                    DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: completion)
                 }
 
                 forth.onTerminalRefresh = { screen in
@@ -252,6 +303,18 @@ struct ConsoleView: View {
 
         if forth.waitingForKey {
             forth.provideKey(10)
+            lastKeyConsumedUserLength = 0
+            if consoleText.last == "\n" {
+                isConsumingKeyChar = true
+                consoleText.removeLast()
+                markProtectedThroughEndOfText()
+                lastKeyConsumedUserLength = 0
+            }
+            return true
+        }
+
+        if forth.waitingForExtendedKey {
+            forth.provideExtendedKey(TZForth.makeCharKeyEvent(10, mods: 0))
             lastKeyConsumedUserLength = 0
             if consoleText.last == "\n" {
                 isConsumingKeyChar = true
@@ -426,6 +489,28 @@ struct ConsoleView: View {
                 }
             }
             // We handled the key input; no need to run the normal line-commit logic for this change.
+            return
+        }
+
+        if forth.waitingForExtendedKey {
+            if isConsumingKeyChar {
+                isConsumingKeyChar = false
+                return
+            }
+            if userPortion.count > lastKeyConsumedUserLength {
+                let newPart = String(userPortion.dropFirst(lastKeyConsumedUserLength))
+                if let keyChar = newPart.last {
+                    let scalar = keyChar.unicodeScalars.first?.value ?? 0
+                    forth.provideExtendedKey(TZForth.makeCharKeyEvent(Int(scalar), mods: 0))
+                    lastKeyConsumedUserLength = userPortion.count
+                    if consoleText.count >= newPart.count {
+                        isConsumingKeyChar = true
+                        consoleText.removeLast(newPart.count)
+                        markProtectedThroughEndOfText()
+                        lastKeyConsumedUserLength = 0
+                    }
+                }
+            }
             return
         }
         
@@ -1143,6 +1228,43 @@ struct ConsoleView: View {
         if consoleText.count > protectedLength {
             consoleText = String(consoleText.prefix(protectedLength))
         }
+    }
+
+    private func facilityKeyMods(_ modifiers: EventModifiers) -> Int {
+        var m = 0
+        if modifiers.contains(.shift) { m |= TZForth.FacilityFKey.shiftMask }
+        if modifiers.contains(.control) { m |= TZForth.FacilityFKey.ctrlMask }
+        if modifiers.contains(.option) { m |= TZForth.FacilityFKey.altMask }
+        return m
+    }
+
+    private func facilityKeyEvent(from press: KeyPress) -> Int? {
+        let mods = facilityKeyMods(press.modifiers)
+        let fk = TZForth.FacilityFKey.self
+        switch press.key {
+        case .f1: return TZForth.makeFKeyEvent(fk.f1 | mods)
+        case .f2: return TZForth.makeFKeyEvent(fk.f2 | mods)
+        case .f3: return TZForth.makeFKeyEvent(fk.f3 | mods)
+        case .f4: return TZForth.makeFKeyEvent(fk.f4 | mods)
+        case .f5: return TZForth.makeFKeyEvent(fk.f5 | mods)
+        case .f6: return TZForth.makeFKeyEvent(fk.f6 | mods)
+        case .f7: return TZForth.makeFKeyEvent(fk.f7 | mods)
+        case .f8: return TZForth.makeFKeyEvent(fk.f8 | mods)
+        case .f9: return TZForth.makeFKeyEvent(fk.f9 | mods)
+        case .f10: return TZForth.makeFKeyEvent(fk.f10 | mods)
+        case .f11: return TZForth.makeFKeyEvent(fk.f11 | mods)
+        case .f12: return TZForth.makeFKeyEvent(fk.f12 | mods)
+        case .delete: return TZForth.makeFKeyEvent(fk.delete | mods)
+        default:
+            break
+        }
+        if press.characters.count == 1, let scalar = press.characters.unicodeScalars.first {
+            let v = Int(scalar.value)
+            if v >= 32 || v == 9 {
+                return TZForth.makeCharKeyEvent(v, mods: mods)
+            }
+        }
+        return nil
     }
 }
 

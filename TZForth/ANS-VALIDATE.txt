@@ -1,4 +1,4 @@
-=== ANS-VALIDATE: 2012 ANS Forth validation (290 spot-checks: Core, Core Ext, File-Access, String, Facility, Exception, Memory, Double, Locals, Programming-Tools; from TestTZForth FTEST) ===
+=== ANS-VALIDATE: 2012 ANS Forth validation (299 spot-checks: Core, Core Ext, File-Access, String, Facility, Exception, Memory, Double, Locals, Programming-Tools; from TestTZForth FTEST) ===
 
 TEST1 block: load1=true noskip1=false after1=true load2=true
 TEST1 exec load1: saw11=true out=11 OK
@@ -11,9 +11,9 @@ TEST2b post-slash exec: saw123=true out=123 OK
 TEST2b-include: echopre=true echopost=false sawEcho=true
 TEST2b-repl: prebatch=true postbatch=false (expect true false)
 TEST2b-err: shouldnot=false line1=true (expect false true) out=true verbose !
-? ansval_errstop_A4CE5DEB.fth line 1: ? verbose
+? ansval_errstop_E992A75F.fth line 1: ? verbose
     true verbose !
-? FLOAD of ansval_errstop_A4CE5DEB.fth aborted at line 1
+? FLOAD of ansval_errstop_E992A75F.fth aborted at line 1
 TEST2b-err-catch: caught=true out=OK
 -13  ? THROW 27 OK
 TEST2b-nested: before=true inner=true neverinner=false after=true neverouter=false (expect true true false true false)
@@ -223,6 +223,15 @@ TEST6 ENVIRONMENT? FACILITY: pass
 TEST6 PAGE (no crash): pass
 TEST6 PAGE 80x25: pass
 TEST6 AT-XY EMIT: pass
+TEST6 EMIT?: pass
+TEST6 K-LEFT: pass
+TEST6 TIME&DATE year: pass
+TEST6 EKEY>CHAR a: pass
+TEST6 EKEY>FKEY left: pass
+TEST6 EKEY? empty: pass
+TEST6 EKEY? queued: pass
+TEST6 EKEY char: pass
+TEST6 MS brief: pass
 TEST6 GROWMEMORYMB grow: pass
 TEST6 ALLOCATE: pass
 TEST6 ALLOCATE ior: pass
@@ -329,6 +338,6 @@ TEST6 CATCH INCLUDE-FILE mid-file: pass
 TEST6 .ERROR closed file: pass
 TEST6 .ERROR file I/O: pass
 TEST6 .ERROR not found: pass
-TEST6 ANS core summary: 290/290 passed
+TEST6 ANS core summary: 299/299 passed
 
 === ANS-VALIDATE complete ===

@@ -407,6 +407,10 @@ public final class TZForth {
     var blockRefillMaxBlock: Int = 0
     var blockRefillInProgress: Bool = false
     var blockInterpretLine: Int = 0
+    /// Cross-block RESTORE-INPUT: resume parsing mid-line after replaying saved block prefix.
+    var blockRestoreResumeTail: [UInt8] = []
+    var blockRestoreResumeBlock: Int = -1
+    var blockRestoreResumeLine: Int = -1
 
     var blkVarAddr: Cell = 0
     var blockFileVarAddr: Cell = 0
@@ -5495,13 +5499,18 @@ public final class TZForth {
                 return
             }
             var blockRestoreLineTail: [UInt8] = []
+            var blockRestoreCrossBlock = false
             if snap.blockFileId != nil, self.blockInterpretActive, snap.evaluateNesting == 0 {
                 let currentLine = max(0, self.blockInterpretLine - 1)
-                if let savedLine = snap.blockLine, currentLine != savedLine {
-                    blockRestoreLineTail = self.blockLineTailAfterToken(
+                let savedLine = snap.blockLine
+                let savedBlock = snap.blockNum
+                let crossLineRestore = savedLine != nil && currentLine != savedLine
+                let crossBlockRestore = savedBlock != nil && self.blockInterpretBlockNum != savedBlock
+                blockRestoreCrossBlock = crossBlockRestore
+                if crossLineRestore || crossBlockRestore {
+                    blockRestoreLineTail = self.blockRestoreContinuationTail(
                         blockNum: self.blockInterpretBlockNum,
-                        line: currentLine,
-                        token: "?EXECUTE"
+                        line: currentLine
                     )
                 } else {
                     let tailStart = Int(self.clampInOffset(self.readCell(self.IN)))
@@ -5564,23 +5573,40 @@ public final class TZForth {
                     self.floadRestoreInputContinuation = true
                 } else if snap.blockFileId != nil, self.blockInterpretActive {
                     if !blockRestoreLineTail.isEmpty {
-                        let start = Int(snap.inPos)
+                        let start = self.skipSaveInputTokenIfPresent(
+                            in: snap.sourceBytes,
+                            from: Int(snap.inPos)
+                        )
                         var combined: [UInt8] = []
                         if start < snap.sourceLen {
                             for i in start..<snap.sourceLen {
                                 combined.append(snap.sourceBytes[i])
                             }
                         }
-                        for b in blockRestoreLineTail where b >= 32 {
-                            combined.append(b)
+                        if blockRestoreCrossBlock,
+                           let savedBlock = snap.blockNum,
+                           let savedLine = snap.blockLine {
+                            self.blockRestoreResumeTail = blockRestoreLineTail
+                            self.blockRestoreResumeBlock = self.blockInterpretBlockNum
+                            self.blockRestoreResumeLine = max(0, self.blockInterpretLine - 1)
+                            self.blockInterpretBlockNum = savedBlock
+                            self.blockInterpretLine = savedLine + 1
+                        } else if !blockRestoreLineTail.isEmpty {
+                            if !combined.isEmpty { combined.append(32) }
+                            combined.append(contentsOf: blockRestoreLineTail)
                         }
                         var len = combined.count
                         while len > 0 && combined[len - 1] <= 32 {
                             len -= 1
                         }
+                        var trimStart = 0
+                        while trimStart < len && combined[trimStart] <= 32 {
+                            trimStart += 1
+                        }
+                        len -= trimStart
                         self.currentSourceLen = len
                         for i in 0..<len {
-                            self.writeByte(self.SOURCE_BUFFER + i, combined[i])
+                            self.writeByte(self.SOURCE_BUFFER + i, combined[trimStart + i])
                         }
                         self.writeCell(self.IN, 0)
                         self.realignBlockInputQueueFromSource()

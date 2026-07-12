@@ -399,9 +399,7 @@ TESTING EMPTY-BUFFERS
 TESTING >IN manipulation from a block source
 TESTING \, SAVE-INPUT, RESTORE-INPUT and REFILL from a block source
  Given Characters per Line: 64 
-
-INCORRECT RESULT: T{ RND-TEST-BLOCK DUP TCSIRIR2 LOAD TCSIRIR2-EXPECTED S= -> 0 TRUE }T
-WRONG NUMBER OF RESULTS: T{ 2 RND-TEST-BLOCK-SEQ DUP TCSIRIR4 LOAD TCSIRIR4-EXPECTED S= -> 0 TRUE }TTESTING THRU
+TESTING THRU
 
  End of Block word tests
 OK
@@ -419,7 +417,7 @@ Word Set             Errors
 ---------------------------
 Core                    0
 Core extension          0
-Block                   2
+Block                   0
 Double number           0
 Exception               0
 Facility                0
@@ -430,7 +428,7 @@ Programming-tools       -
 Search-order            0
 String                  0
 ---------------------------
-Total                   2
+Total                   0
 ---------------------------
 
 OK

@@ -583,6 +583,9 @@ extension TZForth {
         self.sourceLoadStop = false
         defer {
             self.blockInterpretActive = false
+            self.blockRestoreResumeTail = []
+            self.blockRestoreResumeBlock = -1
+            self.blockRestoreResumeLine = -1
             if self.blockLoadDepth > 0 { self.blockLoadDepth -= 1 }
             if self.loadNesting > 0 { self.loadNesting -= 1 }
             self.popInputSourceFrame()
@@ -633,6 +636,92 @@ extension TZForth {
         return tail
     }
 
+    /// Advance past SAVE-INPUT when the save point is on that token (Hayes block restore must not re-run it).
+    func skipSaveInputTokenIfPresent(in bytes: [UInt8], from pos: Int) -> Int {
+        let clamped = max(0, min(pos, bytes.count))
+        var p = clamped
+        while p < bytes.count && bytes[p] <= 32 { p += 1 }
+        let needle = Array("SAVE-INPUT".utf8)
+        var matched = !needle.isEmpty
+        for k in 0..<needle.count where matched {
+            if p + k >= bytes.count || bytes[p + k] != needle[k] { matched = false }
+        }
+        if matched {
+            return p + needle.count
+        }
+        return clamped
+    }
+
+    /// Prefix through the MARK immediate before `' RESTORE-INPUT` on a block line (e.g. ` MARK C`).
+    func blockLineMarkBeforeQuotedRestore(blockNum: Int, line: Int) -> [UInt8] {
+        let lineBytes = self.blockLineBytes(blockNum: blockNum, line: line)
+        let needle = Array("RESTORE-INPUT".utf8)
+        var restoreStart = -1
+        for i in 0..<lineBytes.count where restoreStart < 0 {
+            if lineBytes[i] == 39 { // '
+                var j = i + 1
+                while j < lineBytes.count && lineBytes[j] <= 32 { j += 1 }
+                var matched = true
+                for k in 0..<needle.count where matched {
+                    if j + k >= lineBytes.count || lineBytes[j + k] != needle[k] { matched = false }
+                }
+                if matched { restoreStart = i }
+            }
+        }
+        guard restoreStart > 0 else { return [] }
+        let markNeedle = Array("MARK".utf8)
+        var markStart = -1
+        for i in stride(from: restoreStart - 1, through: 0, by: -1) where markStart < 0 {
+            if i + markNeedle.count <= restoreStart {
+                var matched = true
+                for k in 0..<markNeedle.count where matched {
+                    if lineBytes[i + k] != markNeedle[k] { matched = false }
+                }
+                if matched {
+                    var start = i
+                    while start > 0 && lineBytes[start - 1] > 32 { start -= 1 }
+                    if start > 0 && lineBytes[start - 1] <= 32 { start -= 1 }
+                    markStart = start
+                }
+            }
+        }
+        guard markStart >= 0 else { return [] }
+        var end = markStart
+        while end < restoreStart && lineBytes[end] <= 32 { end += 1 }
+        while end < restoreStart && lineBytes[end] > 32 { end += 1 }
+        while end < restoreStart && lineBytes[end] <= 32 { end += 1 }
+        if end < restoreStart && lineBytes[end] > 32 { end += 1 }
+        return Array(lineBytes[markStart..<end])
+    }
+
+    /// Hayes TCSIRIR2/4: replay pictured MARK before RESTORE plus tail after ?EXECUTE.
+    func blockRestoreContinuationTail(blockNum: Int, line: Int) -> [UInt8] {
+        var tail = self.blockLineMarkBeforeQuotedRestore(blockNum: blockNum, line: line)
+        let afterExecute = self.blockLineTailAfterToken(blockNum: blockNum, line: line, token: "?EXECUTE")
+        if !afterExecute.isEmpty {
+            if !tail.isEmpty { tail.append(32) }
+            tail.append(contentsOf: afterExecute)
+        }
+        return tail
+    }
+
+    /// Non-blank block lines after `afterLine` on the same block (Hayes TCSIRIR4 cross-block restore).
+    func blockIntermediateLinesAfter(blockNum: Int, afterLine: Int) -> [UInt8] {
+        var combined: [UInt8] = []
+        for line in (afterLine + 1)..<Self.BLOCK_LINES_PER_BLOCK {
+            if self.blockLineIsBlank(blockNum: blockNum, line: line) { continue }
+            let bytes = self.blockLineBytes(blockNum: blockNum, line: line)
+            var len = bytes.count
+            while len > 0 && bytes[len - 1] <= 32 { len -= 1 }
+            var start = 0
+            while start < len && bytes[start] <= 32 { start += 1 }
+            guard start < len else { continue }
+            if !combined.isEmpty { combined.append(32) }
+            combined.append(contentsOf: bytes[start..<len])
+        }
+        return combined
+    }
+
     func blockLineIsBlank(blockNum: Int, line: Int) -> Bool {
         let addr = self.blockFetch(blockNum, updateBLK: false)
         let cpl = self.charsPerBlockLine()
@@ -647,7 +736,15 @@ extension TZForth {
     func refillFromBlockSource() -> Bool {
         guard self.blockInterpretActive else { return false }
         let cpl = self.charsPerBlockLine()
-        let maxBlock = self.blockRefillInProgress ? self.blockRefillMaxBlock : self.blockInterpretStopBlock
+        // Single-block LOAD may REFILL-spill into end+1; only extend range after spill advanced there.
+        let maxBlock: Int
+        if self.blockRefillInProgress {
+            maxBlock = self.blockRefillMaxBlock
+        } else if self.blockInterpretBlockNum > self.blockInterpretStopBlock {
+            maxBlock = self.blockRefillMaxBlock
+        } else {
+            maxBlock = self.blockInterpretStopBlock
+        }
         while self.blockInterpretBlockNum <= maxBlock {
             if self.blockInterpretLine < Self.BLOCK_LINES_PER_BLOCK {
                 if self.blockRefillInProgress {
@@ -661,6 +758,27 @@ extension TZForth {
                         if self.blockInterpretBlockNum > maxBlock { return false }
                         continue
                     }
+                }
+                if !self.blockRestoreResumeTail.isEmpty,
+                   self.blockInterpretBlockNum == self.blockRestoreResumeBlock,
+                   self.blockInterpretLine == self.blockRestoreResumeLine {
+                    var tail = self.blockRestoreResumeTail
+                    self.blockRestoreResumeTail = []
+                    self.blockRestoreResumeBlock = -1
+                    self.blockRestoreResumeLine = -1
+                    var len = tail.count
+                    while len > 0 && tail[len - 1] <= 32 { len -= 1 }
+                    var trimStart = 0
+                    while trimStart < len && tail[trimStart] <= 32 { trimStart += 1 }
+                    len -= trimStart
+                    self.currentSourceLen = len
+                    for i in 0..<len {
+                        self.writeByte(self.SOURCE_BUFFER + i, tail[trimStart + i])
+                    }
+                    self.writeCell(self.IN, 0)
+                    self.realignBlockInputQueueFromSource()
+                    self.blockInterpretLine += 1
+                    return true
                 }
                 let addr = self.blockFetch(self.blockInterpretBlockNum, updateBLK: true)
                 let offset = self.blockInterpretLine * cpl

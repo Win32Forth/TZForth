@@ -35,11 +35,13 @@ extension TZForth {
         let preValidationHere = self.readCell(self.DP_ADDR)
         let preValidationCurrent = self.readCell(self.CURRENT)
         let preValidationSearchOrder = self.searchOrder
+        let preValidationEnvironment = self.captureSessionEnvironment()
 
         var results = "=== ANS-VALIDATE: 2012 ANS Forth Core + Core Ext + File-Access validation (from TestTZForth / original TestLBForth FTEST logic) ===\n\n"
         var collected = ""
 
         let originalOnOutput = self.onOutput
+        let originalOnPerformNamedLoad = self.onPerformNamedLoad
         self.onOutput = { text in
             collected += text
         }
@@ -86,6 +88,7 @@ extension TZForth {
         } catch {
             results += "TEST write fail: \(error)\n"
             self.onOutput = originalOnOutput
+            self.onPerformNamedLoad = originalOnPerformNamedLoad
             return results
         }
 
@@ -157,6 +160,95 @@ extension TZForth {
         let hasIncEchoPost = self.debugFind("ECHOPOST")
         let sawIncEchoSrc = collected.contains("FILE-ECHO ON") || collected.contains("echopre")
         results += "TEST2b-include: echopre=\(hasIncEchoPre) echopost=\(hasIncEchoPost) sawEcho=\(sawIncEchoSrc)\n"
+
+        // === Test 2b-repl: \S from console stops remainder of a multi-line submit (paste) ===
+        resetTest()
+        self.clearReplBatchStop()
+        let replBatch = [": prebatch 11 ;", "\\S", ": postbatch 22 ;"]
+        for ln in replBatch {
+            self.feedLine(ln)
+            if self.replBatchStopRequested { break }
+        }
+        let hasPreBatch = self.debugFind("PREBATCH")
+        let hasPostBatch = self.debugFind("POSTBATCH")
+        results += "TEST2b-repl: prebatch=\(hasPreBatch) postbatch=\(hasPostBatch) (expect true false)\n"
+
+        // === Test 2b-err: FLOAD stops at first line error (unless CATCH) ===
+        resetTest()
+        let ferr = tmp.appendingPathComponent("ansval_errstop_\(suffix).fth")
+        do {
+            try """
+true verbose !
+: shouldnot 99 ;
+""".write(to: ferr, atomically: true, encoding: String.Encoding.utf8)
+        } catch {
+            results += "TEST2b-err write fail: \(error)\n"
+        }
+        collected = ""
+        self.loadFile(ferr)
+        let hasErrStopBad = self.debugFind("SHOULDNOT")
+        let hasLine1 = collected.contains("line 1")
+        results += "TEST2b-err: shouldnot=\(hasErrStopBad) line1=\(hasLine1) (expect false true) out=\(collected.trimmingCharacters(in: .whitespacesAndNewlines))\n"
+
+        resetTest()
+        _ = fm.changeCurrentDirectoryPath(tmp.path)
+        self.logicalCurrentDirectory = tmp.path
+        self.feedLine(": safe-inc S\" \(ferr.lastPathComponent)\" ['] INCLUDED CATCH ;")
+        collected = ""
+        self.feedLine("safe-inc . .ERROR")
+        let caughtFload = collected.contains("-13") || collected.contains("-70") || collected.contains("undefined word") || collected.contains("File I/O")
+        results += "TEST2b-err-catch: caught=\(caughtFload) out=\(collected.trimmingCharacters(in: .whitespacesAndNewlines))\n"
+        self.logicalCurrentDirectory = savedLog2b
+        _ = fm.changeCurrentDirectoryPath(savedCwd2b)
+
+        // === Test 2b-nested: \S in a nested FLOAD stops only that file; outer continues ===
+        resetTest()
+        let fnInnerSlash = tmp.appendingPathComponent("ansval_inner_slash_\(suffix).fth")
+        let fnOuterSlash = tmp.appendingPathComponent("ansval_outer_slash_\(suffix).fth")
+        let fnOuterStop = tmp.appendingPathComponent("ansval_outer_stop_\(suffix).fth")
+        let fnInnerLate = tmp.appendingPathComponent("ansval_inner_late_\(suffix).fth")
+        do {
+            try """
+: innerok 11 ;
+\\S
+: neverinner 22 ;
+""".write(to: fnInnerSlash, atomically: true, encoding: String.Encoding.utf8)
+            try """
+: beforeouter 55 ;
+fload \(fnInnerSlash.lastPathComponent)
+: afterouter 77 ;
+\\S
+: neverouter 99 ;
+""".write(to: fnOuterSlash, atomically: true, encoding: String.Encoding.utf8)
+            try """
+: innerskip 44 ;
+""".write(to: fnInnerLate, atomically: true, encoding: String.Encoding.utf8)
+            try """
+\\S
+fload \(fnInnerLate.lastPathComponent)
+: neverouter2 88 ;
+""".write(to: fnOuterStop, atomically: true, encoding: String.Encoding.utf8)
+        } catch {
+            results += "TEST2b-nested write fail: \(error)\n"
+        }
+        _ = fm.changeCurrentDirectoryPath(tmp.path)
+        self.logicalCurrentDirectory = tmp.path
+        self.loadFile(fnOuterSlash)
+        let hasBeforeOuter = self.debugFind("BEFOREOUTER")
+        let hasInnerOk = self.debugFind("INNEROK")
+        let hasNeverInner = self.debugFind("NEVERINNER")
+        let hasAfterOuter = self.debugFind("AFTEROUTER")
+        let hasNeverOuter = self.debugFind("NEVEROUTER")
+        results += "TEST2b-nested: before=\(hasBeforeOuter) inner=\(hasInnerOk) neverinner=\(hasNeverInner) after=\(hasAfterOuter) neverouter=\(hasNeverOuter) (expect true true false true false)\n"
+        self.resetToSafeState()
+        collected = ""
+        self.logicalCurrentDirectory = tmp.path
+        self.loadFile(fnOuterStop)
+        let hasInnerLate = self.debugFind("INNERSKIP")
+        let hasNeverOuter2 = self.debugFind("NEVEROUTER2")
+        results += "TEST2b-nested-outer: inner=\(hasInnerLate) neverouter2=\(hasNeverOuter2) (expect false false)\n"
+        self.logicalCurrentDirectory = savedLog2b
+        _ = fm.changeCurrentDirectoryPath(savedCwd2b)
 
         // === Test 2c: DEBUG-ON/OFF in file ===
         resetTest()
@@ -624,13 +716,13 @@ extension TZForth {
 
         // Core Ext Tier 2: :NONAME ACTION-OF MARKER SAVE-INPUT RESTORE-INPUT SOURCE-ID S" REFILL
         ansTest(":NONAME", "VARIABLE t7n1 :NONAME 1234 ; t7n1 ! t7n1 @ EXECUTE .", "1234")
-        ansTest("ACTION-OF", "DEFER t7d : t7a1 42 ; ' t7a1 IS t7d ' t7d ACTION-OF EXECUTE .", "42")
+        ansTest("ACTION-OF", "DEFER t7d : t7a1 42 ; ' t7a1 IS t7d ACTION-OF t7d EXECUTE .", "42")
         ansTest("MARKER", "MARKER t7m1 : t7w1 11 ; : t7w2 22 ; t7m1 t7w1 .", "? t7w1")
         ansTest("SOURCE-ID terminal", "SOURCE-ID .", "-1")
         ansTest("REFILL", "REFILL 0= .", "-1")
-        ansTest("SAVE-INPUT RESTORE-INPUT", "SAVE-INPUT S\" 222 .\" EVALUATE RESTORE-INPUT 0= . 333 .", "0 333")
+        ansTest("SAVE-INPUT RESTORE-INPUT", "SAVE-INPUT S\" 222 .\" EVALUATE RESTORE-INPUT . 333 .", "0 333")
         ansTest("RESTORE-INPUT fail", "SAVE-INPUT 2DROP 0 RESTORE-INPUT .", "-1")
-        ansTest("SAVE-INPUT nested", "SAVE-INPUT S\" 11 .\" EVALUATE RESTORE-INPUT 0= . 22 .", "0 22")
+        ansTest("SAVE-INPUT nested", "SAVE-INPUT S\" 11 .\" EVALUATE RESTORE-INPUT . 22 .", "0 22")
         ansTest("FILE-ECHO default", "FILE-ECHO @ .", "0")
         resetTest()
         _ = fm.changeCurrentDirectoryPath(tmp.path)
@@ -657,7 +749,7 @@ extension TZForth {
         ansTest("FILE-SIZE", "S\" \(flinePath)\" R/O OPEN-FILE DROP FILE-SIZE DROP DROP .", "11")
         ansTest("FILE-POSITION", "S\" \(flinePath)\" R/O OPEN-FILE DROP DUP FILE-POSITION DROP DROP .", "0")
         ansTest("READ-LINE", "S\" \(flinePath)\" R/O OPEN-FILE DROP PAD 1+ SWAP 80 SWAP READ-LINE DROP DROP PAD 1+ SWAP TYPE CLOSE-FILE DROP", "alpha")
-        ansTest("FILE-STATUS", "S\" \(flinePath)\" R/O OPEN-FILE DROP DUP FILE-STATUS NIP 0= SWAP CLOSE-FILE DROP .", "-1")
+        ansTest("FILE-STATUS", "S\" \(flinePath)\" FILE-STATUS NIP 0= .", "-1")
         ansTest("INCLUDED", "S\" \(fincPath)\" INCLUDED fincw .", "42")
 
         // REQUIRE / REQUIRED (ANS F.11.6.2.2144.50) — REQUIRE parses name from input (not S").
@@ -851,10 +943,18 @@ extension TZForth {
         self.writeCell(self.LATEST, preValidationLatest)
         self.writeCell(self.DP_ADDR, preValidationHere)
         self.writeCell(self.CURRENT, preValidationCurrent)
-        self.searchOrder = preValidationSearchOrder
 
         // Make sure runtime state (stacks, STATE, flags, etc.) is clean too.
         self.resetRuntimeState()
+
+        // resetRuntimeState() resets searchOrder to [LATEST]; restore the user's order.
+        self.searchOrder = preValidationSearchOrder
+
+        // Restore kernel variables and session flags (FILE-ECHO, BASE, GROWMEMORYMB, etc.).
+        self.restoreSessionEnvironment(preValidationEnvironment)
+        for warning in self.sessionEnvironmentRestoreWarnings(expected: preValidationEnvironment) {
+            results += warning + "\n"
+        }
 
         // Restore original dir state (logical + fm cwd).
         self.logicalCurrentDirectory = originalLogical
@@ -871,6 +971,7 @@ extension TZForth {
         }
 
         self.onOutput = originalOnOutput
+        self.onPerformNamedLoad = originalOnPerformNamedLoad
 
         results += "\n=== ANS-VALIDATE complete ===\n"
         return results

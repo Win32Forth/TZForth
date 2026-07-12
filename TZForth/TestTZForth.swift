@@ -217,6 +217,41 @@ hello
     let saw123 = collected.contains("123")
     print("TEST2b post-slash exec: saw123=\(saw123) out=\(collected.trimmingCharacters(in: .whitespacesAndNewlines))")
 
+    // === Test 2b-repl: \\S from console stops remainder of a multi-line submit (paste) ===
+    resetTest()
+    forth.clearReplBatchStop()
+    let replBatch = [": prebatch 11 ;", "\\S", ": postbatch 22 ;"]
+    for (i, ln) in replBatch.enumerated() {
+        forth.feedLine(ln)
+        if forth.replBatchStopRequested { break }
+        if i == replBatch.count - 1 { /* ran all */ }
+    }
+    let hasPreBatch = forth.debugFind("PREBATCH")
+    let hasPostBatch = forth.debugFind("POSTBATCH")
+    print("TEST2b-repl: prebatch=\(hasPreBatch) postbatch=\(hasPostBatch) (expect true false)")
+
+    // === Test 2b-err: FLOAD stops at first line error (unless CATCH) ===
+    resetTest()
+    let ferr = tmp.appendingPathComponent("tz-errstop.fth")
+    try! """
+true verbose !
+: shouldnot 99 ;
+""".write(to: ferr, atomically: true, encoding: String.Encoding.utf8)
+    collected = ""
+    forth.loadFile(ferr)
+    let hasErrStopBad = forth.debugFind("SHOULDNOT")
+    let hasLine1 = collected.contains("line 1")
+    print("TEST2b-err: shouldnot=\(hasErrStopBad) line1=\(hasLine1) (expect false true) out=\(collected.trimmingCharacters(in: .whitespacesAndNewlines))")
+
+    resetTest()
+    _ = fm.changeCurrentDirectoryPath(tmp.path)
+    forth.logicalCurrentDirectory = tmp.path
+    forth.feedLine(": safe-inc S\" \(ferr.lastPathComponent)\" ['] INCLUDED CATCH ;")
+    collected = ""
+    forth.feedLine("safe-inc . .ERROR")
+    let caughtFload = collected.contains("-13") || collected.contains("-70") || collected.contains("undefined word") || collected.contains("File I/O")
+    print("TEST2b-err-catch: caught=\(caughtFload) out=\(collected.trimmingCharacters(in: .whitespacesAndNewlines))")
+
     // === Test 2b-include: FILE-ECHO + \S via INCLUDE (shared interpret path with FLOAD) ===
     resetTest()
     _ = fm.changeCurrentDirectoryPath(tmp.path)
@@ -228,6 +263,49 @@ hello
     let hasIncEchoPost = forth.debugFind("ECHOPOST")
     let sawIncEchoSrc = collected.contains("FILE-ECHO ON") || collected.contains("echopre")
     print("TEST2b-include: echopre=\(hasIncEchoPre) echopost=\(hasIncEchoPost) sawEcho=\(sawIncEchoSrc)")
+
+    // === Test 2b-nested: \\S in a nested FLOAD stops only that file; outer file continues ===
+    resetTest()
+    let fnInnerSlash = tmp.appendingPathComponent("tz-inner-slash_\(suffix).fth")
+    let fnOuterSlash = tmp.appendingPathComponent("tz-outer-slash_\(suffix).fth")
+    let fnOuterStop = tmp.appendingPathComponent("tz-outer-stop_\(suffix).fth")
+    try! """
+: innerok 11 ;
+\\S
+: neverinner 22 ;
+""".write(to: fnInnerSlash, atomically: true, encoding: String.Encoding.utf8)
+    try! """
+: beforeouter 55 ;
+fload \(fnInnerSlash.lastPathComponent)
+: afterouter 77 ;
+\\S
+: neverouter 99 ;
+""".write(to: fnOuterSlash, atomically: true, encoding: String.Encoding.utf8)
+    let fnInnerLate = tmp.appendingPathComponent("tz-inner-late_\(suffix).fth")
+    try! """
+: innerskip 44 ;
+""".write(to: fnInnerLate, atomically: true, encoding: String.Encoding.utf8)
+    try! """
+\\S
+fload \(fnInnerLate.lastPathComponent)
+: neverouter2 88 ;
+""".write(to: fnOuterStop, atomically: true, encoding: String.Encoding.utf8)
+    _ = fm.changeCurrentDirectoryPath(tmp.path)
+    forth.logicalCurrentDirectory = tmp.path
+    forth.loadFile(fnOuterSlash)
+    let hasBeforeOuter = forth.debugFind("BEFOREOUTER")
+    let hasInnerOk = forth.debugFind("INNEROK")
+    let hasNeverInner = forth.debugFind("NEVERINNER")
+    let hasAfterOuter = forth.debugFind("AFTEROUTER")
+    let hasNeverOuter = forth.debugFind("NEVEROUTER")
+    print("TEST2b-nested: before=\(hasBeforeOuter) inner=\(hasInnerOk) neverinner=\(hasNeverInner) after=\(hasAfterOuter) neverouter=\(hasNeverOuter) (expect true true false true false)")
+    forth.resetToSafeState()
+    collected = ""
+    forth.logicalCurrentDirectory = tmp.path
+    forth.loadFile(fnOuterStop)
+    let hasInnerLate = forth.debugFind("INNERSKIP")
+    let hasNeverOuter2 = forth.debugFind("NEVEROUTER2")
+    print("TEST2b-nested-outer: inner=\(hasInnerLate) neverouter2=\(hasNeverOuter2) (expect false false)")
 
     // === Test 2c: DEBUG-ON / DEBUG-OFF inside a loaded file should take effect immediately
     // for subsequent lines in *that* file (live flag change during the shared load loop).
@@ -710,13 +788,13 @@ hello
 
     // Core Ext Tier 2: :NONAME ACTION-OF MARKER SAVE-INPUT RESTORE-INPUT SOURCE-ID S\" REFILL
     ansTest(":NONAME", "VARIABLE t7n1 :NONAME 1234 ; t7n1 ! t7n1 @ EXECUTE .", "1234")
-    ansTest("ACTION-OF", "DEFER t7d : t7a1 42 ; ' t7a1 IS t7d ' t7d ACTION-OF EXECUTE .", "42")
+    ansTest("ACTION-OF", "DEFER t7d : t7a1 42 ; ' t7a1 IS t7d ACTION-OF t7d EXECUTE .", "42")
     ansTest("MARKER", "MARKER t7m1 : t7w1 11 ; : t7w2 22 ; t7m1 t7w1 .", "? t7w1")
     ansTest("SOURCE-ID terminal", "SOURCE-ID .", "-1")
     ansTest("REFILL", "REFILL 0= .", "-1")
-    ansTest("SAVE-INPUT RESTORE-INPUT", "SAVE-INPUT S\" 222 .\" EVALUATE RESTORE-INPUT 0= . 333 .", "0 333")
+    ansTest("SAVE-INPUT RESTORE-INPUT", "SAVE-INPUT S\" 222 .\" EVALUATE RESTORE-INPUT . 333 .", "0 333")
     ansTest("RESTORE-INPUT fail", "SAVE-INPUT 2DROP 0 RESTORE-INPUT .", "-1")
-    ansTest("SAVE-INPUT nested", "SAVE-INPUT S\" 11 .\" EVALUATE RESTORE-INPUT 0= . 22 .", "0 22")
+    ansTest("SAVE-INPUT nested", "SAVE-INPUT S\" 11 .\" EVALUATE RESTORE-INPUT . 22 .", "0 22")
     ansTest("FILE-ECHO default", "FILE-ECHO @ .", "0")
     resetTest()
     _ = fm.changeCurrentDirectoryPath(tmp.path)
@@ -743,7 +821,7 @@ hello
     ansTest("FILE-SIZE", "S\" \(flinePath)\" R/O OPEN-FILE DROP FILE-SIZE DROP DROP .", "11")
     ansTest("FILE-POSITION", "S\" \(flinePath)\" R/O OPEN-FILE DROP DUP FILE-POSITION DROP DROP .", "0")
     ansTest("READ-LINE", "S\" \(flinePath)\" R/O OPEN-FILE DROP PAD 1+ SWAP 80 SWAP READ-LINE DROP DROP PAD 1+ SWAP TYPE CLOSE-FILE DROP", "alpha")
-    ansTest("FILE-STATUS", "S\" \(flinePath)\" R/O OPEN-FILE DROP DUP FILE-STATUS NIP 0= SWAP CLOSE-FILE DROP .", "-1")
+    ansTest("FILE-STATUS", "S\" \(flinePath)\" FILE-STATUS NIP 0= .", "-1")
     ansTest("INCLUDED", "S\" \(fincPath)\" INCLUDED fincw .", "42")
 
     // REQUIRE / REQUIRED (ANS F.11.6.2.2144.50) — REQUIRE parses name from input (not S").

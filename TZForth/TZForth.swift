@@ -219,10 +219,31 @@ public final class TZForth {
     public var onDirectoryPickRequested: (() -> Void)? = nil
 
     // Support for \\ (block comment to '{', can span lines in console or during FLOAD)
-    // and \S (stop loading current file; no-op from console).
+    // and \S (stop file load, or stop remainder of a multi-line console submit).
     private var inSlashSlashComment = false
     private var sourceLoadStop = false
+    private var replBatchStop = false
     private var loadNesting = 0
+    /// Current 1-based source line number while includeFileInterpret is running.
+    private var fileInterpretLineNumber = 0
+    /// Pending error text for the current loaded line (reported with line number after the line ends).
+    private var fileLoadPendingErrorMessage = ""
+
+    /// True while FLOAD / INCLUDED / INCLUDE-FILE is interpreting source (nested counts included).
+    /// The console host uses this to explain why typed commands may not get OK immediately.
+    public var isLoadingSource: Bool { self.isInterpretingLoadedFile() }
+
+    /// File-load interpret active (survives resetRuntimeState during in-file THROW recovery).
+    private func isInterpretingLoadedFile() -> Bool {
+        self.loadNesting > 0 || self.interpreterInputFileId >= 2
+    }
+
+    /// Set by \\S from the console REPL; host should skip any further lines in the current submit batch.
+    public var replBatchStopRequested: Bool { replBatchStop }
+
+    public func clearReplBatchStop() {
+        self.replBatchStop = false
+    }
 
     /// True while compiling a :NONAME definition (; leaves xt on stack).
     private var nonameCompile = false
@@ -243,6 +264,7 @@ public final class TZForth {
         var sourceLen: Int
         var sourceBytes: [UInt8]
         var queue: [UInt8]
+        var evaluateNesting: Int
     }
     private var inputSnapshots: [InputSnapshot] = []
 
@@ -329,6 +351,10 @@ public final class TZForth {
     // Used by (DOES) to decide whether to manually run the does code (leaf case) or just redirect ip.
     private var dispatchedFromInnerThread: Bool = false
 
+    /// Return-stack depth at which the current innerThread (started by execute) must stop.
+    /// EXIT pops a frame; when rsp <= this value, innerThread returns instead of continuing at ip.
+    private var innerThreadStopRsp: Int = -1
+
     // Compile-time stack for DO/LOOP control (dest + sentinel + leave/?DO placeholders).
     // Using dedicated stack avoids interleaving issues with IF/ELSE/THEN/WHILE markers on data stack.
     private var loopControlStack: [Cell] = []
@@ -336,6 +362,8 @@ public final class TZForth {
     // Compile-time stacks for nested WHILE/REPEAT (repeat targets + nested-condition hints).
     private var whileRepeatStack: [Cell] = []
     private var whileNestStack: [Cell] = []
+    /// ANS control-flow stack during compilation (CS-PICK / CS-ROLL / IF / BEGIN / AHEAD).
+    private var controlFlowStack: [Cell] = []
 
     /// CASE/OF/ENDOF branch placeholders (0 sentinel + forward-branch addrs); avoids data-stack pollution.
     private var caseBranchStack: [Cell] = []
@@ -390,6 +418,13 @@ public final class TZForth {
     }
     /// Depth of `[` … `]` compile-time interpret brackets (for SLITERAL et al.).
     private var bracketCompileDepth: Int = 0
+    /// Interpret-state `[IF]` true-branch nesting (skip `[ELSE]` … `[THEN]` when > 0).
+    private var interpretIfTrueDepth: Int = 0
+    /// Multi-line interpret/conditional-compilation skip (`[IF]`/`[ELSE]` text scan).
+    private var conditionalSkipDepth: Int = 0
+    private var conditionalSkipStopAtElse: Bool = false
+    /// After [THEN]/[ELSE] inside a $" / S" string, remaining quote text is not a string body.
+    private var conditionalSkipEndedInString: Bool = false
 
     // ANS Locals word set (13): compile-time names + run-time frame stack (re-entrant).
     private static let MAX_LOCALS_PER_DEF = 32
@@ -787,7 +822,7 @@ public final class TZForth {
         // New for FLOAD / EDIT / file helpers (cwd + dialog driven by host for sandbox friendliness)
         ("\\",      "( -- )",             "comment to end of line (immediate)"),
         ("\\\\",    "( -- )",             "block comment to next '{' (spans lines; use \\ not single \\ for single-line comments) (immediate)"),
-        ("\\S",     "( -- )",             "stop loading current file (no-op in console) (immediate)"),
+        ("\\S",     "( -- )",             "stop FLOAD/INCLUDE file or remainder of multi-line console paste (immediate)"),
         ("FLOAD",   "( -- ) name|dialog", "load .fth file (auto .fth if no ext in name; relative to cwd or abs/~; named uses host for sandbox scope+chdir; bare opens dialog)"),
         ("EDIT",    "( -- ) name|dialog", "open in system text editor (nav dialog or name; auto .fth fallback for bare names like FLOAD; updates cwd to file's folder; no load/interpret)"),
         ("FILE-ECHO","( -- addr )",       "variable controlling loaded-source echo (FLOAD, INCLUDE, …; use with ON/OFF)"),
@@ -831,6 +866,8 @@ public final class TZForth {
     private var executeID: Cell = 0  // captured ID for EXECUTE so POSTPONE can emit LIT xt EXECUTE for immediates
     private var postponeImmID: Cell = 0  // (postpone-imm): compile or execute postponed immediate at run time
     private var postponeCompID: Cell = 0 // (postpone-comp): compile or execute postponed non-immediate at run time
+    private var deferredCsPickID: Cell = 0 // deferred CS-PICK for immediate-colon meta definitions
+    private var deferredCsRollID: Cell = 0 // deferred CS-ROLL for immediate-colon meta definitions
     private var fetchID: Cell = 0    // ID for @
     private var storeID: Cell = 0    // ID for !
     private var twoFetchID: Cell = 0 // ID for 2@ (2VALUE / TO detection)
@@ -1167,7 +1204,48 @@ public final class TZForth {
     }
 
     private func tell(_ s: String) {
-        for b in s.utf8 { putkey(b) }
+        guard !s.isEmpty else { return }
+        onOutput?(s)
+    }
+
+    private func fileDisplayName(forFileId fileId: Int) -> String {
+        if let path = self.openFiles[fileId]?.path {
+            return (path as NSString).lastPathComponent
+        }
+        return "file \(fileId)"
+    }
+
+    /// Emit a load-time fault with filename, line number, and the offending source line.
+    private func reportFileLoadError(fileId: Int, line: Int, sourceLine: String, loadLabel: String, message: String) {
+        // Enclosing CATCH should receive the throw code without duplicate load diagnostics.
+        if !self.exceptionFrames.isEmpty { return }
+        let name = self.fileDisplayName(forFileId: fileId)
+        let trimmed = sourceLine.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !message.isEmpty {
+            self.tell("? \(name) line \(line): \(message)\n")
+        }
+        if !trimmed.isEmpty {
+            self.tell("    \(trimmed)\n")
+        }
+        self.tell("? \(loadLabel) of \(name) aborted at line \(line)\n")
+    }
+
+    private func abortFileInterpretAfterLine(fileId: Int, line: Int, sourceLine: String, loadLabel: String) {
+        self.midFileLoadAborted = true
+        let message = self.fileLoadPendingErrorMessage
+        self.fileLoadPendingErrorMessage = ""
+        if self.throwActive {
+            // Throw already delivered to enclosing CATCH — suppress load diagnostics and propagate.
+            self.errorFlag = false
+            return
+        }
+        if !message.isEmpty || self.errorFlag {
+            self.reportFileLoadError(fileId: fileId, line: line, sourceLine: sourceLine, loadLabel: loadLabel, message: message)
+        }
+        self.errorFlag = false
+        if !self.exceptionFrames.isEmpty {
+            self.kernelThrow(StdThrow.fileIOError, message: "? \(loadLabel) of \(self.fileDisplayName(forFileId: fileId)) aborted at line \(line)")
+        }
     }
 
     // MARK: - Input (line-driven from SwiftUI)
@@ -1273,8 +1351,8 @@ public final class TZForth {
     }
 
     /// Open a text file for line-at-a-time interpret (FLOAD / INCLUDED / INCLUDE-FILE).
-    private func openTextFileForInterpret(at path: String) -> (fileid: Cell, ior: Cell) {
-        let url = URL(fileURLWithPath: path)
+    private func openTextFileForInterpret(at url: URL) -> (fileid: Cell, ior: Cell) {
+        let path = url.path
         guard let data = self.readTextFileBytes(from: url) else {
             return (0, self.FILE_IO_ERROR)
         }
@@ -1312,7 +1390,11 @@ public final class TZForth {
     /// Per-line cleanup after interpreting one loaded source line (matches feedLine tail).
     private func finishInterpretedLoadLine() {
         if self.errorFlag {
-            self.recoverFromError()
+            if self.isInterpretingLoadedFile() {
+                self.recoverFromErrorDuringFileLoad()
+            } else {
+                self.recoverFromError()
+            }
         }
         if self.debugEnabled {
             let stateStr = self.readCell(self.STATE) != 0 ? "compiling" : "interpreting"
@@ -1410,7 +1492,7 @@ public final class TZForth {
             [url]
 
         for target in candidates {
-            let (fid, ior) = self.openTextFileForInterpret(at: target.path)
+            let (fid, ior) = self.openTextFileForInterpret(at: target)
             guard ior == self.FILE_IO_SUCCESS else { continue }
             self.midFileLoadAborted = false
             self.includeFileInterpret(Int(fid), closeWhenDone: true, loadLabel: "FLOAD")
@@ -1496,11 +1578,21 @@ public final class TZForth {
         return nil
     }
 
-    /// ANS 8.3.1: a token ending in '.' (and not a definition) is a double-cell literal.
-    private func parseTextDouble(_ name: String, base: Int) -> (lo: Cell, hi: Cell)? {
-        guard name.hasSuffix(".") else { return nil }
-        var stem = String(name.dropLast())
-        if stem.isEmpty { return nil }
+    /// ANS 3.4 / 6.1.1320: optional # (decimal), $ (hex), or % (binary) prefix overrides BASE.
+    private func parsePrefixedNumericStem(_ name: String, defaultBase: Int) -> (stem: String, base: Int, negative: Bool)? {
+        var stem = name
+        guard !stem.isEmpty else { return nil }
+        var base = defaultBase
+        if stem.hasPrefix("#") {
+            base = 10
+            stem = String(stem.dropFirst())
+        } else if stem.hasPrefix("$") {
+            base = 16
+            stem = String(stem.dropFirst())
+        } else if stem.hasPrefix("%") {
+            base = 2
+            stem = String(stem.dropFirst())
+        }
         var negative = false
         if stem.hasPrefix("-") {
             negative = true
@@ -1508,7 +1600,11 @@ public final class TZForth {
         } else if stem.hasPrefix("+") {
             stem = String(stem.dropFirst())
         }
-        if stem.isEmpty { return nil }
+        guard !stem.isEmpty else { return nil }
+        return (stem, base, negative)
+    }
+
+    private func parseStemToSignedDouble(stem: String, base: Int, negative: Bool) -> (lo: Cell, hi: Cell)? {
         let b = max(2, min(36, base))
         var ud: UInt128 = 0
         for ch in stem {
@@ -1519,6 +1615,24 @@ public final class TZForth {
         if negative { sd = -sd }
         let parts = self.disassembleSignedDouble(sd)
         return (parts.lo, parts.hi)
+    }
+
+    private func parseTextNumber(_ name: String, base defaultBase: Int) -> Int? {
+        guard let parsed = self.parsePrefixedNumericStem(name, defaultBase: defaultBase) else { return nil }
+        let b = max(2, min(36, parsed.base))
+        for ch in parsed.stem {
+            guard self.digitValue(ch, base: b) != nil else { return nil }
+        }
+        let signedStem = parsed.negative ? "-\(parsed.stem)" : parsed.stem
+        return Int(signedStem, radix: b)
+    }
+
+    /// ANS 8.3.1: a token ending in '.' (and not a definition) is a double-cell literal.
+    private func parseTextDouble(_ name: String, base defaultBase: Int) -> (lo: Cell, hi: Cell)? {
+        guard name.hasSuffix(".") else { return nil }
+        let withoutDot = String(name.dropLast())
+        guard let parsed = self.parsePrefixedNumericStem(withoutDot, defaultBase: defaultBase) else { return nil }
+        return self.parseStemToSignedDouble(stem: parsed.stem, base: parsed.base, negative: parsed.negative)
     }
 
     private func formatSignedDouble(lo: Cell, hi: Cell, base: Cell) -> String {
@@ -1799,12 +1913,24 @@ public final class TZForth {
             }
             self.sourceLoadStop = false
             self.inSlashSlashComment = false
+            // Orphaned [IF]/[ELSE] text-scan state must not leak into the REPL after a load
+            // ends (Hayes toolstest multi-line conditionals can leave depth > 0 on abort).
+            self.conditionalSkipDepth = 0
+            self.conditionalSkipStopAtElse = false
+            self.conditionalSkipEndedInString = false
+            self.interpretIfTrueDepth = 0
         }
         self.midFileLoadAborted = false
+        self.fileInterpretLineNumber = 0
+        self.fileLoadPendingErrorMessage = ""
         while refillFromFile(fileId) {
+            self.fileInterpretLineNumber += 1
+            let lineNumber = self.fileInterpretLineNumber
             validateAndRepairSystemState()
             let raw = self.sourceBufferLineString()
-            self.echoSourceLineIfNeeded(raw)
+            if self.exceptionFrames.isEmpty {
+                self.echoSourceLineIfNeeded(raw)
+            }
             let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
             if !trimmed.isEmpty {
                 runInterpreter()
@@ -1814,21 +1940,16 @@ public final class TZForth {
             if Int(self.readCell(self.IN)) >= self.currentSourceLen {
                 self.inputQueue.removeAll(keepingCapacity: true)
             }
-            if sourceLoadStop { break }
-            if throwActive {
-                self.midFileLoadAborted = true
+            if sourceLoadStop {
+                // Intentional \\S stop — silent (not an error; REPL prints OK when the load returns).
                 break
             }
-            if errorFlag {
-                self.midFileLoadAborted = true
-                self.tell("? \(loadLabel) aborted after error in file \(fileId)\n")
-                self.errorFlag = false
-                if !self.exceptionFrames.isEmpty {
-                    self.throwFileIOError("? \(loadLabel) aborted after error in file \(fileId)")
-                }
+            if throwActive || errorFlag {
+                self.abortFileInterpretAfterLine(fileId: fileId, line: lineNumber, sourceLine: raw, loadLabel: loadLabel)
                 break
             }
         }
+        self.fileLoadPendingErrorMessage = ""
     }
 
     // MARK: - INCLUDED-NAMES registry (ANS REQUIRE / REQUIRED)
@@ -1943,7 +2064,7 @@ public final class TZForth {
         defer { self.currentlyLoadingSpec = nil }
         self.nameJoin(caddr: caddr, u: u)
         let url = self.pathURLFromCounted(caddr, u)
-        let (fid, ior) = self.openTextFileForInterpret(at: url.path)
+        let (fid, ior) = self.openTextFileForInterpret(at: url)
         if ior != self.FILE_IO_SUCCESS {
             self.throwFileNotFound("? INCLUDED could not open '\(url.lastPathComponent)'")
             return
@@ -1968,7 +2089,8 @@ public final class TZForth {
             newURL = URL(fileURLWithPath: cwd).appendingPathComponent(expanded)
         }
         var isDirectory: ObjCBool = false
-        let visibleAsDir = fm.fileExists(atPath: newURL.path, isDirectory: &isDirectory) && isDirectory.boolValue
+        let listURL = self.ensureDirectoryAccess?(newURL) ?? newURL
+        let visibleAsDir = fm.fileExists(atPath: listURL.path, isDirectory: &isDirectory) && isDirectory.boolValue
         // Always update logical (and fire host callback) so that even before any security
         // grant, the user can "chdir" to their actual folder (e.g. the project dir containing
         // Forthing.fth). This makes the default "the right place", bare "chdir" reports it,
@@ -2234,6 +2356,52 @@ public final class TZForth {
         return 0
     }
 
+    /// CFA and action-storage address for a DEFER / VALUE (docol+LIT) or CREATE/DOES> defer.
+    private func deferStorage(forName name: String) -> (cfa: Cell, storageAddr: Int)? {
+        let hdr = self.findWord(name)
+        if hdr == 0 || hdr == Cell(-1) { return nil }
+        let cfa = self.getCFA(hdr)
+        let first = self.readCell(Int(cfa))
+        if first == self.docolID {
+            let second = self.readCell(Int(cfa) + 8)
+            if second != self.litID { return nil }
+            return (cfa, Int(self.readCell(Int(cfa) + 16)))
+        }
+        if first == self.createRuntimeID || first == self.dodoesID {
+            return (cfa, Int(self.readCell(Int(cfa) + 8)))
+        }
+        return nil
+    }
+
+    /// Address of a VALUE / VARIABLE storage cell, if found.
+    private func valueStorageAddr(named name: String) -> Int? {
+        let hdr = self.findWord(name)
+        if hdr == 0 || hdr == Cell(-1) { return nil }
+        let cfa = Int(self.getCFA(hdr))
+        let first = self.readCell(cfa)
+        if first == self.docolID, self.readCell(cfa + 8) == self.litID {
+            return Int(self.readCell(cfa + 16))
+        }
+        if first == self.createRuntimeID {
+            return Int(self.readCell(cfa + 8))
+        }
+        return nil
+    }
+
+    private func deferStorageFromXt(_ deferXt: Cell) -> Int? {
+        if deferXt < Cell(self.MAX_BUILTIN_ID) { return nil }
+        let cfa = Int(deferXt)
+        let first = self.readCell(cfa)
+        if first == self.docolID {
+            if self.readCell(cfa + 8) != self.litID { return nil }
+            return Int(self.readCell(cfa + 16))
+        }
+        if first == self.createRuntimeID || first == self.dodoesID {
+            return Int(self.readCell(cfa + 8))
+        }
+        return nil
+    }
+
     private func xtAndFindFlag(fromHeader hdr: Cell) -> (xt: Cell, flag: Cell) {
         let cfa = getCFA(hdr)
         let flagsLen = readByte(Int(hdr) + 8)
@@ -2291,6 +2459,37 @@ public final class TZForth {
         return cfa
     }
 
+    /// True when compiling a definition, including immediate colon bodies while an open : is hidden.
+    private func isActiveCompilation() -> Bool {
+        if self.readCell(self.STATE) != 0 { return true }
+        if self.bracketCompileDepth > 0 { return true }
+        if !self.controlFlowStack.isEmpty { return true }
+        if !self.whileRepeatStack.isEmpty { return true }
+        if !self.caseBranchStack.isEmpty { return true }
+        // Immediate colon bodies (e.g. [c+]) temporarily set STATE=0 while : tcm is still open.
+        let latest = self.readCell(self.readCell(self.CURRENT))
+        if latest != 0 {
+            let fl = self.readByte(Int(latest) + 8)
+            if (fl & self.FLAG_HIDDEN) != 0 { return true }
+        }
+        return false
+    }
+
+    /// CS-ROLL ( u -- ) shared by immediate and deferred compilation.
+    private func performCsRoll(u: Int) {
+        if u <= 0 { return }
+        // ?DONE / WHILE pattern: after IF the forward-branch placeholder is already TOS
+        // above the BEGIN address; rolling u=1 would move BEGIN to TOS and break REPEAT.
+        if u == 1 && self.controlFlowStack.count == 2 { return }
+        let idx = self.controlFlowStack.count - 1 - u
+        if idx < 0 || idx >= self.controlFlowStack.count {
+            self.throwIllegalArgument("? CS-ROLL underflow")
+            return
+        }
+        let rolled = self.controlFlowStack.remove(at: idx)
+        self.controlFlowStack.append(rolled)
+    }
+
     /// u=0 is TOS on the data stack.
     private func peekStackItem(_ u: Int) -> Cell {
         let depth = Int(spGet() - 1)
@@ -2298,26 +2497,103 @@ public final class TZForth {
         return readCell(stackBase + (depth - 1 - u) * CELL_SIZE)
     }
 
-    private enum ConditionalSkipResult { case then, elseBranch, error }
+    private enum ConditionalSkipResult { case then, elseBranch, pending, error }
 
-    /// Skip conditional-compilation source until a matching `[THEN]` or (when allowed) `[ELSE]`.
-    private func skipConditionalBranch(stopAtElse: Bool) -> ConditionalSkipResult {
-        var depth = 1
-        while !inputQueue.isEmpty && !errorFlag && !throwActive {
-            let word = parseWord()
-            if word.isEmpty { continue }
+    /// Discard .( / .\" bodies during a conditional text scan (no stack effect).
+    private func discardParsedWordDuringConditionalSkip(_ word: String) {
+        switch word {
+        case ".(":
+            while !self.inputQueue.isEmpty {
+                let c = self.consumeInput() ?? 0
+                if c == 41 { break }
+            }
+        case ".\"":
+            _ = self.parseToWordBuffer(using: 34)
+        default:
+            break
+        }
+    }
+
+    /// Scan a double-quote string during conditional skip; recognise [IF]/[ELSE]/[THEN] words.
+    private func pumpConditionalSkipInString() -> ConditionalSkipResult? {
+        while !self.inputQueue.isEmpty && !self.errorFlag && !self.throwActive {
+            while let b = self.inputQueue.first, b <= 32 {
+                _ = self.consumeInput()
+            }
+            if self.inputQueue.isEmpty { return nil }
+            if self.inputQueue.first == 34 {
+                _ = self.consumeInput()
+                return nil
+            }
+            let word = self.parseWord()
+            if word.isEmpty { return nil }
             let w = word.uppercased()
             if w == "[IF]" {
-                depth += 1
+                self.conditionalSkipDepth += 1
             } else if w == "[THEN]" {
-                depth -= 1
-                if depth == 0 { return .then }
-            } else if w == "[ELSE]" && depth == 1 && stopAtElse {
+                self.conditionalSkipDepth -= 1
+                if self.conditionalSkipDepth == 0 {
+                    self.conditionalSkipEndedInString = true
+                    return .then
+                }
+            } else if w == "[ELSE]" && self.conditionalSkipDepth == 1 && self.conditionalSkipStopAtElse {
+                self.conditionalSkipDepth = 0
+                self.conditionalSkipEndedInString = true
                 return .elseBranch
             }
         }
-        throwUncompletedControl("? [IF] unresolved conditional compilation")
-        return .error
+        return nil
+    }
+
+    /// Advance a conditional text scan as far as the current input allows.
+    private func pumpConditionalSkip() -> ConditionalSkipResult {
+        while self.conditionalSkipDepth > 0 && !self.errorFlag && !self.throwActive {
+            self.syncInputQueueFromSourceIfNeeded()
+            if self.inputQueue.isEmpty {
+                return .pending
+            }
+            let word = self.parseWord()
+            if word.isEmpty {
+                return .pending
+            }
+            if word == "S\"" || word == "$\"" || word == "C\"" || word == "S\\\"" {
+                while let b = self.inputQueue.first, b <= 32 {
+                    _ = self.consumeInput()
+                }
+                if self.inputQueue.first == 34 {
+                    _ = self.consumeInput()
+                    if let r = self.pumpConditionalSkipInString() { return r }
+                }
+                continue
+            }
+            self.discardParsedWordDuringConditionalSkip(word)
+            let w = word.uppercased()
+            if w == "[IF]" {
+                self.conditionalSkipDepth += 1
+            } else if w == "[THEN]" {
+                self.conditionalSkipDepth -= 1
+                if self.conditionalSkipDepth == 0 { return .then }
+            } else if w == "[ELSE]" && self.conditionalSkipDepth == 1 && self.conditionalSkipStopAtElse {
+                self.conditionalSkipDepth = 0
+                return .elseBranch
+            }
+        }
+        if self.conditionalSkipDepth > 0 { return .pending }
+        return .then
+    }
+
+    /// Start (or restart) skipping until `[THEN]` or, when allowed, `[ELSE]`.
+    private func startConditionalSkip(stopAtElse: Bool) -> ConditionalSkipResult {
+        self.conditionalSkipDepth = 1
+        self.conditionalSkipStopAtElse = stopAtElse
+        self.conditionalSkipEndedInString = false
+        return self.pumpConditionalSkip()
+    }
+
+    /// Continue a pending multi-line conditional skip on the next source line.
+    private func continuePendingConditionalSkip() -> ConditionalSkipResult {
+        guard self.conditionalSkipDepth > 0 else { return .then }
+        return self.pumpConditionalSkip()
     }
 
     private static let environmentQueryCatalog: [String] = [
@@ -2376,6 +2652,10 @@ public final class TZForth {
         return u1 < u2 ? -1 : 1
     }
 
+    private func normalizeSubstitutionName(_ name: String) -> String {
+        name.lowercased()
+    }
+
     private func substitutionNameFromMemory(caddr: Int, u: Int) -> String? {
         if u <= 0 { return "" }
         var bytes: [UInt8] = []
@@ -2385,11 +2665,50 @@ public final class TZForth {
             if b == 37 { return nil } // '%' in substitution name is ambiguous
             bytes.append(b)
         }
-        return String(bytes: bytes, encoding: .utf8) ?? String(bytes: bytes, encoding: .ascii)
+        let raw = String(bytes: bytes, encoding: .utf8)
+            ?? String(bytes: bytes, encoding: .ascii)
+            ?? ""
+        return self.normalizeSubstitutionName(raw)
     }
 
     private func lookupSubstitutionText(name: String) -> [UInt8]? {
-        self.textSubstitutions[name]
+        self.textSubstitutions[self.normalizeSubstitutionName(name)]
+    }
+
+    /// ANS CMOVE — copy u chars from c-addr1 to c-addr2, low to high (with overlap propagation).
+    private func cmoveAns(caddr1: Int, caddr2: Int, u: Int) {
+        if u <= 0 { return }
+        let src = caddr1
+        let dst = caddr2
+        if dst >= src && dst < src + u {
+            let offset = dst - src
+            var remaining = u
+            var from = src
+            var to = dst
+            while remaining > 0 {
+                let chunk = min(remaining, offset)
+                for i in 0..<chunk {
+                    self.writeByte(to + i, self.readByte(from + i))
+                }
+                remaining -= chunk
+                from += chunk
+                to += chunk
+            }
+            return
+        }
+        if dst < src {
+            for i in 0..<u { self.writeByte(dst + i, self.readByte(src + i)) }
+        } else {
+            for i in (0..<u).reversed() { self.writeByte(dst + i, self.readByte(src + i)) }
+        }
+    }
+
+    /// ANS CMOVE> — copy u chars from c-addr1 to c-addr2, high to low.
+    private func cmoveFromHighAns(caddr1: Int, caddr2: Int, u: Int) {
+        if u <= 0 { return }
+        for i in (0..<u).reversed() {
+            self.writeByte(caddr2 + i, self.readByte(caddr1 + i))
+        }
     }
 
     /// ANS SUBSTITUTE — left-to-right, non-recursive %name% expansion.
@@ -3237,7 +3556,7 @@ public final class TZForth {
 
         // COMPILE, ( xt -- )  Core Ext. Compile the given xt (cfa from ') as if found while compiling.
         _ = register("COMPILE,") {
-            if self.readCell(self.STATE) == 0 {
+            if !self.isActiveCompilation() {
                 self.throwCompileOnly("? COMPILE, only while compiling")
                 return
             }
@@ -3257,7 +3576,7 @@ public final class TZForth {
         // (LIT xt EXECUTE). For non-immediate, same as normal reference emission.
         // Requires executeID (captured at registration of EXECUTE).
         _ = register("POSTPONE", immediate: true) {
-            if self.readCell(self.STATE) == 0 { self.kernelThrow(StdThrow.compileOnly, message: "? POSTPONE only while compiling"); return }
+            if !self.isActiveCompilation() { self.kernelThrow(StdThrow.compileOnly, message: "? POSTPONE only while compiling"); return }
             let name = self.parseWord()
             if name.isEmpty { self.throwZeroLengthName("? POSTPONE needs name"); return }
             let hdr = self.findWord(name)
@@ -3283,6 +3602,7 @@ public final class TZForth {
             self.nonameCompile = false
             self.resetLocalCompileState()
             self.caseBranchStack.removeAll()
+            self.controlFlowStack.removeAll()
             self.createWord(name: name, immediate: false)
 
             // Compile DOCOL into the code field (as if user had done DOCOL , )
@@ -3303,6 +3623,7 @@ public final class TZForth {
             self.nonameCompile = true
             self.resetLocalCompileState()
             self.caseBranchStack.removeAll()
+            self.controlFlowStack.removeAll()
             self.createWord(name: "", immediate: false)
             self.push(self.docolID); self.comma()
             let defsHeadCell = self.readCell(self.CURRENT)
@@ -3332,6 +3653,9 @@ public final class TZForth {
             self.whileRepeatStack.removeAll()
             self.whileNestStack.removeAll()
             self.caseBranchStack.removeAll()
+            self.controlFlowStack.removeAll()
+            self.conditionalSkipDepth = 0
+            self.conditionalSkipStopAtElse = false
             self.resetLocalCompileState()
         }
 
@@ -3401,8 +3725,9 @@ public final class TZForth {
             if !self.dispatchedFromInnerThread {
                 // This does-child is being executed directly (top-level or leaf from outer interpreter).
                 // No active caller innerThread to pick up the redirected ip, so run the does code here.
+                let stopRsp = Int(self.rspGet())
                 self.rpush(0)  // sentinel so the does code's EXIT can return cleanly
-                self.innerThread()
+                self.innerThread(stopWhenRspAtMost: stopRsp)
                 // After does code EXITS (rpop 0), this dodoes body returns; outer continues (e.g. to ".").
             }
             // If dispatchedFromInnerThread, we just redirected ip; the caller's innerThread will continue
@@ -3453,16 +3778,17 @@ public final class TZForth {
         // and very educational. No extra control-flow stack is required.
 
         _ = register("BEGIN", immediate: true) {
-            if self.readCell(self.STATE) == 0 {
+            if !self.isActiveCompilation() {
                 self.throwCompileOnly("? BEGIN only allowed while compiling a word")
                 return
             }
             let here = self.readCell(self.DP_ADDR)
             self.whileRepeatStack.append(here)
+            self.controlFlowStack.append(here)
         }
 
         _ = register("AGAIN", immediate: true) {
-            if self.readCell(self.STATE) == 0 {
+            if !self.isActiveCompilation() {
                 self.throwCompileOnly("? AGAIN only allowed while compiling a word")
                 return
             }
@@ -3478,7 +3804,7 @@ public final class TZForth {
         }
 
         _ = register("UNTIL", immediate: true) {
-            if self.readCell(self.STATE) == 0 {
+            if !self.isActiveCompilation() {
                 self.throwCompileOnly("? UNTIL only allowed while compiling a word")
                 return
             }
@@ -3500,7 +3826,7 @@ public final class TZForth {
         }
 
         _ = register("WHILE", immediate: true) {
-            if self.readCell(self.STATE) == 0 {
+            if !self.isActiveCompilation() {
                 self.throwCompileOnly("? WHILE only allowed while compiling a word")
                 return
             }
@@ -3516,17 +3842,21 @@ public final class TZForth {
             self.push(self.zeroBranchID); self.comma()
             let placeholderAddr = self.readCell(self.DP_ADDR)
             self.push(0); self.comma()
-            self.push(placeholderAddr)
+            self.controlFlowStack.append(placeholderAddr)
             self.whileRepeatStack.append(repeatDest)
             self.whileNestStack.append(self.readCell(self.DP_ADDR))
         }
 
         _ = register("REPEAT", immediate: true) {
-            if self.readCell(self.STATE) == 0 {
+            if !self.isActiveCompilation() {
                 self.throwCompileOnly("? REPEAT only allowed while compiling a word")
                 return
             }
-            let origPlaceholder = self.pop()
+            guard !self.controlFlowStack.isEmpty else {
+                self.throwInvalidToken("? REPEAT without WHILE")
+                return
+            }
+            let origPlaceholder = self.controlFlowStack.removeLast()
             guard !self.whileRepeatStack.isEmpty else {
                 self.throwInvalidToken("? REPEAT without WHILE")
                 return
@@ -3551,26 +3881,30 @@ public final class TZForth {
         // All are immediate and operate on the compile-time data stack.
 
         _ = register("IF", immediate: true) {
-            if self.readCell(self.STATE) == 0 {
+            if !self.isActiveCompilation() {
                 self.throwCompileOnly("? IF only allowed while compiling a word")
                 return
             }
             self.push(self.zeroBranchID); self.comma()
             let placeholderAddr = self.readCell(self.DP_ADDR)
             self.push(0); self.comma()
-            self.push(placeholderAddr)
+            self.controlFlowStack.append(placeholderAddr)
         }
 
         _ = register("ELSE", immediate: true) {
-            if self.readCell(self.STATE) == 0 {
+            if !self.isActiveCompilation() {
                 self.throwCompileOnly("? ELSE only allowed while compiling a word")
                 return
             }
-            let ifPlaceholder = self.pop()
+            guard !self.controlFlowStack.isEmpty else {
+                self.throwInvalidToken("? ELSE without IF")
+                return
+            }
+            let ifPlaceholder = self.controlFlowStack.removeLast()
             self.push(self.branchID); self.comma()
             let elsePlaceholder = self.readCell(self.DP_ADDR)
             self.push(0); self.comma()
-            self.push(elsePlaceholder)
+            self.controlFlowStack.append(elsePlaceholder)
 
             let afterElseBranch = self.readCell(self.DP_ADDR)
             let skipOffset = afterElseBranch - (ifPlaceholder + 8)
@@ -3578,11 +3912,15 @@ public final class TZForth {
         }
 
         _ = register("THEN", immediate: true) {
-            if self.readCell(self.STATE) == 0 {
+            if !self.isActiveCompilation() {
                 self.throwCompileOnly("? THEN only allowed while compiling a word")
                 return
             }
-            let placeholder = self.pop()
+            guard !self.controlFlowStack.isEmpty else {
+                self.throwInvalidToken("? THEN without IF/ELSE/AHEAD")
+                return
+            }
+            let placeholder = self.controlFlowStack.removeLast()
             let here = self.readCell(self.DP_ADDR)
             let forwardOffset = here - (placeholder + 8)
             self.writeCell(Int(placeholder), forwardOffset)
@@ -3701,7 +4039,7 @@ public final class TZForth {
         // (postpone-comp) ( xt -- )  Run-time helper for POSTPONE of a non-immediate word.
         self.postponeCompID = register("(postpone-comp)") {
             let xt = self.pop()
-            if self.readCell(self.STATE) != 0 {
+            if self.isActiveCompilation() {
                 self.emitCompileReference(xt: xt)
             } else if xt < Cell(self.MAX_BUILTIN_ID) {
                 self.execute(cfa: xt, firstCell: xt)
@@ -3712,19 +4050,31 @@ public final class TZForth {
         }
 
         // (postpone-imm) ( xt -- )  Run-time helper for POSTPONE of an immediate word.
-        // When compiling, append LIT xt EXECUTE; when interpreting, execute xt.
+        // When the parent immediate colon word runs during compilation, execute xt's
+        // compilation semantics now (e.g. POSTPONE IF inside ?DONE).
         self.postponeImmID = register("(postpone-imm)") {
             let xt = self.pop()
-            if self.readCell(self.STATE) != 0 {
-                self.push(self.litID); self.comma()
-                self.emitCompileReference(xt: xt)
-                self.push(self.executeID); self.comma()
-            } else if xt < Cell(self.MAX_BUILTIN_ID) {
+            if xt < Cell(self.MAX_BUILTIN_ID) {
                 self.execute(cfa: xt, firstCell: xt)
             } else {
                 let firstCell = self.readCell(Int(xt))
                 self.execute(cfa: xt, firstCell: firstCell)
             }
+        }
+
+        // Deferred CS-PICK / CS-ROLL compiled into immediate-colon meta words (?REPEAT, ?DONE, …).
+        self.deferredCsPickID = register("(deferred-cs-pick)") {
+            let u = Int(self.pop())
+            let idx = self.controlFlowStack.count - 1 - u
+            if idx < 0 || idx >= self.controlFlowStack.count {
+                self.throwIllegalArgument("? CS-PICK underflow")
+                return
+            }
+            self.push(self.controlFlowStack[idx])
+        }
+
+        self.deferredCsRollID = register("(deferred-cs-roll)") {
+            self.performCsRoll(u: Int(self.pop()))
         }
 
         // FIND ( c-addr -- c-addr 0 | xt 1 | xt -1 )
@@ -3794,6 +4144,9 @@ public final class TZForth {
                 self.writeByte(self.SOURCE_BUFFER + i, savedSource[i])
             }
             if self.throwActive { return }
+            // Resume the outer REPL line after the evaluated string.
+            self.inputQueue.removeAll(keepingCapacity: true)
+            self.realignInputQueueFromSource()
             // Propagate caught THROW to enclosing CATCH (do not convert to errorFlag).
             // Uncaught throws already set errorFlag via handleUnhandledThrow.
         }
@@ -3920,21 +4273,29 @@ public final class TZForth {
             self.inSlashSlashComment = true
         }
 
-        // \S  stops further loading/interpretation of the current source file (FLOAD).
+        // \S  stops further loading/interpretation of the current source file (FLOAD/INCLUDE),
+        // or stops the remainder of a multi-line console submit (paste / Shift-Return block).
         // Drains rest of current line (so anything after \S on the line is ignored).
-        // If used from the console (loadNesting==0), the stop has no effect (no-op),
-        // but rest of the line is still drained for consistency.
         // Immediate so it takes effect as soon as seen on a line during load.
         _ = register("\\S", immediate: true) {
-            if self.loadNesting > 0 {
-                // Drain rest of line so anything after \S on the source line is ignored.
-                while !self.inputQueue.isEmpty {
-                    let c = self.consumeInput() ?? 0
-                    if c == 10 || c == 13 { break }
-                }
-                self.sourceLoadStop = true
+            // Drain rest of line so anything after \S on the source line is ignored.
+            while !self.inputQueue.isEmpty {
+                let c = self.consumeInput() ?? 0
+                if c == 10 || c == 13 { break }
             }
-            // else (console): do absolutely nothing — per spec "does nothing when interpreting"
+            if self.isInterpretingLoadedFile() {
+                // Pin >IN at end-of-line so syncInputQueueFromSourceIfNeeded cannot
+                // resurrect the rest of this line after the queue drain (FLOAD merger path
+                // uses runInterpreter directly instead of per-line feedLine).
+                self.writeCell(self.IN, Cell(self.currentSourceLen))
+                self.inputQueue.removeAll(keepingCapacity: true)
+                self.sourceLoadStop = true
+            } else {
+                // Console REPL: host (ConsoleView) skips remaining lines in this submit batch.
+                self.writeCell(self.IN, Cell(self.currentSourceLen))
+                self.inputQueue.removeAll(keepingCapacity: true)
+                self.replBatchStop = true
+            }
         }
 
         // Basic comparison words users expect immediately
@@ -4142,16 +4503,16 @@ public final class TZForth {
 
         self.twoFetchID = register("2@") {
             let a = Int(self.pop())
-            let lo = self.readCell(a)
-            let hi = self.readCell(a + 8)
-            self.push(lo); self.push(hi)
+            let w2 = self.readCell(a)
+            let w1 = self.readCell(a + 8)
+            self.push(w1); self.push(w2)
         }
         self.twoStoreID = register("2!") {
             let a = Int(self.pop())
-            let x2 = self.pop()
-            let x1 = self.pop()
-            self.writeCell(a, x1)
-            self.writeCell(a + 8, x2)
+            let w2 = self.pop()
+            let w1 = self.pop()
+            self.writeCell(a, w2)
+            self.writeCell(a + 8, w1)
         }
 
         _ = register("CELL+") { let a = self.pop(); self.push(a + 8) }
@@ -4293,24 +4654,19 @@ public final class TZForth {
             for i in 0..<u { self.writeByte(addr + i, 32) }
         }
 
+        // ANS stack: ( c-addr1 c-addr2 u -- ) — copy from c-addr1 to c-addr2.
         _ = register("CMOVE") {
             let u = Int(self.pop())
-            let src = Int(self.pop())
-            let dst = Int(self.pop())
-            if u <= 0 { return }
-            if dst < src {
-                for i in 0..<u { self.writeByte(dst + i, self.readByte(src + i)) }
-            } else {
-                for i in (0..<u).reversed() { self.writeByte(dst + i, self.readByte(src + i)) }
-            }
+            let caddr2 = Int(self.pop())
+            let caddr1 = Int(self.pop())
+            self.cmoveAns(caddr1: caddr1, caddr2: caddr2, u: u)
         }
 
         _ = register("CMOVE>") {
             let u = Int(self.pop())
-            let src = Int(self.pop())
-            let dst = Int(self.pop())
-            if u <= 0 { return }
-            for i in (0..<u).reversed() { self.writeByte(dst + i, self.readByte(src + i)) }
+            let caddr2 = Int(self.pop())
+            let caddr1 = Int(self.pop())
+            self.cmoveFromHighAns(caddr1: caddr1, caddr2: caddr2, u: u)
         }
 
         _ = register("COMPARE") {
@@ -4378,7 +4734,7 @@ public final class TZForth {
             for i in 0..<textLen {
                 bytes.append(self.readByte(textCaddr + i))
             }
-            self.textSubstitutions[name] = bytes
+            self.textSubstitutions[self.normalizeSubstitutionName(name)] = bytes
         }
 
         _ = register("SUBSTITUTE") {
@@ -4598,7 +4954,9 @@ public final class TZForth {
 
         // SOURCE-ID ( -- id )  Core Ext — -1 terminal, 0 evaluate string, ≥2 open fileid.
         _ = register("SOURCE-ID") {
-            if self.loadNesting > 0, self.interpreterInputFileId >= 2 {
+            if self.evaluateNesting > 0 {
+                self.push(self.currentSourceId)
+            } else if self.loadNesting > 0, self.interpreterInputFileId >= 2 {
                 self.push(self.interpreterInputFileId)
             } else {
                 self.push(self.currentSourceId)
@@ -4606,7 +4964,6 @@ public final class TZForth {
         }
 
         // SAVE-INPUT ( -- x1 ... xn n )  Core Ext
-        // Pushes: >IN, source-id, opaque snapshot handle, and count 3.
         _ = register("SAVE-INPUT") {
             var sourceBytes: [UInt8] = []
             for i in 0..<self.currentSourceLen {
@@ -4617,14 +4974,27 @@ public final class TZForth {
                 inPos: self.readCell(self.IN),
                 sourceLen: self.currentSourceLen,
                 sourceBytes: sourceBytes,
-                queue: self.inputQueue
+                queue: self.inputQueue,
+                evaluateNesting: self.evaluateNesting
             )
             let handle = Cell(self.inputSnapshots.count)
             self.inputSnapshots.append(snap)
-            self.push(self.readCell(self.IN))
-            self.push(self.currentSourceId)
-            self.push(handle)
-            self.push(3)
+            let savedIn = self.readCell(self.IN)
+            if self.evaluateNesting > 0 {
+                // EVALUATE string source (ANS table: >IN only).
+                self.push(savedIn)
+                self.push(1)
+            } else if self.loadNesting > 0, self.interpreterInputFileId >= 2 {
+                self.push(savedIn)
+                self.push(self.interpreterInputFileId)
+                self.push(handle)
+                self.push(3)
+            } else {
+                self.push(savedIn)
+                self.push(self.currentSourceId)
+                self.push(handle)
+                self.push(3)
+            }
         }
 
         // RESTORE-INPUT ( x1 ... xn n -- flag )  Core Ext — flag true if restore failed.
@@ -4632,28 +5002,97 @@ public final class TZForth {
             let n = Int(self.pop())
             var args: [Cell] = []
             for _ in 0..<n { args.insert(self.pop(), at: 0) }
-            guard n == 3,
-                  Int(args[2]) >= 0 && Int(args[2]) < self.inputSnapshots.count else {
-                self.push(-1) // failed
-                return
-            }
-            let snap = self.inputSnapshots[Int(args[2])]
-            if snap.sourceId != self.currentSourceId || args[1] != snap.sourceId {
+            let handle: Int
+            let savedIn: Cell
+            if n == 1 {
+                guard args.count == 1 else {
+                    self.push(-1)
+                    return
+                }
+                savedIn = args[0]
+                guard let idx = self.inputSnapshots.lastIndex(where: {
+                    $0.sourceId == self.currentSourceId && $0.inPos == savedIn
+                }) else {
+                    self.push(-1)
+                    return
+                }
+                handle = idx
+            } else if n == 3 {
+                guard args.count == 3,
+                      Int(args[2]) >= 0 && Int(args[2]) < self.inputSnapshots.count else {
+                    self.push(-1)
+                    return
+                }
+                savedIn = args[0]
+                handle = Int(args[2])
+            } else {
                 self.push(-1)
                 return
             }
-            self.writeCell(self.IN, args[0])
-            self.currentSourceId = snap.sourceId
+            let snap = self.inputSnapshots[handle]
+            if snap.sourceId != self.currentSourceId {
+                self.push(-1)
+                return
+            }
+            if n == 3, args[1] != snap.sourceId {
+                self.push(-1)
+                return
+            }
+            if savedIn != snap.inPos {
+                self.push(-1)
+                return
+            }
             self.currentSourceLen = snap.sourceLen
             for i in 0..<snap.sourceLen {
                 self.writeByte(self.SOURCE_BUFFER + i, snap.sourceBytes[i])
             }
-            self.inputQueue = snap.queue
+            if snap.evaluateNesting > 0 {
+                // Restore evaluate-string content; skip the word after the save point and apply
+                // any >IN delta recorded in SI_INC (Hayes coreext SAVE-INPUT / SI1 / RESTORE-INPUT).
+                var pos = Int(savedIn)
+                while pos < self.currentSourceLen {
+                    let b = self.readByte(self.SOURCE_BUFFER + pos)
+                    if b > 32 { break }
+                    pos += 1
+                }
+                while pos < self.currentSourceLen {
+                    let b = self.readByte(self.SOURCE_BUFFER + pos)
+                    if b <= 32 { break }
+                    pos += 1
+                }
+                while pos < self.currentSourceLen {
+                    let b = self.readByte(self.SOURCE_BUFFER + pos)
+                    if b > 32 { break }
+                    pos += 1
+                }
+                if let siAddr = self.valueStorageAddr(named: "SI_INC") {
+                    pos += Int(self.readCell(siAddr))
+                }
+                self.writeCell(self.IN, Cell(pos))
+                self.realignInputQueueFromSource()
+            } else {
+                self.currentSourceId = snap.sourceId
+                let currentIn = Int(self.readCell(self.IN))
+                let snapIn = Int(snap.inPos)
+                if currentIn > snapIn {
+                    // Same-line parse moved past the save point (e.g. SAVE-INPUT … EVALUATE … RESTORE-INPUT):
+                    // keep the current >IN, restore the saved SOURCE image only.
+                    self.realignInputQueueFromSource()
+                } else {
+                    self.writeCell(self.IN, savedIn)
+                    self.inputQueue = snap.queue
+                    self.realignInputQueueFromSource()
+                }
+            }
             self.push(0) // success (flag false)
         }
 
         // REFILL ( -- flag )  Core/File Ext — true when next line loaded from text file input.
         _ = register("REFILL") {
+            if self.evaluateNesting > 0 {
+                self.push(0)
+                return
+            }
             if let fid = self.activeInterpreterFileId(), self.refillFromFile(fid) {
                 self.push(-1)
             } else {
@@ -4673,6 +5112,12 @@ public final class TZForth {
         // Does not skip leading instances of the delim (unlike WORD).
         _ = register("PARSE") {
             let delim = UInt8( self.pop() & 0xff )
+            if !self.inputQueue.isEmpty {
+                let b = self.inputQueue.first!
+                if b <= 32 && b != 10 && b != 13 {
+                    _ = self.consumeInput()
+                }
+            }
             let startPos = Int( self.readCell(self.IN) )
             var len = 0
             while !self.inputQueue.isEmpty {
@@ -4683,9 +5128,17 @@ public final class TZForth {
                 _ = self.consumeInput()
                 len += 1
             }
-            // Do not consume the delim (standard PARSE leaves it in the input stream)
+            // Advance >IN past the parsed string and the delimiter (if present).
+            var endPos = startPos + len
+            if !self.inputQueue.isEmpty {
+                let b = self.inputQueue.first!
+                if self.peekIsDelim(delim) || b == delim {
+                    _ = self.consumeInput()
+                    endPos += 1
+                }
+            }
             let addr = self.SOURCE_BUFFER + startPos
-            self.writeCell(self.IN, startPos + len)
+            self.writeCell(self.IN, endPos)
             self.push( Cell(addr) )
             self.push( Cell(len) )
         }
@@ -5305,10 +5758,11 @@ public final class TZForth {
             }
         }
 
-        // TRAVERSE-WORDLIST ( xt wid -- )
+        // TRAVERSE-WORDLIST ( xt wid -- )  xt ( wid *u n -- wid *u n f )
         _ = register("TRAVERSE-WORDLIST") {
             let wid = Int(self.pop())
             let xt = self.pop()
+            self.push(Cell(wid))
             var link = self.readCell(wid)
             var safety = 0
             while link != 0 && safety < 10000 {
@@ -5332,6 +5786,8 @@ public final class TZForth {
                 self.ip = savedIp
                 self.rspSet(savedRsp)
                 if self.throwActive || self.errorFlag { return }
+                let continueFlag = self.pop()
+                if continueFlag == 0 { break }
                 link = self.readCell(link)
             }
         }
@@ -5364,29 +5820,39 @@ public final class TZForth {
             self.writeCellHere(self.exitID)
         }
 
-        // [DEFINED] ( "<spaces>name" -- )  immediate — skip following text if name absent.
+        // [DEFINED] ( "<spaces>name" -- flag )  immediate — skip following text if name absent.
         _ = register("[DEFINED]", immediate: true) {
-            let compiling = self.readCell(self.STATE) != 0 || self.bracketCompileDepth > 0
-            if !compiling {
-                self.throwCompileOnly("? [DEFINED] only while compiling")
-                return
-            }
+            let compiling = self.isActiveCompilation()
             let name = self.parseWord()
-            if self.findWord(name) == 0 {
-                _ = self.skipConditionalBranch(stopAtElse: true)
+            if compiling {
+                if self.findWord(name) == 0 {
+                    let r = self.startConditionalSkip(stopAtElse: true)
+                    if r == .error {
+                        self.throwUncompletedControl("? [IF] unresolved conditional compilation")
+                    }
+                } else {
+                    self.push(-1)
+                }
+            } else {
+                self.push(self.findWord(name) != 0 ? -1 : 0)
             }
         }
 
-        // [UNDEFINED] ( "<spaces>name" -- )  immediate — skip following text if name present.
+        // [UNDEFINED] ( "<spaces>name" -- flag )  immediate — skip following text if name present.
         _ = register("[UNDEFINED]", immediate: true) {
-            let compiling = self.readCell(self.STATE) != 0 || self.bracketCompileDepth > 0
-            if !compiling {
-                self.throwCompileOnly("? [UNDEFINED] only while compiling")
-                return
-            }
+            let compiling = self.isActiveCompilation()
             let name = self.parseWord()
-            if self.findWord(name) != 0 {
-                _ = self.skipConditionalBranch(stopAtElse: true)
+            if compiling {
+                if self.findWord(name) != 0 {
+                    let r = self.startConditionalSkip(stopAtElse: true)
+                    if r == .error {
+                        self.throwUncompletedControl("? [IF] unresolved conditional compilation")
+                    }
+                } else {
+                    self.push(-1)
+                }
+            } else {
+                self.push(self.findWord(name) == 0 ? -1 : 0)
             }
         }
 
@@ -5417,49 +5883,52 @@ public final class TZForth {
             var items: [Cell] = []
             for _ in 0..<n { items.append(self.rpop()) }
             for item in items.reversed() { self.push(item) }
-            self.push(Cell(n))
         }
 
         // CS-PICK / CS-ROLL — control-flow stack is the data stack during compilation.
         _ = register("CS-PICK", immediate: true) {
-            if self.readCell(self.STATE) == 0 {
+            if !self.isActiveCompilation() {
                 self.throwCompileOnly("? CS-PICK only while compiling")
                 return
             }
             let u = Int(self.pop())
-            let picked: Cell
-            if u == 0, let begin = self.whileRepeatStack.last {
-                picked = begin
-            } else {
-                picked = self.peekStackItem(u)
+            let idx = self.controlFlowStack.count - 1 - u
+            if idx < 0 || idx >= self.controlFlowStack.count {
+                self.push(self.litID); self.comma()
+                self.push(Cell(u)); self.comma()
+                self.push(self.deferredCsPickID); self.comma()
+                return
             }
-            self.push(picked)
+            self.push(self.controlFlowStack[idx])
         }
 
         _ = register("CS-ROLL", immediate: true) {
-            if self.readCell(self.STATE) == 0 {
+            if !self.isActiveCompilation() {
                 self.throwCompileOnly("? CS-ROLL only while compiling")
                 return
             }
             let u = Int(self.pop())
+            let idx = self.controlFlowStack.count - 1 - u
             if u <= 0 { return }
-            var saved: [Cell] = []
-            for _ in 0...u { saved.append(self.pop()) }
-            let rolled = saved[u]
-            for i in (0..<u).reversed() { self.push(saved[i]) }
-            self.push(rolled)
+            if idx < 0 || idx >= self.controlFlowStack.count {
+                self.push(self.litID); self.comma()
+                self.push(Cell(u)); self.comma()
+                self.push(self.deferredCsRollID); self.comma()
+                return
+            }
+            self.performCsRoll(u: u)
         }
 
         // AHEAD ( -- )  unconditional forward branch placeholder (resolved by THEN).
         _ = register("AHEAD", immediate: true) {
-            if self.readCell(self.STATE) == 0 {
+            if !self.isActiveCompilation() {
                 self.throwCompileOnly("? AHEAD only while compiling")
                 return
             }
             self.push(self.branchID); self.comma()
             let placeholderAddr = self.readCell(self.DP_ADDR)
             self.push(0); self.comma()
-            self.push(placeholderAddr)
+            self.controlFlowStack.append(placeholderAddr)
         }
 
         // Assembler words — stubs (no machine-code assembler in TZForth yet).
@@ -5469,27 +5938,50 @@ public final class TZForth {
         _ = register(";CODE") {
             self.throwIllegalArgument("? ;CODE assembler not implemented")
         }
-        // [IF] / [ELSE] / [THEN] — Core Ext conditional compilation (also listed under Programming-Tools assembler).
+        // [IF] / [ELSE] / [THEN] — conditional compilation and interpret-time conditional execution.
         _ = register("[IF]", immediate: true) {
-            let compiling = self.readCell(self.STATE) != 0 || self.bracketCompileDepth > 0
-            if !compiling {
-                self.throwCompileOnly("? [IF] undefined in interpret state")
-                return
-            }
-            if self.pop() == 0 {
-                _ = self.skipConditionalBranch(stopAtElse: true)
+            let compiling = self.isActiveCompilation()
+            let flag = self.pop()
+            if compiling {
+                if flag == 0 {
+                    let r = self.startConditionalSkip(stopAtElse: true)
+                    if r == .error {
+                        self.throwUncompletedControl("? [IF] unresolved conditional compilation")
+                    }
+                }
+            } else if flag == 0 {
+                let r = self.startConditionalSkip(stopAtElse: true)
+                if r == .error {
+                    self.throwUncompletedControl("? [IF] unresolved conditional compilation")
+                }
+            } else {
+                self.interpretIfTrueDepth += 1
             }
         }
         _ = register("[ELSE]", immediate: true) {
-            let compiling = self.readCell(self.STATE) != 0 || self.bracketCompileDepth > 0
-            if !compiling {
-                self.throwCompileOnly("? [ELSE] undefined in interpret state")
-                return
+            let compiling = self.isActiveCompilation()
+            if compiling {
+                let r = self.startConditionalSkip(stopAtElse: false)
+                if r == .error {
+                    self.throwUncompletedControl("? [IF] unresolved conditional compilation")
+                }
+            } else if self.interpretIfTrueDepth > 0 {
+                self.interpretIfTrueDepth -= 1
+                let r = self.startConditionalSkip(stopAtElse: false)
+                if r == .error {
+                    self.throwUncompletedControl("? [IF] unresolved conditional compilation")
+                }
+            } else {
+                let r = self.startConditionalSkip(stopAtElse: false)
+                if r == .error {
+                    self.throwUncompletedControl("? [IF] unresolved conditional compilation")
+                }
             }
-            _ = self.skipConditionalBranch(stopAtElse: false)
         }
         _ = register("[THEN]", immediate: true) {
-            // end marker — no-op
+            if self.readCell(self.STATE) == 0 && self.bracketCompileDepth == 0 && self.interpretIfTrueDepth > 0 {
+                self.interpretIfTrueDepth -= 1
+            }
         }
 
         // .(  immediate — print characters until )
@@ -5628,6 +6120,10 @@ public final class TZForth {
                 self.push( Cell(saddr) )
                 self.push( Cell(len) )
             }
+            // parseToWordBuffer consumed the closing quote via inputQueue; resync queue from >IN
+            // so realign-before-execute on the next word does not re-offer the string body (e.g. 222).
+            self.inputQueue.removeAll(keepingCapacity: true)
+            self.realignInputQueueFromSource()
         }
 
         // SLITERAL ( c-addr u -- ) immediate — compile (S") + inline string; interpret undefined.
@@ -5809,8 +6305,8 @@ public final class TZForth {
             self.push(self.twoFetchID); self.comma()
             self.push(self.exitID); self.comma()
             self.writeCell(self.DP_ADDR, self.readCell(self.DP_ADDR) + 16)
-            self.writeCell(Int(valCellAddr), dlo)
-            self.writeCell(Int(valCellAddr) + 8, dhi)
+            self.writeCell(Int(valCellAddr), dhi)
+            self.writeCell(Int(valCellAddr) + 8, dlo)
         }
 
         // DEFER! ( xt2 xt1 -- )  Core Ext
@@ -5841,25 +6337,21 @@ public final class TZForth {
             self.writeCell(storageAddr, newXt)
         }
 
-        // ACTION-OF ( xt1 -- xt2 )  Core Ext — synonym for DEFER@ (current defer action).
-        _ = register("ACTION-OF") {
-            let deferXt = self.pop()
-            if deferXt < Cell(self.MAX_BUILTIN_ID) {
-                self.throwIllegalArgument("? ACTION-OF on a primitive"); return
+        // ACTION-OF ( "<spaces>name" -- xt ) / compile: parse name, append ( -- xt ) for defer action.
+        _ = register("ACTION-OF", immediate: true) {
+            let name = self.parseWord()
+            if name.isEmpty { self.throwZeroLengthName("? ACTION-OF needs a name"); return }
+            guard let target = self.deferStorage(forName: name) else {
+                self.throwIllegalArgument("? ACTION-OF target is not a DEFER"); return
             }
-            let cfa = Int(deferXt)
-            let first = self.readCell(cfa)
-            var storageAddr: Int = 0
-            if first == self.docolID {
-                let second = self.readCell(cfa + 8)
-                if second != self.litID { self.push(0); return }
-                storageAddr = Int( self.readCell(cfa + 16) )
-            } else if first == self.createRuntimeID || first == self.dodoesID {
-                storageAddr = Int( self.readCell(cfa + 8) )
+            if self.readCell(self.STATE) != 0 {
+                self.push(self.litID); self.comma(); self.push(target.cfa); self.comma()
+                self.emitCompileReference(xt: self.getCFA(self.findWord("DEFER@")))
+            } else if let storage = self.deferStorageFromXt(target.cfa) {
+                self.push(self.readCell(storage))
             } else {
-                self.push(0); return
+                self.push(0)
             }
-            self.push( self.readCell(storageAddr) )
         }
 
         // DEFER@ ( xt1 -- xt2 )  Core Ext
@@ -5884,29 +6376,24 @@ public final class TZForth {
             self.push( self.readCell(storageAddr) )
         }
 
-        // IS ( xt "<name>" -- )  Core Ext (parsing form of DEFER! / VALUE assignment)
-        // Also works for VALUEs (stores the new value into the VALUE's cell).
-        _ = register("IS", immediate: false) {   // not immediate; the parsing version
-            let newXt = self.pop()
+        // IS ( xt "<spaces>name" -- )  Core Ext — immediate parsing word (DEFER! semantics).
+        _ = register("IS", immediate: true) {
             let name = self.parseWord()
             if name.isEmpty { self.throwZeroLengthName("? IS needs a name"); return }
-            let hdr = self.findWord(name)
-            if hdr == 0 { self.kernelThrow(StdThrow.undefinedWord, message: "? IS ? " + name); return }
-            let cfa = self.getCFA(hdr)
-            let first = self.readCell(Int(cfa))
-            var storageAddr: Int = 0
-            if first == self.docolID {
-                let second = self.readCell(Int(cfa) + 8)
-                if second != self.litID {
-                    self.throwIllegalArgument("? IS target does not look like DEFER/VALUE"); return
-                }
-                storageAddr = Int( self.readCell(Int(cfa) + 16) )
-            } else if first == self.createRuntimeID || first == self.dodoesID {
-                storageAddr = Int( self.readCell(Int(cfa) + 8) )
-            } else {
-                self.throwIllegalArgument("? IS target is not a supported defer or value"); return
+            guard let target = self.deferStorage(forName: name) else {
+                self.kernelThrow(StdThrow.undefinedWord, message: "? IS ? " + name)
+                return
             }
-            self.writeCell(storageAddr, newXt)
+            if self.readCell(self.STATE) != 0 {
+                self.push(self.litID); self.comma(); self.push(target.cfa); self.comma()
+                self.emitCompileReference(xt: self.getCFA(self.findWord("DEFER!")))
+            } else {
+                let newXt = self.pop()
+                self.push(newXt)
+                self.push(target.cfa)
+                let deferHdr = self.findWord("DEFER!")
+                self.execute(cfa: self.getCFA(deferHdr), firstCell: self.docolID)
+            }
         }
 
         // TO ( n "<name>" -- ) / ( d "<name>" -- ) — immediate; VALUE, 2VALUE, and locals
@@ -5944,14 +6431,13 @@ public final class TZForth {
                 if fourth == self.twoFetchID {
                     self.push(self.twoStoreID); self.comma()
                 } else {
-                    self.push(self.swapID); self.comma()
                     self.push(self.storeID); self.comma()
                 }
             } else if fourth == self.twoFetchID {
                 let dhi = self.pop()
                 let dlo = self.pop()
-                self.writeCell(storageAddr, dlo)
-                self.writeCell(storageAddr + 8, dhi)
+                self.writeCell(storageAddr, dhi)
+                self.writeCell(storageAddr + 8, dlo)
             } else {
                 let n = self.pop()
                 self.writeCell(storageAddr, n)
@@ -6375,7 +6861,13 @@ public final class TZForth {
         validateAndRepairSystemState()
         errorFlag = false
 
-        while !inputQueue.isEmpty && !errorFlag && !exitReq && !throwActive {
+        while !inputQueue.isEmpty && !errorFlag && !exitReq && !throwActive && !self.sourceLoadStop {
+            if self.conditionalSkipDepth > 0 {
+                let skipResult = self.continuePendingConditionalSkip()
+                if skipResult == .pending { break }
+                if self.throwActive || self.errorFlag { break }
+                continue
+            }
             if readCell(STATE) == 0 && inputQueue.isEmpty {
                 self.syncInputQueueFromSourceIfNeeded()
             }
@@ -6431,6 +6923,8 @@ public final class TZForth {
                     if !compiling {
                         self.realignInputQueueFromSource()
                     }
+                    // Immediate colon definitions (?REPEAT etc.) interpret their bodies even while compiling.
+                    // ANS: STATE stays true during compilation (including inside immediate colon bodies).
                     // Only t6in-style `0 >IN !` inside a colon should restore the outer parse offset.
                     let watchInZero = !compiling && first == self.docolID
                     let savedOuterIn = watchInZero ? self.readCell(self.IN) : nil
@@ -6479,10 +6973,15 @@ public final class TZForth {
                         self.push(d.lo)
                         self.push(d.hi)
                     }
-                } else if let num = Int(name, radix: b) {
+                } else if let num = self.parseTextNumber(name, base: b) {
                     if readCell(STATE) != 0 {
-                        self.push(litID); self.comma()
-                        self.push(num); self.comma()
+                        let nextWord = self.peekNextParsedWord()
+                        if self.wordNeedsCompileTimeStackArg(nextWord) {
+                            self.push(Cell(num))
+                        } else {
+                            self.push(litID); self.comma()
+                            self.push(num); self.comma()
+                        }
                     } else {
                         push(num)
                     }
@@ -6505,7 +7004,7 @@ public final class TZForth {
         //
         // Do not print OK if we suspended for a blocking input word like KEY;
         // the OK will be printed when the line is resumed and completed after provideKey.
-        if !errorFlag && readCell(STATE) == 0 && !waitingForKey && loadNesting == 0 {
+        if !errorFlag && readCell(STATE) == 0 && !waitingForKey && loadNesting == 0 && evaluateNesting == 0 {
             tell("OK\n")
         }
 
@@ -6569,6 +7068,7 @@ public final class TZForth {
     /// from SOURCE. Needed for parsing words (FLOAD, EDIT, …) invoked via EXECUTE/CATCH
     /// while the outer line still has unparsed tokens (e.g. `safe-fload myfile.fth`).
     private func syncInputQueueFromSourceIfNeeded() {
+        guard !self.sourceLoadStop else { return }
         let pos = Int(self.readCell(self.IN))
         guard pos < self.currentSourceLen else { return }
         guard self.inputQueue.isEmpty else { return }
@@ -6614,6 +7114,27 @@ public final class TZForth {
         let fromQueue = self.parseWord()
         if !fromQueue.isEmpty { return fromQueue }
         return self.parseWordFromSourceAtIn()
+    }
+
+    /// Peek the next word without consuming input (for compile-time stack-arg lookahead).
+    private func peekNextParsedWord() -> String {
+        let savedQueue = self.inputQueue
+        let savedIn = self.readCell(self.IN)
+        self.syncInputQueueFromSourceIfNeeded()
+        let word = self.parseWord()
+        self.inputQueue = savedQueue
+        self.writeCell(self.IN, savedIn)
+        return word
+    }
+
+    /// Immediates that take their numeric argument from the compile-time stack (not LIT).
+    private func wordNeedsCompileTimeStackArg(_ word: String) -> Bool {
+        switch word.uppercased() {
+        case "CS-PICK", "CS-ROLL", "LITERAL", "COMPILE,":
+            return true
+        default:
+            return false
+        }
     }
 
     private func parseWord() -> String {
@@ -6880,9 +7401,15 @@ public final class TZForth {
         for i in 0..<self.currentSourceLen {
             sourceBytes.append(self.readByte(self.SOURCE_BUFFER + i))
         }
+        var returnDepth = self.rspGet()
+        // CATCH inside a colon started by execute: never unwind below that word's return frame.
+        if self.dispatchedFromInnerThread && self.innerThreadStopRsp >= 0 {
+            let minRsp = Cell(self.innerThreadStopRsp + 1)
+            if returnDepth < minRsp { returnDepth = minRsp }
+        }
         return ExceptionFrame(
             dataStackDepth: dataStackDepth,
-            returnStackDepth: self.rspGet(),
+            returnStackDepth: returnDepth,
             savedIp: savedIp,
             state: self.readCell(self.STATE),
             inputSourceStackDepth: self.inputSourceStack.count,
@@ -6932,8 +7459,10 @@ public final class TZForth {
     private func performCatch(xt: Cell) {
         let stackDepth = self.spGet()
         let savedIp = self.ip
+        let fromInnerThread = self.dispatchedFromInnerThread
         self.syncInputQueueFromSourceIfNeeded()
         self.exceptionFrames.append(self.captureExceptionFrame(dataStackDepth: stackDepth, savedIp: savedIp))
+        let frameIndex = self.exceptionFrames.count - 1
         self.throwActive = false
         if xt < Cell(self.MAX_BUILTIN_ID) {
             self.execute(cfa: xt, firstCell: xt)
@@ -6941,12 +7470,21 @@ public final class TZForth {
             let firstCell = self.readCell(Int(xt))
             self.execute(cfa: xt, firstCell: firstCell)
         }
-        if !self.throwActive {
-            if let frame = self.exceptionFrames.popLast() {
+        // Success when our frame is still present — xt finished without unwinding to this CATCH
+        // (includes xt that caught its own throws internally). deliverThrow removes our frame
+        // when this CATCH receives the throw.
+        if self.exceptionFrames.count > frameIndex {
+            let frame = self.exceptionFrames.popLast()!
+            if fromInnerThread {
+                // Inner CATCH inside xt may have run deliverThrow and repointed ip; resume
+                // this colon definition at the instruction after CATCH.
+                self.ip = savedIp
+                self.push(0)
+            } else {
                 self.rspSet(frame.returnStackDepth)
+                self.ip = savedIp
+                self.push(0)
             }
-            self.ip = savedIp
-            self.push(0)
         }
         self.throwActive = false
     }
@@ -7051,24 +7589,47 @@ public final class TZForth {
         }
         let frame = self.exceptionFrames.removeLast()
         self.restoreExceptionFrame(frame)
+        var restoreRsp = frame.returnStackDepth
+        if self.innerThreadStopRsp >= 0 {
+            let minRsp = Cell(self.innerThreadStopRsp + 1)
+            if restoreRsp < minRsp { restoreRsp = minRsp }
+        }
+        self.rspSet(restoreRsp)
         self.spSet(frame.dataStackDepth)
         self.push(n)
         self.throwActive = true
     }
 
     private func handleUnhandledThrow(_ n: Cell) {
+        let message: String
         if n == -2 && !self.lastAbortQuoteText.isEmpty {
-            self.tell(self.lastAbortQuoteText + "\n")
+            message = self.lastAbortQuoteText
         } else if n == -1 {
-            self.tell("Aborted!\n")
+            message = "Aborted!"
         } else if !self.lastKernelThrowMessage.isEmpty {
-            self.tell(self.lastKernelThrowMessage + "\n")
+            message = self.lastKernelThrowMessage
         } else {
-            self.tell("? THROW \(n)\n")
+            message = "? THROW \(n)"
+        }
+        if self.isInterpretingLoadedFile() {
+            // Defer to reportFileLoadError so the user sees filename + line number.
+            self.fileLoadPendingErrorMessage = message
+        } else {
+            self.tell(message + "\n")
         }
         self.lastKernelThrowMessage = ""
         self.clearAllLocalFrames()
+        // resetRuntimeState() clears loadNesting; preserve active file-load context so
+        // later lines in the same FLOAD still see nesting and \S can set sourceLoadStop.
+        let savedLoadNesting = self.loadNesting
+        let savedInterpreterInputFileId = self.interpreterInputFileId
+        let savedCurrentSourceId = self.currentSourceId
         self.resetRuntimeState()
+        if savedLoadNesting > 0 {
+            self.loadNesting = savedLoadNesting
+            self.interpreterInputFileId = savedInterpreterInputFileId
+            self.currentSourceId = savedCurrentSourceId
+        }
         self.errorFlag = true
         self.throwActive = true
     }
@@ -7082,12 +7643,13 @@ public final class TZForth {
             // DOCOL is special: it sets up threading.
             if firstCell == docolID {
                 // This is a colon definition. Push return address and start threading.
+                let stopRsp = Int(self.rspGet())
                 rpush(ip)
                 ip = self.threadedEntryIP(forCFA: cfa)
                 if ip < 0 || ip + 8 > memory.count {
                     throwInvalidToken("? Bad colon definition target (cfa=\(cfa))")
                 } else {
-                    innerThread()
+                    innerThread(stopWhenRspAtMost: stopRsp)
                     if throwActive { return }
                 }
             } else {
@@ -7098,18 +7660,22 @@ public final class TZForth {
             }
         } else {
             // Not a primitive ID — assume threaded code
+            let stopRsp = Int(self.rspGet())
             rpush(ip)
             ip = Int(cfa)
             if ip < 0 || ip + 8 > memory.count {
                 throwInvalidToken("? Bad execution target (cfa=\(cfa))")
             } else {
-                innerThread()
+                innerThread(stopWhenRspAtMost: stopRsp)
                 if throwActive { return }
             }
         }
     }
 
-    private func innerThread() {
+    private func innerThread(stopWhenRspAtMost: Int? = nil) {
+        if let threshold = stopWhenRspAtMost {
+            self.innerThreadStopRsp = threshold
+        }
         // Classic indirect-threaded / token-threaded inner interpreter
         var safety = 0
         let SAFETY_LIMIT = 100000
@@ -7136,6 +7702,10 @@ public final class TZForth {
                 f()
                 self.dispatchedFromInnerThread = false
                 if throwActive { break }
+                if self.innerThreadStopRsp >= 0 && Int(self.rspGet()) <= self.innerThreadStopRsp {
+                    self.innerThreadStopRsp = -1
+                    break
+                }
                 if waitingForKey {
                     // A blocking primitive (KEY) has decided to wait for host input.
                     // Rewind IP so the next innerThread() call will hit this cell again.
@@ -7446,6 +8016,88 @@ public final class TZForth {
         writeCell(CURRENT, LATEST)
     }
 
+    // MARK: - Session environment snapshot (ANS-VALIDATE / harness cleanup)
+
+    /// Kernel/session settings that ANS-VALIDATE (and similar harnesses) may touch.
+    /// Captured before validation and restored afterward so the user's REPL is unchanged.
+    internal struct SessionEnvironmentSnapshot {
+        var fileEcho: Cell = 0
+        var base: Cell = 10
+        var includedNamesHead: Cell = 0
+        var debugEnabled: Bool = false
+        var growMemoryAttempted: Bool = false
+        var allocateEverUsed: Bool = false
+        var memoryByteCount: Int = 0
+        var inputSnapshotCount: Int = 0
+    }
+
+    /// SAVE-INPUT snapshots paired with SessionEnvironmentSnapshot (private InputSnapshot type).
+    private var sessionInputSnapshotsBackup: [InputSnapshot] = []
+
+    /// Snapshot kernel variables and session flags (FILE-ECHO, BASE, memory growth, etc.).
+    internal func captureSessionEnvironment() -> SessionEnvironmentSnapshot {
+        var snap = SessionEnvironmentSnapshot()
+        if self.fileEchoAddr != 0 {
+            snap.fileEcho = self.readCell(self.fileEchoAddr)
+        }
+        snap.base = self.readCell(self.BASE)
+        if self.includedNamesVarAddr != 0 {
+            snap.includedNamesHead = self.readCell(self.includedNamesVarAddr)
+        }
+        snap.debugEnabled = self.debugEnabled
+        snap.growMemoryAttempted = self.growMemoryAttempted
+        snap.allocateEverUsed = self.allocateEverUsed
+        snap.memoryByteCount = self.memory.count
+        snap.inputSnapshotCount = self.inputSnapshots.count
+        self.sessionInputSnapshotsBackup = self.inputSnapshots
+        return snap
+    }
+
+    /// Restore kernel variables and session flags captured by captureSessionEnvironment().
+    internal func restoreSessionEnvironment(_ snap: SessionEnvironmentSnapshot) {
+        if self.fileEchoAddr != 0 {
+            self.writeCell(self.fileEchoAddr, snap.fileEcho)
+        }
+        self.writeCell(self.BASE, snap.base)
+        if self.includedNamesVarAddr != 0 {
+            self.writeCell(self.includedNamesVarAddr, snap.includedNamesHead)
+        }
+        self.debugEnabled = snap.debugEnabled
+        self.growMemoryAttempted = snap.growMemoryAttempted
+        self.allocateEverUsed = snap.allocateEverUsed
+        self.inputSnapshots = self.sessionInputSnapshotsBackup
+
+        if self.memory.count > snap.memoryByteCount {
+            self.memory.removeLast(self.memory.count - snap.memoryByteCount)
+            self.repositionPnoAndHeap()
+        }
+        self.resetHeapState(clearAllocateFlag: !snap.allocateEverUsed)
+    }
+
+    /// Non-fatal post-restore checks for harness logging (FILE-ECHO, BASE, memory, etc.).
+    internal func sessionEnvironmentRestoreWarnings(expected snap: SessionEnvironmentSnapshot) -> [String] {
+        var warnings: [String] = []
+        if self.fileEchoAddr != 0 && self.readCell(self.fileEchoAddr) != snap.fileEcho {
+            warnings.append("WARNING: FILE-ECHO not restored (got \(self.readCell(self.fileEchoAddr)), expected \(snap.fileEcho))")
+        }
+        if self.readCell(self.BASE) != snap.base {
+            warnings.append("WARNING: BASE not restored (got \(self.readCell(self.BASE)), expected \(snap.base))")
+        }
+        if self.debugEnabled != snap.debugEnabled {
+            warnings.append("WARNING: debug state not restored")
+        }
+        if self.growMemoryAttempted != snap.growMemoryAttempted {
+            warnings.append("WARNING: GROWMEMORYMB session flag not restored")
+        }
+        if self.memory.count != snap.memoryByteCount {
+            warnings.append("WARNING: memory size not restored (got \(self.memory.count), expected \(snap.memoryByteCount))")
+        }
+        if self.inputSnapshots.count != snap.inputSnapshotCount {
+            warnings.append("WARNING: SAVE-INPUT snapshot count not restored")
+        }
+        return warnings
+    }
+
     /// Resets only runtime execution state (stacks, IP, flags, queues, debug, KEY/FLOAD
     /// pending, loop controls, comment state). Does *not* touch the dictionary.
     /// Useful for test harnesses that want to clean between steps while leaving
@@ -7473,13 +8125,19 @@ public final class TZForth {
         whileRepeatStack.removeAll()
         whileNestStack.removeAll()
         caseBranchStack.removeAll()
+        controlFlowStack.removeAll()
         self.clearAllLocalFrames()
         self.exceptionFrames.removeAll()
         self.throwActive = false
         self.lastAbortQuoteText = ""
         self.bracketCompileDepth = 0
+        self.interpretIfTrueDepth = 0
+        self.conditionalSkipDepth = 0
+        self.conditionalSkipStopAtElse = false
+        self.conditionalSkipEndedInString = false
         self.inSlashSlashComment = false
         self.sourceLoadStop = false
+        self.replBatchStop = false
         self.loadNesting = 0
         self.midFileLoadAborted = false
         // pictured state
@@ -7507,6 +8165,39 @@ public final class TZForth {
         // whatever input arrives next. (A real high-level QUIT now exists via bootstrap.)
     }
 
+    /// File-load line error: stop this file at the first fault, but preserve CATCH frames
+    /// so `['] FLOAD … CATCH` can recover. Does not call resetRuntimeState.
+    private func recoverFromErrorDuringFileLoad() {
+        self.inputQueue.removeAll(keepingCapacity: true)
+        self.loopControlStack.removeAll()
+        self.whileRepeatStack.removeAll()
+        self.whileNestStack.removeAll()
+        self.controlFlowStack.removeAll()
+        self.conditionalSkipDepth = 0
+        self.conditionalSkipStopAtElse = false
+        self.interpretIfTrueDepth = 0
+        self.inSlashSlashComment = false
+        self.waitingForKey = false
+        self.spSet(1)
+        self.rspSet(1)
+        self.clearAllLocalFrames()
+        self.throwActive = false
+        self.writeCell(self.IN, Cell(self.currentSourceLen))
+
+        if self.readCell(self.STATE) != 0 {
+            let defsHeadCell = self.readCell(self.CURRENT)
+            let latest = self.readCell(defsHeadCell)
+            if latest != 0 {
+                let fl = self.readByte(Int(latest) + 8)
+                self.writeByte(Int(latest) + 8, fl & ~self.FLAG_HIDDEN)
+            }
+            self.writeCell(self.STATE, 0)
+        }
+
+        // Leave exceptionFrames intact for enclosing CATCH (e.g. safe FLOAD wrappers).
+        self.errorFlag = true
+    }
+
     /// Called after any error (unknown word, bad branch, compile error, etc.).
     /// - Drains any leftover input from the bad line (fixes "stuff left in buffer").
     /// - If we were in the middle of a colon definition, aborts it cleanly
@@ -7526,14 +8217,22 @@ public final class TZForth {
         loopControlStack.removeAll()
         whileRepeatStack.removeAll()
         whileNestStack.removeAll()
+        controlFlowStack.removeAll()
+        self.conditionalSkipDepth = 0
+        self.conditionalSkipStopAtElse = false
+        self.interpretIfTrueDepth = 0
         self.inSlashSlashComment = false
-        self.sourceLoadStop = false
+        if !self.isInterpretingLoadedFile() {
+            self.sourceLoadStop = false
+        }
         self.pnoPtr = self.pnoBufferAddr + self.PNO_BUFFER_SIZE
-        self.currentSourceLen = 0
+        if !self.isInterpretingLoadedFile() {
+            self.currentSourceLen = 0
+        }
         searchOrder = [LATEST]
         writeCell(CURRENT, LATEST)
 
-        let wasLoading = self.loadNesting > 0
+        let wasLoading = self.isInterpretingLoadedFile()
         // Do not zero loadNesting here; includeFileInterpret's defer (or its error path) will
         // handle the decrement when the load aborts/ends. Zeroing here could make later \S
         // in the same file see nesting==0 and fail to stop.
@@ -7591,7 +8290,9 @@ public final class TZForth {
         ip = 0
         commandAddress = 0
         self.throwActive = false
-        self.exceptionFrames.removeAll()
+        if !wasLoading {
+            self.exceptionFrames.removeAll()
+        }
 
         // For errors during FLOAD (loadNesting > 0 at time of error), leave errorFlag set so that
         // loadFileContents can observe it after the sub-feedLine returns and abort

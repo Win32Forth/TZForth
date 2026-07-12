@@ -331,7 +331,16 @@ struct ConsoleView: View {
         }
         historyIndex = -1
 
+        // FLOAD runs synchronously on the main queue; further feedLine calls are queued behind it.
+        // Tell the user immediately so a missing OK is not mistaken for a hung REPL.
+        if forth.isLoadingSource && !forth.waitingForKey {
+            consoleText += "(command queued — file load still running)\n"
+            markProtectedThroughEndOfText()
+            pinCaretRequest += 1
+        }
+
         DispatchQueue.main.async {
+            forth.clearReplBatchStop()
             for lineToSend in candidateLines {
                 if forth.waitingForKey {
                     if lineToSend == candidateLines.last, let first = lineToSend.first {
@@ -343,6 +352,9 @@ struct ConsoleView: View {
                     forth.feedLine(lineToSend)
                     markProtectedThroughEndOfText()
                     handlePostFeedActions()
+                    if forth.replBatchStopRequested {
+                        break
+                    }
                 }
 
                 if forth.clearScreenRequested {
@@ -547,12 +559,13 @@ struct ConsoleView: View {
 
         panel.begin { result in
             if result == .OK, let url = panel.url {
-                let accessing = url.startAccessingSecurityScopedResource()
                 DispatchQueue.main.async {
                     self.applyDirectoryChange(url)
                     self.forth.onOutput?("Current directory: \(self.forth.logicalCurrentDirectory)\n")
-                    if accessing {
-                        url.stopAccessingSecurityScopedResource()
+                    if self.currentScopedDirectory != nil {
+                        self.forth.onOutput?("(sandbox: directory access authorized)\n")
+                    } else {
+                        self.forth.onOutput?("(sandbox: use bare `fload` and pick a file in this folder to authorize reads)\n")
                     }
                 }
             }
@@ -621,6 +634,9 @@ struct ConsoleView: View {
                     activateLastDirectoryScope(parent: parent)
 
                     self.forth.loadFile(url)
+                    if self.currentScopedDirectory != nil {
+                        self.forth.onOutput?("(sandbox: directory access authorized via \(parent.lastPathComponent))\n")
+                    }
 
                     if accessing {
                         url.stopAccessingSecurityScopedResource()

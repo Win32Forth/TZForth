@@ -178,7 +178,7 @@ Unhandled `THROW` with no active `CATCH`: `-1` → print `Aborted!`, reset stack
 
 FTEST / `ANS-VALIDATE` cover `ABORT`/`ABORT"` with and without `CATCH`, standard kernel codes, compile `STATE` preservation, file faults, nested `CATCH`, `['] fload catch` (safe-fload), mid-file `INCLUDE-FILE`, user **-40**, and `.ERROR` for file codes. Colon definitions that compile `CATCH` then `>R` (Hayes `exceptiontest` `C6`) resume correctly after `EXIT` and nested `deliverThrow`.
 
-John Hayes **forth2012-test-suite** (Block included): **5 Block** errors remaining (EMPTY-BUFFERS dual-buffer edge case; block-source SAVE-INPUT/REFILL across lines/blocks). All other word sets: **0 errors**. Run with `HAYES=1 swift /tmp/combined.swift` (concatenate `TZForth.swift`, `TZForthSettings.swift`, `TZForthBlock.swift`, `TZForthTests.swift`, `TestTZForth.swift`) from the repo root, or `fload runtests-tzforth.fth` from `Tests/forth2012-test-suite/src/`. Results: **`HAYES-RESULTS.txt`**.
+John Hayes **forth2012-test-suite** (Block included): **2 Block** errors remaining (`TCSIRIR2` pictured-string SAVE-INPUT/RESTORE on one block; `TCSIRIR4` across two blocks). EMPTY-BUFFERS, REFILL spill, and `TCSIRIR3` pass. All other word sets: **0 errors**. Run with `HAYES=1 swift /tmp/combined.swift` (concatenate `TZForth.swift`, `TZForthSettings.swift`, `TZForthBlock.swift`, `TZForthTests.swift`, `TestTZForth.swift`) from the repo root, or `fload runtests-tzforth.fth` from `Tests/forth2012-test-suite/src/`. Results: **`HAYES-RESULTS.txt`**.
 
 ## Block (10) — Implemented (file-backed `.blk`)
 

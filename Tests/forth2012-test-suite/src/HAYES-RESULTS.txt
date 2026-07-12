@@ -1,5 +1,5 @@
 
- Running ANS Forth tests for TZForth â Block omitted 
+ Running ANS Forth tests for TZForth 
 OK
 FILE-ECHO OFF
  debug-bootstrap: loading Hayes harness... 
@@ -306,6 +306,105 @@ TESTING SUBSTITUTE REPLACES
 
  End of String word tests
 OK
+TESTING Block word set
+TESTING Random Number Utilities
+TESTING BLOCK ( read-only mode )
+TESTING BUFFER ( read-only mode )
+TESTING Read and Write access with UPDATE and FLUSH
+TESTING SAVE-BUFFERS
+TESTING BLK
+TESTING LOAD and EVALUATE
+TESTING LIST and SCR
+Should show a (mostly) blank screen                             
+                                                                
+                                                                
+                                                                
+                                                                
+                                                                
+                                                                
+                                                                
+                                                                
+                                                                
+                                                                
+                                                                
+                                                                
+                                                                
+                                                                
+                                                                
+List of the First test block                                    
+                                                                
+                                                                
+                                                                
+                                                                
+                                                                
+                                                                
+                                                                
+                                                                
+                                                                
+                                                                
+                                                                
+                                                                
+                                                                
+                                                                
+                                                                
+List of the Last test block                                     
+                                                                
+                                                                
+                                                                
+                                                                
+                                                                
+                                                                
+                                                                
+                                                                
+                                                                
+                                                                
+                                                                
+                                                                
+                                                                
+                                                                
+                                                                
+                                                                
+                                                                
+                                                                
+                                                                
+                                                                
+                                                                
+                                                                
+                                                                
+                                                                
+                                                                
+                                                                
+                                                                
+                                                                
+                                                                
+                                                                
+                                                   End of Screen
+Should show another (mostly) blank screen                       
+                                                                
+                                                                
+                                                                
+                                                                
+                                                                
+                                                                
+                                                                
+                                                                
+                                                                
+                                                                
+                                                                
+                                                                
+                                                                
+                                                                
+                                                                
+TESTING EMPTY-BUFFERS
+TESTING >IN manipulation from a block source
+TESTING \, SAVE-INPUT, RESTORE-INPUT and REFILL from a block source
+ Given Characters per Line: 64 
+
+INCORRECT RESULT: T{ RND-TEST-BLOCK DUP TCSIRIR2 LOAD TCSIRIR2-EXPECTED S= -> 0 TRUE }T
+WRONG NUMBER OF RESULTS: T{ 2 RND-TEST-BLOCK-SEQ DUP TCSIRIR4 LOAD TCSIRIR4-EXPECTED S= -> 0 TRUE }TTESTING THRU
+
+ End of Block word tests
+OK
 TESTING AHEAD
 TESTING [IF] [ELSE] [THEN]
 TESTING immediacy of [IF] [ELSE] [THEN]
@@ -320,7 +419,7 @@ Word Set             Errors
 ---------------------------
 Core                    0
 Core extension          0
-Block                   -
+Block                   2
 Double number           0
 Exception               0
 Facility                0
@@ -331,7 +430,7 @@ Programming-tools       -
 Search-order            0
 String                  0
 ---------------------------
-Total                   0
+Total                   2
 ---------------------------
 
 OK

@@ -399,6 +399,7 @@ public final class TZForth {
     var lastBlockAccessSlotIndex: Int = -1
 
     var blockInterpretActive = false
+    var blockLoadDepth = 0
     var blockInterpretFileId: Int = 0
     var blockInterpretBlockNum: Int = 0
     var blockInterpretEndBlock: Int = 0
@@ -5400,14 +5401,14 @@ public final class TZForth {
             var blockFileId: Int? = nil
             var blockNum: Int? = nil
             var blockLine: Int? = nil
-            if self.evaluateNesting == 0,
-               self.interpreterInputFileId >= 2 {
-                fileId = Int(self.interpreterInputFileId)
-                fileLineStart = self.currentFileLineStart
-            } else if self.blockInterpretActive {
+            if self.blockInterpretActive {
                 blockFileId = self.blockInterpretFileId
                 blockNum = self.blockInterpretBlockNum
-                blockLine = self.blockInterpretLine
+                blockLine = max(0, self.blockInterpretLine - 1)
+            } else if self.evaluateNesting == 0,
+                      self.interpreterInputFileId >= 2 {
+                fileId = Int(self.interpreterInputFileId)
+                fileLineStart = self.currentFileLineStart
             }
             let snap = InputSnapshot(
                 sourceId: self.currentSourceId,
@@ -5430,6 +5431,11 @@ public final class TZForth {
                 // EVALUATE string source (ANS table: >IN only).
                 self.push(savedIn)
                 self.push(1)
+            } else if self.blockInterpretActive {
+                self.push(savedIn)
+                self.push(self.currentSourceId)
+                self.push(handle)
+                self.push(3)
             } else if self.loadNesting > 0, self.interpreterInputFileId >= 2 {
                 self.push(savedIn)
                 self.push(self.interpreterInputFileId)
@@ -5488,6 +5494,24 @@ public final class TZForth {
                 self.push(-1)
                 return
             }
+            var blockRestoreLineTail: [UInt8] = []
+            if snap.blockFileId != nil, self.blockInterpretActive, snap.evaluateNesting == 0 {
+                let currentLine = max(0, self.blockInterpretLine - 1)
+                if let savedLine = snap.blockLine, currentLine != savedLine {
+                    blockRestoreLineTail = self.blockLineTailAfterToken(
+                        blockNum: self.blockInterpretBlockNum,
+                        line: currentLine,
+                        token: "?EXECUTE"
+                    )
+                } else {
+                    let tailStart = Int(self.clampInOffset(self.readCell(self.IN)))
+                    if tailStart < self.currentSourceLen {
+                        for i in tailStart..<self.currentSourceLen {
+                            blockRestoreLineTail.append(self.readByte(self.SOURCE_BUFFER + i))
+                        }
+                    }
+                }
+            }
             self.currentSourceLen = snap.sourceLen
             for i in 0..<snap.sourceLen {
                 self.writeByte(self.SOURCE_BUFFER + i, snap.sourceBytes[i])
@@ -5539,13 +5563,31 @@ public final class TZForth {
                     }
                     self.floadRestoreInputContinuation = true
                 } else if snap.blockFileId != nil, self.blockInterpretActive {
-                    self.writeCell(self.IN, savedIn)
-                    self.inputQueue = snap.queue
-                    self.realignInputQueueFromSource()
-                    if let bid = snap.blockFileId, let bnum = snap.blockNum, let bline = snap.blockLine {
-                        self.blockInterpretFileId = bid
-                        self.blockInterpretBlockNum = bnum
-                        self.blockInterpretLine = bline
+                    if !blockRestoreLineTail.isEmpty {
+                        let start = Int(snap.inPos)
+                        var combined: [UInt8] = []
+                        if start < snap.sourceLen {
+                            for i in start..<snap.sourceLen {
+                                combined.append(snap.sourceBytes[i])
+                            }
+                        }
+                        for b in blockRestoreLineTail where b >= 32 {
+                            combined.append(b)
+                        }
+                        var len = combined.count
+                        while len > 0 && combined[len - 1] <= 32 {
+                            len -= 1
+                        }
+                        self.currentSourceLen = len
+                        for i in 0..<len {
+                            self.writeByte(self.SOURCE_BUFFER + i, combined[i])
+                        }
+                        self.writeCell(self.IN, 0)
+                        self.realignBlockInputQueueFromSource()
+                    } else {
+                        self.writeCell(self.IN, savedIn)
+                        self.inputQueue = snap.queue
+                        self.realignBlockInputQueueFromSource()
                     }
                 } else if currentIn > snapIn {
                     // Same-line parse moved past the save point: keep >IN, restore SOURCE only.
@@ -7816,6 +7858,7 @@ public final class TZForth {
                     // unless RESTORE-INPUT is continuing the outer parse on a later file line.
                     if watchInZero,
                        !self.floadRestoreInputContinuation,
+                       !self.blockInterpretActive,
                        self.loadNesting > 0,
                        self.evaluateNesting == 0,
                        self.inputSourceStack.count >= 2,
@@ -9356,7 +9399,9 @@ public final class TZForth {
         if b < 2 || b > 36 {
             writeCell(BASE, 10)
         }
-        pnoPtr = pnoBufferAddr + PNO_BUFFER_SIZE
+        if self.pnoPtr < self.pnoBufferAddr || self.pnoPtr > self.pnoBufferAddr + self.PNO_BUFFER_SIZE {
+            self.pnoPtr = self.pnoBufferAddr + self.PNO_BUFFER_SIZE
+        }
         // Do not reset >IN here — seeWord/LOCATE and other mid-line words must keep the
         // current parse offset; zeroing >IN plus realignInputQueueFromSource() rewinds the line.
     }

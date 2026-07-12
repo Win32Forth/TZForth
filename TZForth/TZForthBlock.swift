@@ -452,7 +452,6 @@ extension TZForth {
             idx = found
         }
         self.blockBufferSlots[idx].dirty = true
-        self.mergeDirtySlotToMemory(slotIndex: idx)
     }
 
     func mergeDirtySlotToMemory(slotIndex: Int) {
@@ -483,12 +482,13 @@ extension TZForth {
     }
 
     func blockFlushVolume(fileId bid: Int, toDisk: Bool) {
-        guard var entry = self.openBlockFiles[bid], entry.isOpen else { return }
+        guard self.openBlockFiles[bid]?.isOpen == true else { return }
         for i in 0..<self.blockBufferSlots.count {
             if self.blockBufferSlots[i].dirty && self.blockBufferSlots[i].blockFileId == bid {
                 self.mergeDirtySlotToMemory(slotIndex: i)
             }
         }
+        guard var entry = self.openBlockFiles[bid], entry.isOpen else { return }
         if toDisk {
             if entry.writeDirty {
                 do {
@@ -574,13 +574,16 @@ extension TZForth {
         self.blockInterpretBlockNum = start
         self.blockInterpretEndBlock = end
         self.blockInterpretStopBlock = end
-        self.blockRefillMaxBlock = end
+        let spillAllowed = start == end && self.blockLoadDepth == 0
+        self.blockRefillMaxBlock = spillAllowed ? end + 1 : end
         self.blockInterpretLine = 0
         self.currentSourceId = Self.BLOCK_SOURCE_ID
         self.loadNesting += 1
+        self.blockLoadDepth += 1
         self.sourceLoadStop = false
         defer {
             self.blockInterpretActive = false
+            if self.blockLoadDepth > 0 { self.blockLoadDepth -= 1 }
             if self.loadNesting > 0 { self.loadNesting -= 1 }
             self.popInputSourceFrame()
             self.sourceLoadStop = false
@@ -595,12 +598,70 @@ extension TZForth {
         }
     }
 
+    func blockLineBytes(blockNum: Int, line: Int) -> [UInt8] {
+        let addr = self.blockFetch(blockNum, updateBLK: false)
+        let cpl = self.charsPerBlockLine()
+        let offset = line * cpl
+        var bytes: [UInt8] = []
+        for i in 0..<cpl {
+            bytes.append(self.readByte(addr + offset + i))
+        }
+        return bytes
+    }
+
+    func blockLineTailAfterToken(blockNum: Int, line: Int, token: String) -> [UInt8] {
+        let lineBytes = self.blockLineBytes(blockNum: blockNum, line: line)
+        guard let tokenBytes = token.data(using: .ascii), !tokenBytes.isEmpty else { return [] }
+        let t = Array(tokenBytes)
+        let limit = lineBytes.count - t.count
+        if limit < 0 { return [] }
+        var start = -1
+        for i in 0...limit {
+            var matched = true
+            for j in 0..<t.count where matched {
+                if lineBytes[i + j] != t[j] { matched = false }
+            }
+            if matched { start = i + t.count }
+        }
+        guard start >= 0, start < lineBytes.count else { return [] }
+        var tail: [UInt8] = []
+        for i in start..<lineBytes.count {
+            let ch = lineBytes[i]
+            if ch == 0 { break }
+            tail.append(ch)
+        }
+        return tail
+    }
+
+    func blockLineIsBlank(blockNum: Int, line: Int) -> Bool {
+        let addr = self.blockFetch(blockNum, updateBLK: false)
+        let cpl = self.charsPerBlockLine()
+        let offset = line * cpl
+        for i in 0..<cpl {
+            let ch = self.readByte(addr + offset + i)
+            if ch > 32 { return false }
+        }
+        return true
+    }
+
     func refillFromBlockSource() -> Bool {
         guard self.blockInterpretActive else { return false }
         let cpl = self.charsPerBlockLine()
         let maxBlock = self.blockRefillInProgress ? self.blockRefillMaxBlock : self.blockInterpretStopBlock
         while self.blockInterpretBlockNum <= maxBlock {
             if self.blockInterpretLine < Self.BLOCK_LINES_PER_BLOCK {
+                if self.blockRefillInProgress {
+                    while self.blockInterpretLine < Self.BLOCK_LINES_PER_BLOCK,
+                          self.blockLineIsBlank(blockNum: self.blockInterpretBlockNum, line: self.blockInterpretLine) {
+                        self.blockInterpretLine += 1
+                    }
+                    if self.blockInterpretLine >= Self.BLOCK_LINES_PER_BLOCK {
+                        self.blockInterpretBlockNum += 1
+                        self.blockInterpretLine = 0
+                        if self.blockInterpretBlockNum > maxBlock { return false }
+                        continue
+                    }
+                }
                 let addr = self.blockFetch(self.blockInterpretBlockNum, updateBLK: true)
                 let offset = self.blockInterpretLine * cpl
                 self.currentSourceLen = min(cpl, self.effectiveBlockSize() - offset)

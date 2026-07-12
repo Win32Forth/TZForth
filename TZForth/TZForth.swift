@@ -73,7 +73,7 @@ public final class TZForth {
         static let padBuffer = stringBuffer + stringBufferSize
         static let padBufferSize = 1024
     }
-    private let SOURCE_BUFFER: Int = MemLayout.sourceBuffer
+    internal let SOURCE_BUFFER: Int = MemLayout.sourceBuffer  // TZForthBlock.swift
     private let SOURCE_BUFFER_SIZE = MemLayout.sourceBufferSize
     private let STRING_BUFFER: Int = MemLayout.stringBuffer
     private let STRING_BUFFER_SIZE = MemLayout.stringBufferSize
@@ -152,8 +152,8 @@ public final class TZForth {
     public var logicalCurrentDirectory: String = ""
 
     // Input
-    private var inputQueue: [UInt8] = []
-    private var currentSourceLen: Int = 0  // length of current SOURCE buffer (set on each feedLine / EVALUATE)
+    internal var inputQueue: [UInt8] = []  // TZForthBlock.swift
+    internal var currentSourceLen: Int = 0  // length of current SOURCE buffer (set on each feedLine / EVALUATE)
 
     // Output
     public var onOutput: ((String) -> Void)?
@@ -283,9 +283,9 @@ public final class TZForth {
     // Support for \\ (block comment to '{', can span lines in console or during FLOAD)
     // and \S (stop file load, or stop remainder of a multi-line console submit).
     private var inSlashSlashComment = false
-    private var sourceLoadStop = false
+    internal var sourceLoadStop = false  // TZForthBlock.swift
     private var replBatchStop = false
-    private var loadNesting = 0
+    internal var loadNesting = 0  // TZForthBlock.swift
     /// Current 1-based source line number while includeFileInterpret is running.
     private var fileInterpretLineNumber = 0
     /// True when SOURCE was last filled by the REFILL word (vs the FLOAD line loop).
@@ -321,7 +321,7 @@ public final class TZForth {
     private var evaluateSourceLen: Cell = 0
 
     /// Identifier for the current input source (SOURCE-ID): -1 terminal, 0 evaluate, 1 file.
-    private var currentSourceId: Cell = -1
+    internal var currentSourceId: Cell = -1  // TZForthBlock.swift
 
     /// Saved input states for SAVE-INPUT / RESTORE-INPUT (opaque handles on data stack).
     private struct InputSnapshot {
@@ -437,9 +437,9 @@ public final class TZForth {
     private var primitives: [(() -> Void)?] = []
 
     // ID of critical words we need during bootstrap
-    private var docolID: Cell = 0
+    internal var docolID: Cell = 0  // TZForthBlock.swift
     private var exitID: Cell = 0
-    private var litID: Cell = 0
+    internal var litID: Cell = 0  // TZForthBlock.swift
     private var emitID: Cell = 0
     private var dotQuoteID: Cell = 0   // runtime ID for (." ) used by . " to embed compact string literals
     private var cQuoteID: Cell = 0     // runtime for (C") used by C" to embed counted string literals
@@ -516,7 +516,7 @@ public final class TZForth {
     }
     private var exceptionFrames: [ExceptionFrame] = []
     /// Set by THROW while unwinding to an active CATCH; checked by innerThread / execute.
-    private var throwActive: Bool = false
+    internal var throwActive: Bool = false  // TZForthBlock.swift
     /// Text from the most recent ABORT" before THROW -2 (for unhandled -2 display).
     private var lastAbortQuoteText: String = ""
     /// Full REPL line for uncaught kernelThrow (e.g. "? Division by zero"). Cleared after display.
@@ -1177,7 +1177,7 @@ public final class TZForth {
         writeCell(RSP, v)  // keep memory mirror for "RSP @" compatibility and raw inspection
     }
 
-    private func pop() -> Cell {
+    internal func pop() -> Cell {  // TZForthBlock.swift
         var s = spGet()
         if s < 1 || s > Cell(STACK_SIZE) {
             tell("? Corrupted data stack pointer (SP=\(s)), auto-recovering\n")
@@ -1194,7 +1194,7 @@ public final class TZForth {
         return readCell(stackBase + (s - 2) * 8)
     }
 
-    private func push(_ v: Cell) {
+    internal func push(_ v: Cell) {  // TZForthBlock.swift
         var s = spGet()
         if s < 1 || s > Cell(STACK_SIZE) {
             tell("? Corrupted data stack pointer (SP=\(s)), auto-recovering\n")
@@ -2662,7 +2662,7 @@ public final class TZForth {
         return 0
     }
 
-    private func findWord(_ name: String) -> Cell {
+    internal func findWord(_ name: String) -> Cell {  // TZForthBlock.swift
         if self.readCell(self.STATE) != 0, self.localIndexDuringCompile(name) != nil {
             return Cell(-1)  // sentinel: compiling local reference (not a real header)
         }
@@ -3435,7 +3435,7 @@ public final class TZForth {
         return addr >= 0 && addr < memory.count
     }
 
-    private func getCFA(_ headerAddr: Cell) -> Cell {
+    internal func getCFA(_ headerAddr: Cell) -> Cell {  // TZForthBlock.swift
         let flagsLen = readByte(Int(headerAddr) + 8)
         var len = Int(flagsLen & MASK_NAMELENGTH) + 1  // +1 for the flags/len byte itself
         while (len & 7) != 0 { len += 1 }

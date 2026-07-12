@@ -282,7 +282,7 @@ t-under .            → -3
 
 - [x] All §9.3.1 codes -3…-17 mapped or explicitly exempted (see **Codes not mapped**); file-access -68/-74 for kernel paths
 - [x] `grep errorFlag = true` only `handleUnhandledThrow` + `recoverFromError` (2 sites in `TZForth.swift`)
-- [x] FTEST **279/279** (279 ans spot-checks); unified FLOAD/INCLUDE load loop
+- [x] FTEST **280/280** (280 ans spot-checks); unified FLOAD/INCLUDE load loop; colon `CATCH`+`>R`
 - [x] `ANS-VALIDATE` exception suite (mirrors FTEST CATCH/THROW; nested CATCH, safe-fload, mid-include, `.ERROR` file codes)
 
 ---

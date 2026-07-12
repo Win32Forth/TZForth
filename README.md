@@ -32,7 +32,7 @@ The REPL console is fully working (see TZForth/ConsoleView.swift + TZForth.swift
 - Classic load semantics (shared by `FLOAD`, `INCLUDE`, `INCLUDE-FILE`): `FILE-ECHO ON` at top of a file takes effect for that load; `\S` aborts remainder of *that* file only; compile errors mid-load abort the rest of the file and leave REPL clean/interpreting; no per-line OK spam during loads.
 - **Exception handling:** kernel faults are **CATCH-able** (standard ANS throw codes). **`.ERROR`** prints a spaced message for a code on the stack. Named **`fload`** completes synchronously so you can write `: safe-fload  ['] fload catch ?dup if  ." load failed:" .error  else  drop  then ;` — see **`THROW_CODES.md`** for the full code map.
 
-Automated tests (`FTEST=1`; see `TestTZForth.swift` header) cover load/comment harnesses plus **279** ANS Core/Core-Ext spot-checks (dictionary, file I/O, locals, double, memory, Programming-Tools, `REQUIRE`/`REQUIRED`, `DUMP`, `H.`, `>XID`, CATCH/THROW including nested CATCH and catchable mid-`FLOAD`, etc.). In-app: `ANS-VALIDATE` (same suite, writes `ANS-VALIDATE.txt`).
+Automated tests (`FTEST=1`; see `TestTZForth.swift` header) cover load/comment harnesses plus **280** ANS Core/Core-Ext spot-checks (dictionary, file I/O, locals, double, memory, Programming-Tools, `REQUIRE`/`REQUIRED`, `DUMP`, `H.`, `>XID`, CATCH/THROW including nested CATCH, colon `CATCH`+`>R`, and catchable mid-`FLOAD`, etc.). In-app: `ANS-VALIDATE` (same suite, writes `ANS-VALIDATE.txt`). Hayes **forth2012-test-suite** word-set tests (no Block/Facility) pass from `Tests/forth2012-test-suite/src/` — see `HAYES-RESULTS.txt`.
 
 ## Sandbox and FLOAD (important for loading your own Forthing.fth etc.)
 

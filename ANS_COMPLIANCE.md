@@ -178,7 +178,19 @@ Unhandled `THROW` with no active `CATCH`: `-1` → print `Aborted!`, reset stack
 
 FTEST / `ANS-VALIDATE` cover `ABORT`/`ABORT"` with and without `CATCH`, standard kernel codes, compile `STATE` preservation, file faults, nested `CATCH`, `['] fload catch` (safe-fload), mid-file `INCLUDE-FILE`, user **-40**, and `.ERROR` for file codes. Colon definitions that compile `CATCH` then `>R` (Hayes `exceptiontest` `C6`) resume correctly after `EXIT` and nested `deliverThrow`.
 
-John Hayes **forth2012-test-suite** (Block omitted): **0 total errors** across Core, Core Ext, Double, Exception, **Facility**, File-access, Locals, Memory-allocation, Search-order, String, and Programming-tools subsets. Run with `HAYES=1 swift /tmp/combined.swift` from the repo root, or `fload runtests-tzforth.fth` from `Tests/forth2012-test-suite/src/`. Results: **`HAYES-RESULTS.txt`**.
+John Hayes **forth2012-test-suite** (Block included): **5 Block** errors remaining (EMPTY-BUFFERS dual-buffer edge case; block-source SAVE-INPUT/REFILL across lines/blocks). All other word sets: **0 errors**. Run with `HAYES=1 swift /tmp/combined.swift` (concatenate `TZForth.swift`, `TZForthSettings.swift`, `TZForthBlock.swift`, `TZForthTests.swift`, `TestTZForth.swift`) from the repo root, or `fload runtests-tzforth.fth` from `Tests/forth2012-test-suite/src/`. Results: **`HAYES-RESULTS.txt`**.
+
+## Block (10) — Implemented (file-backed `.blk`)
+
+Pre-allocated growable **`.blk`** files, per-file block numbering, LRU buffer cache in high memory below PNO, auto-default `blocks.blk` in logical cwd. Application settings: **`TZForthSettings`** (`~/Library/Application Support/TZForth/settings.json`); kernel variables `BLOCK-SIZE`, `DEFAULT-BLOCK-COUNT`, `BLOCK-BUFFER-COUNT`; words `.SETTINGS`, `SAVE-SETTINGS`.
+
+| Category | Words |
+|----------|-------|
+| ANS Block | `BLOCK`, `BUFFER`, `UPDATE`, `FLUSH`, `EMPTY-BUFFERS`, `SAVE-BUFFERS`, `BLK`, `LOAD`, `LIST`, `SCR`, `THRU`, `\` (line comment) |
+| TZForth extensions | `CREATE-BLOCK-FILE`, `OPEN-BLOCK-FILE`, `CLOSE-BLOCK-FILE`, `GROW-BLOCK-FILE`, `USE-BLOCK-FILE`, `BLOCK-FILE`, `.BLOCK-FILES` |
+| ENVIRONMENT? | `BLOCK`, `/BLOCK`, `BLOCK-EXT` |
+
+Default: `BLOCK-SIZE` = 1024, `BLOCK-BUFFER-COUNT` = 4, buffers at `blockPoolBase` (below PNO). `BYE`/app quit calls `shutdownBlockSubsystem()` (flush all dirty buffers, close open block files).
 
 **Standard THROW codes (Phases 1–5, complete):** Runtime (-3…-9), memory (-7), compile-only (-14), control (-15/-16), limits (-17), search order (-20), names (-10), undefined (-13), dictionary misuse (-20), file-access (-67 closed file, -68 invalid file-id, -70 I/O abort, -74 not found). User range from **-40**. **`OPEN-FILE`** and related words still return **`ior`** on the stack (ANS file-access). Named **`FLOAD`** loads synchronously (`onPerformNamedLoad` in the app) so parsing words can be wrapped with `['] fload catch`. Mid-file line errors propagate the **specific** fault code to the enclosing `CATCH`. Full map: **`THROW_CODES.md`**.
 

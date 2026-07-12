@@ -34,7 +34,7 @@ struct ConsoleView: View {
     @FocusState private var isFocused: Bool
 
     // The real Forth engine (TZForth; Leif Bruder / lbForth origins internally)
-    @State private var forth = TZForth()
+    @State private var forth = TZForth(settings: TZForthSettings.load())
 
     /// Marks the length of consoleText after the last engine output.
     /// Only text typed by the user *after* this point can be treated as new commands.
@@ -247,6 +247,7 @@ struct ConsoleView: View {
 
                 // Hook BYE so the host app can quit when the user types BYE in Forth
                 forth.onQuitRequested = {
+                    forth.shutdownBlockSubsystem()
                     DispatchQueue.main.async {
                         NSApplication.shared.terminate(nil)
                     }

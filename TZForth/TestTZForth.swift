@@ -6,13 +6,13 @@
 //  How to run (note: multi-file swift script needs concatenation on current Swift):
 //
 //      cd /path/to/TZForth
-//      cat TZForth/TZForth.swift TZForth/TZForthTests.swift TZForth/TestTZForth.swift > /tmp/combined.swift
+//      cat TZForth/TZForth.swift TZForth/TZForthSettings.swift TZForth/TZForthBlock.swift TZForth/TZForthTests.swift TZForth/TestTZForth.swift > /tmp/combined.swift
 //      swift /tmp/combined.swift
 //
 //      # For automated tests (\\ block comments, \S, FLOAD behavior + 299 ANS spot-checks):
 //      FTEST=1 swift /tmp/combined.swift
 //
-//      # For John Hayes / forth2012-test-suite (Block omitted; 0 T{ failures):
+//      # For John Hayes / forth2012-test-suite (incl. Block; 0 T{ failures target):
 //      HAYES=1 swift /tmp/combined.swift
 //
 //  Note: The ANS validation test logic (runANSValidation + test sources) was split to
@@ -53,7 +53,7 @@ import Foundation
 
 // MARK: - Tester
 
-let forth = TZForth()
+let forth = TZForth(settings: TZForthSettings.load())
 
 // Capture all output from the Forth engine
 forth.onOutput = { text in
@@ -1090,6 +1090,7 @@ fload \(fnInnerLate.lastPathComponent)
     try? fm.removeItem(atPath: frenamedPath)
 
     print("=== FTEST complete ===")
+    forth.shutdownBlockSubsystem()
     exit(0)
 }
 
@@ -1128,7 +1129,7 @@ if ProcessInfo.processInfo.environment["HAYES"] == "1" {
     collected = ""
     forth.resetRuntimeState()
 
-    forth.feedLine("CR .( Running ANS Forth tests for TZForth — Block omitted ) CR")
+    forth.feedLine("CR .( Running ANS Forth tests for TZForth ) CR")
 
     // Match the console test.fth workflow: bootstrap, VERBOSE on, per-file fload + #ERRORS reset.
     let bootstrap = suiteSrc.appendingPathComponent("debug-bootstrap.fth")
@@ -1139,6 +1140,7 @@ if ProcessInfo.processInfo.environment["HAYES"] == "1" {
         "facilitytest.fth",
         "localstest.fth", "memorytest.fth", "toolstest.fth",
         "searchordertest.fth", "stringtest.fth",
+        "blocktest.fth",
         "toolstest.fth",
     ]
     var ok = true
@@ -1206,6 +1208,7 @@ if ProcessInfo.processInfo.environment["HAYES"] == "1" {
     }
 
     print("\n=== HAYES complete ===")
+    forth.shutdownBlockSubsystem()
     exit(testErrors.isEmpty && ok ? 0 : 1)
 }
 
@@ -1214,6 +1217,7 @@ while let line = readLine() {
     let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
     
     if trimmed.lowercased() == "bye" {
+        forth.shutdownBlockSubsystem()
         print("Goodbye.")
         break
     }

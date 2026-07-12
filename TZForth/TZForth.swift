@@ -335,6 +335,9 @@ public final class TZForth {
         var fileId: Int?
         var fileLineStart: Int?
         var fromRefill: Bool
+        var blockFileId: Int?
+        var blockNum: Int?
+        var blockLine: Int?
     }
     private var inputSnapshots: [InputSnapshot] = []
 
@@ -348,8 +351,8 @@ public final class TZForth {
     private let FAM_WRONLY: Cell = 2
     private let FAM_RDWR: Cell = 3
     private let FAM_BIN: Cell = 8
-    private let FILE_IO_SUCCESS: Cell = 0
-    private let FILE_IO_ERROR: Cell = 1
+    let FILE_IO_SUCCESS: Cell = 0
+    let FILE_IO_ERROR: Cell = 1
 
     private struct FileEntry {
         var path: String
@@ -362,6 +365,54 @@ public final class TZForth {
 
     private var openFiles: [Int: FileEntry] = [:]
     private var nextFileId: Int = 10
+
+    // MARK: - Block subsystem (ANS Block + TZForth .blk extensions)
+
+    var settings: TZForthSettings = TZForthSettings.load()
+    var blockPoolBase: Int = 0
+    static let BLOCK_LINES_PER_BLOCK = 16
+    static let BLOCK_SOURCE_ID: Cell = 1000
+    static let BLOCK_FILE_ID_BASE = 100
+
+    struct BlockFileEntry {
+        var path: String
+        var blockSize: Int
+        var blockCount: Int
+        var data: Data
+        var isOpen: Bool = true
+        var writeDirty: Bool = false
+    }
+
+    struct BlockBufferSlot {
+        var blockNum: Int = -1
+        var blockFileId: Int = -1
+        var dirty: Bool = false
+        var lastUsed: UInt64 = 0
+    }
+
+    var openBlockFiles: [Int: BlockFileEntry] = [:]
+    var nextBlockFileId: Int = BLOCK_FILE_ID_BASE
+    var blockBufferSlots: [BlockBufferSlot] = []
+    var blockCacheSequence: UInt64 = 0
+    var lastBlockAccessNum: Int = -1
+    var lastBlockAccessFileId: Int = -1
+    var lastBlockAccessSlotIndex: Int = -1
+
+    var blockInterpretActive = false
+    var blockInterpretFileId: Int = 0
+    var blockInterpretBlockNum: Int = 0
+    var blockInterpretEndBlock: Int = 0
+    var blockInterpretStopBlock: Int = 0
+    var blockRefillMaxBlock: Int = 0
+    var blockRefillInProgress: Bool = false
+    var blockInterpretLine: Int = 0
+
+    var blkVarAddr: Cell = 0
+    var blockFileVarAddr: Cell = 0
+    var blockSizeVarAddr: Cell = 0
+    var defaultBlockCountVarAddr: Cell = 0
+    var blockBufferCountVarAddr: Cell = 0
+    var scrVarAddr: Cell = 0
 
     /// When >= 2, the text interpreter is reading lines from this fileid (INCLUDE-FILE / INCLUDED).
     private var interpreterInputFileId: Cell = -1
@@ -984,8 +1035,14 @@ public final class TZForth {
 
     // MARK: - Init
 
-    public init() {
-        memory = Array(repeating: 0, count: Self.DEFAULT_MEMORY_BYTES)
+    public convenience init() {
+        self.init(settings: TZForthSettings.load())
+    }
+
+    public init(settings: TZForthSettings) {
+        self.settings = settings.sanitizedForBoot()
+        let memBytes = max(Self.DEFAULT_MEMORY_BYTES, self.settings.defaultMemoryMB * 1024 * 1024)
+        memory = Array(repeating: 0, count: memBytes)
 
         // Layout fixed buffers (SOURCE, STRING_BUFFER, PAD) then data/return stacks above PAD.
         stackBase = (PAD_BUFFER + PAD_BUFFER_SIZE + 7) & ~7
@@ -1027,6 +1084,8 @@ public final class TZForth {
         logicalCurrentDirectory = FileManager.default.currentDirectoryPath
 
         self.repositionPnoAndHeap()
+        self.initializeBlockVariablesFromSettings()
+        self.registerBlockWords()
 
         // === Strong diagnostic after registration ===
         print("=== TZForth INIT DIAGNOSTICS ===")
@@ -1083,7 +1142,7 @@ public final class TZForth {
         }
     }
 
-    private func readByte(_ addr: Int) -> UInt8 {
+    func readByte(_ addr: Int) -> UInt8 {
         if addr < 0 || addr >= memory.count {
             self.throwInvalidAddress("? Memory read out of range (addr=\(addr))")
             return 0
@@ -1091,7 +1150,7 @@ public final class TZForth {
         return memory[addr]
     }
 
-    private func writeByte(_ addr: Int, _ value: UInt8) {
+    func writeByte(_ addr: Int, _ value: UInt8) {
         if addr < 0 || addr >= memory.count {
             self.throwInvalidAddress("? Memory write out of range (addr=\(addr))")
             return
@@ -1320,7 +1379,7 @@ public final class TZForth {
         self.onTerminalRefresh?(self.facilityTerminal.render())
     }
 
-    private func tell(_ s: String) {
+    func tell(_ s: String) {
         guard !s.isEmpty else { return }
         onOutput?(s)
     }
@@ -1577,7 +1636,7 @@ public final class TZForth {
     /// Common resolution for FLOAD/EDIT specs (~ expansion, absolute vs relative to
     /// currentDirectoryPath). Factored to keep behavior identical. Auto .fth append for
     /// FLOAD (when leaf name has no dot) is handled in FLOAD's resolve path.
-    private func resolvedURL(for spec: String) -> URL {
+    func resolvedURL(for spec: String) -> URL {
         let fm = FileManager.default
         let name = spec
         let url: URL
@@ -1665,13 +1724,13 @@ public final class TZForth {
 
     // MARK: - File-Access helpers (ANS word set 11)
 
-    private func stringFromAddr(_ caddr: Int, _ u: Int) -> String {
+    func stringFromAddr(_ caddr: Int, _ u: Int) -> String {
         var bytes: [UInt8] = []
         for i in 0..<u { bytes.append(readByte(caddr + i)) }
         return String(bytes: bytes, encoding: .utf8) ?? String(decoding: bytes, as: UTF8.self)
     }
 
-    private func pathURLFromCounted(_ caddr: Int, _ u: Int) -> URL {
+    func pathURLFromCounted(_ caddr: Int, _ u: Int) -> URL {
         let spec = stringFromAddr(caddr, u)
         return resolvedURL(for: spec)
     }
@@ -1776,8 +1835,15 @@ public final class TZForth {
         for ch in parsed.stem {
             guard self.digitValue(ch, base: b) != nil else { return nil }
         }
-        let signedStem = parsed.negative ? "-\(parsed.stem)" : parsed.stem
-        return Int(signedStem, radix: b)
+        if parsed.negative {
+            if let v = Int("-\(parsed.stem)", radix: b) { return v }
+            guard let mag = UInt64(parsed.stem, radix: b) else { return nil }
+            let wrapped = Int(truncatingIfNeeded: mag)
+            return 0 &- wrapped
+        }
+        if let v = Int(parsed.stem, radix: b) { return v }
+        guard let u = UInt64(parsed.stem, radix: b) else { return nil }
+        return Int(truncatingIfNeeded: u)
     }
 
     /// ANS 8.3.1: a token ending in '.' (and not a definition) is a double-cell literal.
@@ -2059,7 +2125,7 @@ public final class TZForth {
         return true
     }
 
-    private func pushInputSourceFrame() {
+    func pushInputSourceFrame() {
         var sourceBytes: [UInt8] = []
         for i in 0..<currentSourceLen {
             sourceBytes.append(readByte(SOURCE_BUFFER + i))
@@ -2075,7 +2141,7 @@ public final class TZForth {
         ))
     }
 
-    private func popInputSourceFrame() {
+    func popInputSourceFrame() {
         guard let frame = inputSourceStack.popLast() else { return }
         currentSourceId = frame.sourceId
         writeCell(IN, frame.inPos)
@@ -2466,7 +2532,7 @@ public final class TZForth {
     /// Bytes from HERE (DP) to the dictionary limit (below the pictured-numeric buffer).
     private func dictionaryFreeBytes() -> Cell {
         let here = readCell(DP_ADDR)
-        let limit = pnoBufferAddr > 0 ? pnoBufferAddr : (memory.count - PNO_BUFFER_SIZE)
+        let limit = blockPoolBase > 0 ? blockPoolBase : (pnoBufferAddr > 0 ? pnoBufferAddr : (memory.count - PNO_BUFFER_SIZE))
         return Cell(max(0, limit - here))
     }
 
@@ -2921,6 +2987,9 @@ public final class TZForth {
         "#LOCALS",
         "PROGRAMMING-TOOLS",
         "FACILITY",
+        "BLOCK",
+        "/BLOCK",
+        "BLOCK-EXT",
     ]
 
     /// ANS ENVIRONMENT? values for a query string, or nil if unsupported.
@@ -2936,8 +3005,13 @@ public final class TZForth {
             return [255, -1]
         case "WORDLISTS":
             return [Cell(MAX_VOCABS), -1]
-        case "FILE", "FILE-ACCESS", "FILE-EXT", "EXCEPTION", "STRING", "MEMORY-ALLOCATION", "DOUBLE", "LOCALS", "PROGRAMMING-TOOLS", "FACILITY":
+        case "FILE", "FILE-ACCESS", "FILE-EXT", "EXCEPTION", "STRING", "MEMORY-ALLOCATION", "DOUBLE", "LOCALS", "PROGRAMMING-TOOLS", "FACILITY", "BLOCK", "BLOCK-EXT":
             return [-1]
+        case "/BLOCK":
+            if self.blockSizeVarAddr != 0 {
+                return [self.readCell(self.blockSizeVarAddr), -1]
+            }
+            return [Cell(self.settings.blockSize), -1]
         case "#LOCALS":
             return [Cell(Self.MAX_LOCALS_PER_DEF), -1]
         default:
@@ -3153,10 +3227,18 @@ public final class TZForth {
         (n + self.CELL_SIZE - 1) & ~(self.CELL_SIZE - 1)
     }
 
-    private func repositionPnoAndHeap() {
+    func repositionPnoAndHeap() {
+        let blockSize = self.effectiveBlockSize()
+        let bufferCount = self.effectiveBlockBufferCount()
+        let blockPoolBytes = blockSize * bufferCount
         self.pnoBufferAddr = self.memory.count - self.PNO_BUFFER_SIZE
+        self.blockPoolBase = self.pnoBufferAddr - blockPoolBytes
+        if self.blockPoolBase < self.stackBase {
+            self.blockPoolBase = self.stackBase
+        }
         self.pnoPtr = self.pnoBufferAddr + self.PNO_BUFFER_SIZE
-        self.heapBump = self.pnoBufferAddr
+        self.heapBump = self.blockPoolBase
+        self.resizeBlockBufferSlots()
     }
 
     private func heapFloorAddress() -> Int {
@@ -3357,7 +3439,7 @@ public final class TZForth {
 
     // MARK: - Primitive registration
 
-    private func register(_ name: String, immediate: Bool = false, _ body: @escaping () -> Void) -> Cell {
+    func register(_ name: String, immediate: Bool = false, _ body: @escaping () -> Void) -> Cell {
         // Sequential ID = current count. We start empty in init(), so this gives 0,1,2...
         let id = Cell(primitives.count)
         primitives.append(body)
@@ -4452,6 +4534,9 @@ public final class TZForth {
             self.evaluateSourceLen = Cell(u)
             // Hayes/coreext expects SOURCE-ID -1 during EVALUATE of a short string (not 0).
             self.currentSourceId = -1
+            if self.blockInterpretActive, self.blkVarAddr != 0 {
+                self.writeCell(self.blkVarAddr, 0)
+            }
             self.runInterpreter()
             self.evaluateNesting -= 1
             if self.evaluateNesting == 0 {
@@ -5312,10 +5397,17 @@ public final class TZForth {
             }
             var fileId: Int? = nil
             var fileLineStart: Int? = nil
+            var blockFileId: Int? = nil
+            var blockNum: Int? = nil
+            var blockLine: Int? = nil
             if self.evaluateNesting == 0,
                self.interpreterInputFileId >= 2 {
                 fileId = Int(self.interpreterInputFileId)
                 fileLineStart = self.currentFileLineStart
+            } else if self.blockInterpretActive {
+                blockFileId = self.blockInterpretFileId
+                blockNum = self.blockInterpretBlockNum
+                blockLine = self.blockInterpretLine
             }
             let snap = InputSnapshot(
                 sourceId: self.currentSourceId,
@@ -5326,7 +5418,10 @@ public final class TZForth {
                 evaluateNesting: self.evaluateNesting,
                 fileId: fileId,
                 fileLineStart: fileLineStart,
-                fromRefill: self.sourceLoadedByRefill
+                fromRefill: self.sourceLoadedByRefill,
+                blockFileId: blockFileId,
+                blockNum: blockNum,
+                blockLine: blockLine
             )
             let handle = Cell(self.inputSnapshots.count)
             self.inputSnapshots.append(snap)
@@ -5443,6 +5538,15 @@ public final class TZForth {
                         self.currentFileLineStart = lineStart
                     }
                     self.floadRestoreInputContinuation = true
+                } else if snap.blockFileId != nil, self.blockInterpretActive {
+                    self.writeCell(self.IN, savedIn)
+                    self.inputQueue = snap.queue
+                    self.realignInputQueueFromSource()
+                    if let bid = snap.blockFileId, let bnum = snap.blockNum, let bline = snap.blockLine {
+                        self.blockInterpretFileId = bid
+                        self.blockInterpretBlockNum = bnum
+                        self.blockInterpretLine = bline
+                    }
                 } else if currentIn > snapIn {
                     // Same-line parse moved past the save point: keep >IN, restore SOURCE only.
                     self.realignInputQueueFromSource()
@@ -5468,6 +5572,16 @@ public final class TZForth {
             if self.evaluateNesting > 0 {
                 self.push(0)
                 return
+            }
+            if self.blockInterpretActive {
+                self.blockRefillInProgress = true
+                let ok = self.refillFromBlockSource()
+                self.blockRefillInProgress = false
+                if ok {
+                    self.sourceLoadedByRefill = true
+                    self.push(-1)
+                    return
+                }
             }
             let fid: Int?
             if self.loadNesting > 0, self.interpreterInputFileId >= 2 {
@@ -6061,6 +6175,7 @@ public final class TZForth {
 
         // BYE — quit the host application
         _ = register("BYE") {
+            self.shutdownBlockSubsystem()
             self.quitRequested = true
             self.onQuitRequested?()
         }
@@ -6883,6 +6998,7 @@ public final class TZForth {
 
         registerFacilityWords()
         registerFileAccessWords()
+        // registerBlockWords() is called after bootstrap in init (needs VARIABLE cells).
     }
 
     // MARK: - Facility terminal buffer (ANS 10.6.1 PAGE / AT-XY)
@@ -7520,6 +7636,13 @@ public final class TZForth {
         // Default is 0 (off) because the data cell lives in the zeroed memory area.
         self.feedLine("VARIABLE FILE-ECHO")
         self.feedLine("VARIABLE INCLUDED-NAMES")
+        self.feedLine("VARIABLE BLOCK-SIZE")
+        self.feedLine("VARIABLE DEFAULT-BLOCK-COUNT")
+        self.feedLine("VARIABLE BLOCK-BUFFER-COUNT")
+        self.feedLine("VARIABLE BLK")
+        self.feedLine("VARIABLE BLOCK-FILE")
+        self.feedLine("VARIABLE SCR")
+        self.feedLine(": C/L BLOCK-SIZE @ 16 / ;")
         self.feedLine(": ERASE 0 FILL ;")  // high-level so SEE shows source (0 FILL)
         self.feedLine(": HOLDS ( c-addr u -- ) BEGIN DUP WHILE 1- 2DUP + C@ HOLD REPEAT 2DROP ;")
         self.feedLine(": BUFFER: CREATE ALLOT ALIGN ;")
@@ -7564,7 +7687,7 @@ public final class TZForth {
 
     // MARK: - Outer interpreter (the heart of the REPL)
 
-    private func runInterpreter() {
+    func runInterpreter() {
         validateAndRepairSystemState()
         errorFlag = false
 
@@ -7801,7 +7924,7 @@ public final class TZForth {
     }
 
     /// Keep >IN within the current SOURCE line (Hayes ?~~ can add negative deltas).
-    private func clampInOffset(_ value: Cell) -> Cell {
+    func clampInOffset(_ value: Cell) -> Cell {
         let n = Int(value)
         if n < 0 { return 0 }
         if n > self.currentSourceLen { return Cell(self.currentSourceLen) }
@@ -7847,7 +7970,7 @@ public final class TZForth {
     }
 
     /// Rebuild the byte queue from SOURCE at >IN (unparsed tail of the current line).
-    private func realignInputQueueFromSource() {
+    func realignInputQueueFromSource() {
         let pos = Int(self.clampInOffset(self.readCell(self.IN)))
         self.inputQueue.removeAll(keepingCapacity: true)
         guard pos < self.currentSourceLen else { return }
@@ -8430,7 +8553,7 @@ public final class TZForth {
         kernelThrow(StdThrow.fileNotFound, message: message)
     }
 
-    private func throwInvalidFileId(_ message: String) {
+    func throwInvalidFileId(_ message: String) {
         kernelThrow(StdThrow.invalidFileId, message: message)
     }
 
@@ -8540,7 +8663,7 @@ public final class TZForth {
         }
         // Classic indirect-threaded / token-threaded inner interpreter
         var safety = 0
-        let SAFETY_LIMIT = 100000
+        let SAFETY_LIMIT = 2_000_000
         while safety < SAFETY_LIMIT && !errorFlag && !exitReq && !throwActive {
             safety += 1
 
@@ -9195,7 +9318,7 @@ public final class TZForth {
     /// early control-flow experiments can cause. It prevents the repeated
     /// "Stack underflow (forcing SP sane)" messages during compilation that
     /// you are still seeing on the sign definition.
-    private func validateAndRepairSystemState() {
+    func validateAndRepairSystemState() {
         let spv = spGet()
         if spv < 1 || spv > Cell(STACK_SIZE) {
             spSet(1)

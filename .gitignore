@@ -72,3 +72,11 @@ fastlane/test_output
 # ANS-VALIDATE.txt is tracked in TZForth/ (visible in Xcode; writable baseline).
 # Regenerate anytime with the ANS-VALIDATE word or FTEST=1 (see TestTZForth.swift).
 
+# Hayes / Block test runtime artifacts (created by FLOAD, HAYES=1, or local debug)
+Tests/forth2012-test-suite/src/blocks.blk
+Tests/forth2012-test-suite/src/debug-*.fth
+Tests/forth2012-test-suite/src/ANS-VALIDATE.txt
+Tests/forth2012-test-suite/src/testing.fth
+Tests/forth2012-test-suite/src/testing.txt
+Tests/forth2012-test-suite/src/test.fth
+

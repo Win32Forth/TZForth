@@ -17,7 +17,7 @@ import Foundation
 
 extension TZForth {
     // The runANSValidation (and its nested helpers) implement the full port of
-    // the FTEST ANS spot-checks (287 checks) so that "ANS-VALIDATE" works from
+    // the FTEST ANS spot-checks (290 checks) so that "ANS-VALIDATE" works from
     // within Forth (writes ANS-VALIDATE.txt next to TestTZForth.swift when CHDIRed there).
     public func runANSValidation() -> String {
         // Snapshot the "current" dir at start (the folder of the test .swift as user set via CHDIR or launch).
@@ -37,7 +37,7 @@ extension TZForth {
         let preValidationSearchOrder = self.searchOrder
         let preValidationEnvironment = self.captureSessionEnvironment()
 
-        var results = "=== ANS-VALIDATE: 2012 ANS Forth validation (287 spot-checks: Core, Core Ext, File-Access, String, Facility, Exception, Memory, Double, Locals, Programming-Tools; from TestTZForth FTEST) ===\n\n"
+        var results = "=== ANS-VALIDATE: 2012 ANS Forth validation (290 spot-checks: Core, Core Ext, File-Access, String, Facility, Exception, Memory, Double, Locals, Programming-Tools; from TestTZForth FTEST) ===\n\n"
         var collected = ""
 
         let originalOnOutput = self.onOutput
@@ -653,6 +653,39 @@ fload \(fnInnerLate.lastPathComponent)
         self.feedLine("BEGIN-STRUCTURE T6S4 T6S2 +FIELD T6N ALIGNED T6S3 +FIELD T6M END-STRUCTURE")
         ansTest("nested structure size", "T6S4 .", "32")
         ansTest("ENVIRONMENT? FACILITY", "S\" FACILITY\" ENVIRONMENT? .", "-1")
+
+        // Facility terminal (10.6.1): PAGE / AT-XY with 80×25 buffer
+        var termScreen = ""
+        self.onTerminalRefresh = { termScreen = $0 }
+        resetTest()
+        termScreen = ""
+        self.feedLine("PAGE")
+        ansTest("PAGE (no crash)", "42 .", "42")
+        ansTotal += 1
+        if termScreen.split(separator: "\n", omittingEmptySubsequences: false).count == 25 {
+            ansPassed += 1
+            results += "TEST6 PAGE 80x25: pass\n"
+        } else {
+            results += "TEST6 PAGE 80x25: FAIL rows=\(termScreen.split(separator: "\n", omittingEmptySubsequences: false).count)\n"
+        }
+        resetTest()
+        termScreen = ""
+        self.feedLine("PAGE")
+        self.feedLine("2 1 AT-XY 65 EMIT")
+        ansTotal += 1
+        let termLines = termScreen.split(separator: "\n", omittingEmptySubsequences: false)
+        if termLines.count >= 2 {
+            let row1 = String(termLines[1])
+            let idx = row1.index(row1.startIndex, offsetBy: 2, limitedBy: row1.endIndex)
+            if let idx, row1[idx] == "A" {
+                ansPassed += 1
+                results += "TEST6 AT-XY EMIT: pass\n"
+            } else {
+                results += "TEST6 AT-XY EMIT: FAIL row1='\(row1)'\n"
+            }
+        } else {
+            results += "TEST6 AT-XY EMIT: FAIL short screen\n"
+        }
 
         // Memory-Allocation (14): GROWMEMORYMB first (once per session), then ALLOCATE FREE RESIZE
         ansTest("GROWMEMORYMB grow", "4 GROWMEMORYMB UNUSED 3000000 > .", "-1")

@@ -172,6 +172,22 @@ struct ConsoleView: View {
                     }
                 }
 
+                forth.onTerminalRefresh = { screen in
+                    let applyTerminal = {
+                        self.consoleText = consoleMessage + screen
+                        if !screen.hasSuffix("\n") {
+                            self.consoleText += "\n"
+                        }
+                        self.markProtectedThroughEndOfText()
+                        self.keepCursorVisible(followPrompt: true)
+                    }
+                    if Thread.isMainThread {
+                        applyTerminal()
+                    } else {
+                        DispatchQueue.main.async(execute: applyTerminal)
+                    }
+                }
+
                 // Hook BYE so the host app can quit when the user types BYE in Forth
                 forth.onQuitRequested = {
                     DispatchQueue.main.async {
@@ -305,12 +321,7 @@ struct ConsoleView: View {
             forth.feedLine("")
             // onOutput (now synchronous on main) has already appended " OK\n".
 
-            if forth.clearScreenRequested {
-                consoleText = consoleMessage
-                markProtectedThroughEndOfText()
-                lastKeyConsumedUserLength = 0
-                forth.clearScreenRequested = false
-            }
+            applyClearScreenIfRequested()
 
             if !consoleText.hasSuffix("\n") {
                 consoleText += "\n"
@@ -318,6 +329,19 @@ struct ConsoleView: View {
             }
             keepCursorVisible(followPrompt: true)
         }
+    }
+
+    /// CLS clears scrollback; PAGE clears and shows the facility terminal buffer (already refreshed).
+    private func applyClearScreenIfRequested() {
+        guard forth.clearScreenRequested else { return }
+        if forth.isFacilityTerminalActive {
+            forth.clearScreenRequested = false
+            return
+        }
+        consoleText = consoleMessage
+        markProtectedThroughEndOfText()
+        lastKeyConsumedUserLength = 0
+        forth.clearScreenRequested = false
     }
 
     private func dispatchCandidateLines(_ candidateLines: [String]) {
@@ -357,12 +381,7 @@ struct ConsoleView: View {
                     }
                 }
 
-                if forth.clearScreenRequested {
-                    consoleText = consoleMessage
-                    markProtectedThroughEndOfText()
-                    lastKeyConsumedUserLength = 0
-                    forth.clearScreenRequested = false
-                }
+                applyClearScreenIfRequested()
             }
 
             if !consoleText.hasSuffix("\n") {

@@ -157,6 +157,11 @@ public final class TZForth {
 
     // Output
     public var onOutput: ((String) -> Void)?
+    /// Facility terminal screen refresh (80×25 buffer from PAGE / AT-XY / EMIT). Host replaces
+    /// or overlays console content when this fires.
+    public var onTerminalRefresh: ((String) -> Void)?
+    /// True when PAGE or AT-XY has activated the facility terminal buffer.
+    public var isFacilityTerminalActive: Bool { facilityTerminal.isActive }
 
     /// Set by the BYE word. The host app (ConsoleView) should observe this and terminate.
     public var quitRequested = false
@@ -587,6 +592,8 @@ public final class TZForth {
         ("+FIELD",  "( u \"name\" -- )",   "add u-byte field at current offset (immediate)"),
         ("FIELD:",  "( \"name\" -- )",     "add cell-aligned field (immediate)"),
         ("CFIELD:", "( \"name\" -- )",     "add 1-char field (immediate)"),
+        ("PAGE",    "( -- )",              "clear facility terminal and home cursor"),
+        ("AT-XY",   "( u1 u2 -- )",        "facility terminal cursor to column u1 row u2"),
         ("TYPE",    "( addr len -- )",    "print len characters from addr"),
         ("U.",      "( u -- )",           "print unsigned number"),
         ("H.",      "( u -- )",           "print unsigned as uppercase hex (ignores BASE)"),
@@ -889,6 +896,9 @@ public final class TZForth {
     private var structureActive: Bool = false
     /// Name parsed by BEGIN-STRUCTURE; consumed by END-STRUCTURE (Hayes facilitytest layout).
     private var structurePendingName: String = ""
+    /// ANS Facility terminal buffer (PAGE / AT-XY / cursor EMIT).
+    private var facilityTerminal = FacilityTerminal()
+    private var terminalRefreshPending = false
 
     private var executeID: Cell = 0  // captured ID for EXECUTE so POSTPONE can emit LIT xt EXECUTE for immediates
     private var postponeImmID: Cell = 0  // (postpone-imm): compile or execute postponed immediate at run time
@@ -1228,7 +1238,22 @@ public final class TZForth {
     // MARK: - Output
 
     private func putkey(_ c: UInt8) {
-        onOutput?(String(UnicodeScalar(c)))
+        if self.facilityTerminal.isActive {
+            if c == 10 {
+                self.facilityTerminal.newline()
+            } else {
+                self.facilityTerminal.emit(c)
+            }
+            self.terminalRefreshPending = true
+        } else {
+            self.onOutput?(String(UnicodeScalar(c)))
+        }
+    }
+
+    private func flushTerminalRefreshIfNeeded() {
+        guard self.terminalRefreshPending, self.facilityTerminal.isActive else { return }
+        self.terminalRefreshPending = false
+        self.onTerminalRefresh?(self.facilityTerminal.render())
     }
 
     private func tell(_ s: String) {
@@ -1334,6 +1359,7 @@ public final class TZForth {
         if readCell(STATE) == 0 && !waitingForKey {
             ip = 0
         }
+        self.flushTerminalRefreshIfNeeded()
     }
 
     /// Called by the host UI (ConsoleView) when the user types a character while
@@ -5703,6 +5729,8 @@ public final class TZForth {
         // === Utility words ported/adapted from GrokForth style ===
 
         _ = register("CLS") {
+            self.facilityTerminal.deactivate()
+            self.terminalRefreshPending = false
             self.clearScreenRequested = true
         }
 
@@ -5906,7 +5934,7 @@ public final class TZForth {
             self.clearScreenRequested = true
         }
 
-        // ANS-VALIDATE — run the 2012 ANS Forth validation tests (287 spot-checks: Core,
+        // ANS-VALIDATE — run the 2012 ANS Forth validation tests (290 spot-checks: Core,
         // Core Ext, File-Access, String, Facility, Exception, Memory, Double, Locals, Programming-Tools;
         // ported from TestTZForth FTEST, originally TestLBForth.swift) and write ANS-VALIDATE.txt
         // in the folder containing the TestTZForth.swift (i.e. next to the tests source).
@@ -6767,6 +6795,98 @@ public final class TZForth {
         registerFileAccessWords()
     }
 
+    // MARK: - Facility terminal buffer (ANS 10.6.1 PAGE / AT-XY)
+
+    private struct FacilityTerminal {
+        static let defaultCols = 80
+        static let defaultRows = 25
+
+        var cols: Int = defaultCols
+        var rows: Int = defaultRows
+        private(set) var cells: [UInt8] = Array(repeating: 32, count: defaultCols * defaultRows)
+        private(set) var isActive = false
+        var cursorCol = 0
+        var cursorRow = 0
+
+        mutating func page() {
+            self.isActive = true
+            self.cells = Array(repeating: 32, count: self.cols * self.rows)
+            self.cursorCol = 0
+            self.cursorRow = 0
+        }
+
+        mutating func deactivate() {
+            self.isActive = false
+            self.cursorCol = 0
+            self.cursorRow = 0
+        }
+
+        mutating func atXY(col: Int, row: Int) {
+            self.isActive = true
+            self.cursorCol = min(max(col, 0), self.cols - 1)
+            self.cursorRow = min(max(row, 0), self.rows - 1)
+        }
+
+        mutating func emit(_ byte: UInt8) {
+            guard self.isActive else { return }
+            let idx = self.cursorRow * self.cols + self.cursorCol
+            if idx >= 0 && idx < self.cells.count {
+                self.cells[idx] = byte
+            }
+            self.advanceCursor()
+        }
+
+        mutating func newline() {
+            guard self.isActive else { return }
+            self.cursorCol = 0
+            self.cursorRow += 1
+            if self.cursorRow >= self.rows {
+                self.scrollUp()
+            }
+        }
+
+        private mutating func advanceCursor() {
+            self.cursorCol += 1
+            if self.cursorCol >= self.cols {
+                self.cursorCol = 0
+                self.cursorRow += 1
+                if self.cursorRow >= self.rows {
+                    self.scrollUp()
+                }
+            }
+        }
+
+        private mutating func scrollUp() {
+            guard self.rows > 1 else {
+                self.cursorRow = 0
+                return
+            }
+            for r in 0..<(self.rows - 1) {
+                let dst = r * self.cols
+                let src = (r + 1) * self.cols
+                for c in 0..<self.cols {
+                    self.cells[dst + c] = self.cells[src + c]
+                }
+            }
+            let last = (self.rows - 1) * self.cols
+            for c in 0..<self.cols {
+                self.cells[last + c] = 32
+            }
+            self.cursorRow = self.rows - 1
+        }
+
+        func render() -> String {
+            var lines: [String] = []
+            lines.reserveCapacity(self.rows)
+            for r in 0..<self.rows {
+                let start = r * self.cols
+                let slice = self.cells[start..<(start + self.cols)]
+                lines.append(String(bytes: slice, encoding: .ascii) ?? String(repeating: " ", count: self.cols))
+            }
+            return lines.joined(separator: "\n")
+        }
+    }
+
     // MARK: - Facility word registrations (ANS word set 10 — structures)
 
     private func alignStructureOffset() {
@@ -6870,6 +6990,20 @@ public final class TZForth {
         _ = register("CFIELD:", immediate: true) {
             let name = self.parseWord()
             self.addStructureField(size: 1, name: name)
+        }
+
+        _ = register("PAGE") {
+            self.facilityTerminal.page()
+            self.clearScreenRequested = true
+            self.terminalRefreshPending = true
+            self.flushTerminalRefreshIfNeeded()
+        }
+
+        _ = register("AT-XY") {
+            let row = Int(self.pop())
+            let col = Int(self.pop())
+            if self.throwActive { return }
+            self.facilityTerminal.atXY(col: col, row: row)
         }
     }
 
@@ -8651,6 +8785,8 @@ public final class TZForth {
         inputQueue.removeAll(keepingCapacity: true)
         debugEnabled = false   // return to clean default
         clearScreenRequested = false
+        facilityTerminal.deactivate()
+        terminalRefreshPending = false
         waitingForKey = false
         fileLoadRequested = false
         fileEditRequested = false
@@ -8924,7 +9060,7 @@ public final class TZForth {
     }
 
     // MARK: - ANS Validation Tests (ported/adapted from TestTZForth.swift FTEST, originally TestLBForth.swift)
-    // These sources and runner allow the ANS-VALIDATE word to run 281 ANS spot-checks
+    // These sources and runner allow the ANS-VALIDATE word to run 290 ANS spot-checks
     // (Core, Core Ext, File-Access, String, Exception, Memory, Double, Locals, Programming-Tools)
     // from inside the interpreter and write results to ANS-VALIDATE.txt next to TestTZForth.swift.
     // The test logic and sources originated in the standalone tester; we respect the lbForth model origins internally.

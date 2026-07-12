@@ -9,7 +9,7 @@
 //      cat TZForth/TZForth.swift TZForth/TZForthTests.swift TZForth/TestTZForth.swift > /tmp/combined.swift
 //      swift /tmp/combined.swift
 //
-//      # For automated tests (\\ block comments, \S, FLOAD behavior + 281 ANS spot-checks):
+//      # For automated tests (\\ block comments, \S, FLOAD behavior + 290 ANS spot-checks):
 //      FTEST=1 swift /tmp/combined.swift
 //
 //      # For John Hayes / forth2012-test-suite (Block omitted; 0 T{ failures):
@@ -727,6 +727,39 @@ fload \(fnInnerLate.lastPathComponent)
     forth.feedLine("BEGIN-STRUCTURE T6S4 T6S2 +FIELD T6N ALIGNED T6S3 +FIELD T6M END-STRUCTURE")
     ansTest("nested structure size", "T6S4 .", "32")
     ansTest("ENVIRONMENT? FACILITY", "S\" FACILITY\" ENVIRONMENT? .", "-1")
+
+    // Facility terminal (10.6.1): PAGE / AT-XY with 80×25 buffer
+    var termScreen = ""
+    forth.onTerminalRefresh = { termScreen = $0 }
+    resetTest()
+    termScreen = ""
+    forth.feedLine("PAGE")
+    ansTest("PAGE (no crash)", "42 .", "42")
+    ansTotal += 1
+    if termScreen.split(separator: "\n", omittingEmptySubsequences: false).count == 25 {
+        ansPassed += 1
+        print("TEST6 PAGE 80x25: pass")
+    } else {
+        print("TEST6 PAGE 80x25: FAIL rows=\(termScreen.split(separator: "\n", omittingEmptySubsequences: false).count)")
+    }
+    resetTest()
+    termScreen = ""
+    forth.feedLine("PAGE")
+    forth.feedLine("2 1 AT-XY 65 EMIT")
+    ansTotal += 1
+    let termLines = termScreen.split(separator: "\n", omittingEmptySubsequences: false)
+    if termLines.count >= 2 {
+        let row1 = String(termLines[1])
+        let idx = row1.index(row1.startIndex, offsetBy: 2, limitedBy: row1.endIndex)
+        if let idx, row1[idx] == "A" {
+            ansPassed += 1
+            print("TEST6 AT-XY EMIT: pass")
+        } else {
+            print("TEST6 AT-XY EMIT: FAIL row1='\(row1)'")
+        }
+    } else {
+        print("TEST6 AT-XY EMIT: FAIL short screen")
+    }
 
     // Memory-Allocation (14): GROWMEMORYMB first (once per session), then ALLOCATE FREE RESIZE
     ansTest("GROWMEMORYMB grow", "4 GROWMEMORYMB UNUSED 3000000 > .", "-1")

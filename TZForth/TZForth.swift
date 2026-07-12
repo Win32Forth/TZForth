@@ -5887,8 +5887,9 @@ public final class TZForth {
             self.clearScreenRequested = true
         }
 
-        // ANS-VALIDATE — run the 2012 ANS Forth Core + Core Ext validation tests (ported
-        // from the TestTZForth FTEST harness, originally TestLBForth.swift) and write detailed results to ANS-VALIDATE.txt
+        // ANS-VALIDATE — run the 2012 ANS Forth validation tests (281 spot-checks: Core,
+        // Core Ext, File-Access, String, Exception, Memory, Double, Locals, Programming-Tools;
+        // ported from TestTZForth FTEST, originally TestLBForth.swift) and write ANS-VALIDATE.txt
         // in the folder containing the TestTZForth.swift (i.e. next to the tests source).
         // The runner impl is in TZForthTests.swift (split for file size); sources/lets remain here.
         // Internally we respect the Leif Bruder lbForth origins of the test logic.
@@ -5899,17 +5900,18 @@ public final class TZForth {
             let results = self.runANSValidation()
             // After runANSValidation, logicalCurrentDirectory has been restored to the value
             // it had when ANS-VALIDATE was invoked. Use it (or fm cwd) for the output file.
-            // This ensures ANS-VALIDATE.txt lands in "the same folder where your current test
-            // .swift file is located" if the user CHDIR'd there (or launched with that as cwd).
+            // Write beside TZForth/TestTZForth.swift (tracked ANS-VALIDATE.txt in the Xcode
+            // project folder). Excluded from the app bundle so regeneration stays writable.
             var outBase = self.logicalCurrentDirectory.isEmpty ? FileManager.default.currentDirectoryPath : self.logicalCurrentDirectory
             let fm2 = FileManager.default
             let subDir = URL(fileURLWithPath: outBase).appendingPathComponent("TZForth")
             let directTest = URL(fileURLWithPath: outBase).appendingPathComponent("TestTZForth.swift")
             let subTest = subDir.appendingPathComponent("TestTZForth.swift")
-            if fm2.fileExists(atPath: subTest.path) {
-                outBase = subDir.path   // txt next to .swift inside TZForth/ subdir
+            let subEngine = subDir.appendingPathComponent("TZForth.swift")
+            if fm2.fileExists(atPath: subTest.path) || fm2.fileExists(atPath: subEngine.path) {
+                outBase = subDir.path
             } else if fm2.fileExists(atPath: directTest.path) {
-                outBase = outBase       // already in the folder with TestTZForth.swift
+                outBase = outBase
             }
             let outURL = URL(fileURLWithPath: outBase).appendingPathComponent("ANS-VALIDATE.txt")
             do {
@@ -8796,9 +8798,9 @@ public final class TZForth {
     }
 
     // MARK: - ANS Validation Tests (ported/adapted from TestTZForth.swift FTEST, originally TestLBForth.swift)
-    // These sources and runner allow the ANS-VALIDATE word to run the 2012 ANS Forth
-    // Core/Core Ext compliance tests from inside the interpreter and write results to
-    // ANS-VALIDATE.txt next to the test source (in the dev folder of TestTZForth.swift).
+    // These sources and runner allow the ANS-VALIDATE word to run 281 ANS spot-checks
+    // (Core, Core Ext, File-Access, String, Exception, Memory, Double, Locals, Programming-Tools)
+    // from inside the interpreter and write results to ANS-VALIDATE.txt next to TestTZForth.swift.
     // The test logic and sources originated in the standalone tester; we respect the lbForth model origins internally.
 
     internal let testBlockSrc = """

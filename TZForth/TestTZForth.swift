@@ -9,10 +9,10 @@
 //      cat TZForth/TZForth.swift TZForth/TZForthTests.swift TZForth/TestTZForth.swift > /tmp/combined.swift
 //      swift /tmp/combined.swift
 //
-//      # For automated tests (\\ block comments, \S, FLOAD behavior):
+//      # For automated tests (\\ block comments, \S, FLOAD behavior + 281 ANS spot-checks):
 //      FTEST=1 swift /tmp/combined.swift
 //
-//      # For John Hayes / forth2012-test-suite (Block + Facility omitted):
+//      # For John Hayes / forth2012-test-suite (Block + Facility omitted; 0 T{ failures):
 //      HAYES=1 swift /tmp/combined.swift
 //
 //  Note: The ANS validation test logic (runANSValidation + test sources) was split to

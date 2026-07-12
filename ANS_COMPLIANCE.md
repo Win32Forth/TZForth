@@ -2,7 +2,7 @@
 
 This document tracks implementation status of the 2012 ANS Forth Standard word sets in TZForth (Swift port of the lbForth model). Generated from codebase inspection (`TZForth/TZForth.swift`, `TestTZForth.swift`, `TZForthTests.swift`).
 
-Last update: colon `CATCH` + `>R` (Hayes `C6`); `innerThread` EXIT boundary; FTEST **280/280**.
+Last update: Hayes forth2012-test-suite **0 errors** (Block/Facility omitted); `>IN +!` skip (Hayes prelimtest); FTEST / `ANS-VALIDATE` **281/281**.
 
 ## Summary
 
@@ -12,15 +12,15 @@ Last update: colon `CATCH` + `>R` (Hayes `C6`); `innerThread` EXIT boundary; FTE
 | **Core Ext (6.2)** | Complete — all standard Core Ext words implemented |
 | **Search-Order (16)** | Complete — 16.6.1 + 16.6.2; `SEARCH-WORDLIST`, `ENVIRONMENT?` `WORDLISTS` (8) |
 | **Programming-Tools** | Partial — 15.6.1/15.6.2 words below; assembler `CODE`/`;CODE` stubbed; `LOCATE` (SEE alias); pre-ANS `COMPILE` omitted (`POSTPONE` / `[COMPILE]` / `COMPILE,` in Core); no `NEEDS` |
-| **File-Access (11)** | Substantial — 11.6.1 core words + `INCLUDE`/`INCLUDED` + `REQUIRE`/`REQUIRED` |
+| **File-Access (11)** | Complete — 11.6.1 + 11.6.2; Hayes filetest 0 errors |
 | **Exception (9)** | Complete — `CATCH`, `THROW`, `.ERROR`; kernel faults CATCH-able; `ABORT`/`ABORT"` → `-1`/`-2` |
-| **String (17)** | Complete — 17.6.1 (`COMPARE`, `SEARCH`, `SLITERAL`, `/STRING`, `-TRAILING`, `BLANK`, `CMOVE`, `CMOVE>`) |
+| **String (17)** | Complete — 17.6.1 + 17.6.2 (`REPLACES`, `SUBSTITUTE`, `UNESCAPE`); Hayes stringtest 0 errors |
 | **Memory-Allocation (14)** | Complete — 14.6.1 (`ALLOCATE`, `FREE`, `RESIZE`); extension `GROWMEMORYMB` |
 | **Double-Number (8)** | Complete — 8.6.1 + 8.6.2 (`2ROT`, `2VALUE`, `DU<`); trailing `.` literals |
 | **Locals (13)** | Complete — `(LOCAL)`, `LOCALS|`, `{:`; `TO` for locals; max 32 (`#LOCALS`) |
 | **Other optional sets** | Mostly absent — Float, Facility, Block, Extended-Character, etc. |
 
-FTEST harness: run with `FTEST=1 swift /tmp/combined.swift` (concatenate `TZForth.swift`, `TZForthTests.swift`, `TestTZForth.swift`). Current count: **280/280** TEST6 spot-checks plus block-comment / FLOAD / INCLUDE harness tests.
+FTEST harness: run with `FTEST=1 swift /tmp/combined.swift` (concatenate `TZForth.swift`, `TZForthTests.swift`, `TestTZForth.swift`). Current count: **281/281** TEST6 spot-checks (273 `ansTest` calls + 8 harness-only checks) plus block-comment / FLOAD / INCLUDE load tests. In-app **`ANS-VALIDATE`** runs the same suite and overwrites **`TZForth/ANS-VALIDATE.txt`** (tracked baseline in the Xcode project; excluded from the app bundle so it stays writable).
 
 ## Core (6.1) — Complete
 
@@ -108,13 +108,19 @@ ANS word set 17.6.1 (character-string operations). Core `MOVE`/`FILL` remain; `C
 | `SEARCH` | `( c-addr1 u1 c-addr2 u2 -- c-addr3 u3 flag )` — first match; empty needle matches |
 | `SLITERAL` | `( c-addr u -- )` immediate — compile `(S")` + inline literal |
 
-`ENVIRONMENT?` answers `STRING`. FTEST covers compare, search, trailing, blank, `/STRING`, and `SLITERAL` via `[ ]`.
+`ENVIRONMENT?` answers `STRING`. FTEST / `ANS-VALIDATE` cover compare, search, trailing, blank, `/STRING`, and `SLITERAL` via `[ ]`.
 
-### Not implemented (String extensions 17.6.2)
+### String extensions (17.6.2)
 
-`REPLACES`, `SUBSTITUTE`, `UNESCAPE` — substitution/escape tables not yet wired.
+| Word | Stack / notes |
+|------|----------------|
+| `REPLACES` | `( c-addr1 u1 c-addr2 u2 -- )` — define `%name%` → replacement text (interpret only) |
+| `SUBSTITUTE` | `( c-addr1 u1 c-addr2 u2 -- c-addr2 u3 n )` — left-to-right `%name%` expansion; `n` = replacements or negative on overlap error |
+| `UNESCAPE` | `( c-addr1 u1 c-addr2 -- c-addr2 u2 )` — copy to dest, doubling each `%` |
 
-## File-Access (11) — Substantial
+Hayes **stringtest.fth** exercises all three (including overlapping-buffer `SUBSTITUTE` cases). Substitution table is a linked list on the heap; `MARKER` / `FORGET` do not prune entries (same limitation as `INCLUDED-NAMES`).
+
+## File-Access (11) — Complete
 
 ANS optional word set 11.6.1 (file operations) and key 11.6.2 extensions are implemented on top of the host filesystem. Files are held in memory while open; `CLOSE-FILE` and `FLUSH-FILE` write dirty buffers back to disk.
 
@@ -139,6 +145,7 @@ ANS optional word set 11.6.1 (file operations) and key 11.6.2 extensions are imp
 - **`(`** — multi-line parenthesized comments span file lines (refills when `)` not found on current line).
 - **Shared load loop** — `INCLUDE-FILE`, `INCLUDED`, `INCLUDE`, and host **`FLOAD`** all use the same line-at-a-time interpret path (`includeFileInterpret`): `FILE-ECHO`, `\S`, mid-file abort, no per-line `OK`, `DEBUG-ON`/`OFF` per line, and `SOURCE-ID` = the open **fileid** (≥ 10 for newly opened files).
 - **`FLOAD`** — resolves path (`.fth` auto-append, cwd, host sandbox via `onPerformNamedLoad`), opens text with UTF-8/Latin-1 tolerance, then runs the shared include loop; registers spec in `INCLUDED-NAMES` on success.
+- **`RESTORE-INPUT` during load** — nested `SAVE-INPUT` / `RESTORE-INPUT` inside a colon on an `FLOAD` line can repoint `SOURCE` mid-line; the interpreter continues through the remainder of that line and subsequent file lines (Hayes filetest `SI2`).
 - **`ENVIRONMENT?`** — returns true for `FILE`, `FILE-ACCESS`, `FILE-EXT`.
 
 ### REQUIRE / REQUIRED / INCLUDED-NAMES
@@ -170,7 +177,7 @@ Unhandled `THROW` with no active `CATCH`: `-1` → print `Aborted!`, reset stack
 
 FTEST / `ANS-VALIDATE` cover `ABORT`/`ABORT"` with and without `CATCH`, standard kernel codes, compile `STATE` preservation, file faults, nested `CATCH`, `['] fload catch` (safe-fload), mid-file `INCLUDE-FILE`, user **-40**, and `.ERROR` for file codes. Colon definitions that compile `CATCH` then `>R` (Hayes `exceptiontest` `C6`) resume correctly after `EXIT` and nested `deliverThrow`.
 
-John Hayes **forth2012-test-suite** (Block/Facility omitted): all bundled word-set tests pass with 0 `#ERRORS` when run from `Tests/forth2012-test-suite/src/` via `debug-bootstrap.fth` or an equivalent per-suite harness.
+John Hayes **forth2012-test-suite** (Block/Facility omitted): **0 total errors** across Core, Core Ext, Double, Exception, File-access, Locals, Memory-allocation, Search-order, String, and Programming-tools subsets. Run with `HAYES=1 swift /tmp/combined.swift` from the repo root, or `fload debug-bootstrap.fth` from `Tests/forth2012-test-suite/src/`. Results: **`HAYES-RESULTS.txt`**.
 
 **Standard THROW codes (Phases 1–5, complete):** Runtime (-3…-9), memory (-7), compile-only (-14), control (-15/-16), limits (-17), search order (-20), names (-10), undefined (-13), dictionary misuse (-20), file-access (-67 closed file, -68 invalid file-id, -70 I/O abort, -74 not found). User range from **-40**. **`OPEN-FILE`** and related words still return **`ior`** on the stack (ANS file-access). Named **`FLOAD`** loads synchronously (`onPerformNamedLoad` in the app) so parsing words can be wrapped with `['] fload catch`. Mid-file line errors propagate the **specific** fault code to the enclosing `CATCH`. Full map: **`THROW_CODES.md`**.
 
@@ -237,6 +244,8 @@ ANS word set 13.6.1 and extension 13.6.2. Locals are searched before the diction
 `TO name` works for locals during compilation. Minimum **32** locals per definition (`ENVIRONMENT?` `#LOCALS`). FTEST covers `LOCALS|`, `{:`, `TO`, and `DO`/`LOOP`.
 
 ## Programming-Tools (15) — Partial
+
+Hayes **toolstest.fth** subset (implemented words only): **0 errors**. Full ANS Programming-Tools set is not complete (`CODE`/`;CODE` stubbed, no `NEEDS`).
 
 ANS words implemented from 15.6.1 / extensions:
 

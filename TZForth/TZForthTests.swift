@@ -17,8 +17,8 @@ import Foundation
 
 extension TZForth {
     // The runANSValidation (and its nested helpers) implement the full port of
-    // the FTEST ANS spot-checks so that "ANS-VALIDATE" works from within Forth
-    // (writes ANS-VALIDATE.txt next to TestTZForth.swift when CHDIRed there).
+    // the FTEST ANS spot-checks (281 checks) so that "ANS-VALIDATE" works from
+    // within Forth (writes ANS-VALIDATE.txt next to TestTZForth.swift when CHDIRed there).
     public func runANSValidation() -> String {
         // Snapshot the "current" dir at start (the folder of the test .swift as user set via CHDIR or launch).
         // Internal tests may temporarily change logicalCurrentDirectory for fload sims; we use the
@@ -37,7 +37,7 @@ extension TZForth {
         let preValidationSearchOrder = self.searchOrder
         let preValidationEnvironment = self.captureSessionEnvironment()
 
-        var results = "=== ANS-VALIDATE: 2012 ANS Forth Core + Core Ext + File-Access validation (from TestTZForth / original TestLBForth FTEST logic) ===\n\n"
+        var results = "=== ANS-VALIDATE: 2012 ANS Forth validation (281 spot-checks: Core, Core Ext, File-Access, String, Exception, Memory, Double, Locals, Programming-Tools; from TestTZForth FTEST) ===\n\n"
         var collected = ""
 
         let originalOnOutput = self.onOutput
@@ -580,6 +580,7 @@ fload \(fnInnerLate.lastPathComponent)
         ansTest("CLS (no crash)", "CLS 42 .", "42")
         ansTest("SPACES (no crash)", "2 SPACES 99 .", "99")
         ansTest("SOURCE", "SOURCE DROP 0= .", "0")  // addr non-zero, u may be 0 at test point
+        ansTest(">IN +! skip", "S\" 1 >IN +! xSOURCE TYPE\" EVALUATE", "SOURCE")
         ansTest("PAD", "PAD 0= 0= .", "-1")
         ansTest("PAD size", "PAD DUP 1023 + 65 OVER C! DROP S\" x\" DROP DROP PAD 1023 + C@ .", "65")
         ansTest("multi S\" interpret", "S\" hello\" S\" world\" SWAP ROT ROT ROT TYPE SPACE TYPE", "world hello")

@@ -77,7 +77,13 @@ struct ConsoleView: View {
             text: $consoleText,
             isFocused: $isFocused,
             pinCaretRequest: $pinCaretRequest,
-            onReturnPressed: { handleReturnKey() }
+            onReturnPressed: { handleReturnKey() },
+            onFacilityKeyDown: { event in
+                guard forth.waitingForExtendedKey else { return false }
+                guard let fkeyId = Self.facilityFKeyId(from: event) else { return false }
+                forth.provideExtendedKey(TZForth.makeFKeyEvent(fkeyId))
+                return true
+            }
         ) { textView in
             DispatchQueue.main.async {
                 consoleTextView = textView
@@ -1238,33 +1244,114 @@ struct ConsoleView: View {
         return m
     }
 
-    private func facilityKeyEvent(from press: KeyPress) -> Int? {
-        let mods = facilityKeyMods(press.modifiers)
+    /// Map AppKit function-key Unicode (NSF*FunctionKey) or keyCode to a K-* id (without masks).
+    private static func facilityFKeyBaseId(functionUnicode: UInt32) -> Int? {
         let fk = TZForth.FacilityFKey.self
-        switch press.key {
-        case .f1: return TZForth.makeFKeyEvent(fk.f1 | mods)
-        case .f2: return TZForth.makeFKeyEvent(fk.f2 | mods)
-        case .f3: return TZForth.makeFKeyEvent(fk.f3 | mods)
-        case .f4: return TZForth.makeFKeyEvent(fk.f4 | mods)
-        case .f5: return TZForth.makeFKeyEvent(fk.f5 | mods)
-        case .f6: return TZForth.makeFKeyEvent(fk.f6 | mods)
-        case .f7: return TZForth.makeFKeyEvent(fk.f7 | mods)
-        case .f8: return TZForth.makeFKeyEvent(fk.f8 | mods)
-        case .f9: return TZForth.makeFKeyEvent(fk.f9 | mods)
-        case .f10: return TZForth.makeFKeyEvent(fk.f10 | mods)
-        case .f11: return TZForth.makeFKeyEvent(fk.f11 | mods)
-        case .f12: return TZForth.makeFKeyEvent(fk.f12 | mods)
-        case .delete: return TZForth.makeFKeyEvent(fk.delete | mods)
-        default:
-            break
+        switch functionUnicode {
+        case 0xF700: return fk.up
+        case 0xF701: return fk.down
+        case 0xF702: return fk.left
+        case 0xF703: return fk.right
+        case 0xF704: return fk.f1
+        case 0xF705: return fk.f2
+        case 0xF706: return fk.f3
+        case 0xF707: return fk.f4
+        case 0xF708: return fk.f5
+        case 0xF709: return fk.f6
+        case 0xF70A: return fk.f7
+        case 0xF70B: return fk.f8
+        case 0xF70C: return fk.f9
+        case 0xF70D: return fk.f10
+        case 0xF70E: return fk.f11
+        case 0xF70F: return fk.f12
+        case 0xF727: return fk.insert
+        case 0xF728: return fk.delete
+        case 0xF729: return fk.home
+        case 0xF72B: return fk.end
+        case 0xF72C: return fk.prior
+        case 0xF72D: return fk.next
+        default: return nil
         }
-        if press.characters.count == 1, let scalar = press.characters.unicodeScalars.first {
-            let v = Int(scalar.value)
-            if v >= 32 || v == 9 {
-                return TZForth.makeCharKeyEvent(v, mods: mods)
-            }
+    }
+
+    private static func facilityFKeyBaseId(keyCode: UInt16) -> Int? {
+        let fk = TZForth.FacilityFKey.self
+        switch keyCode {
+        case 123: return fk.left
+        case 124: return fk.right
+        case 126: return fk.up
+        case 125: return fk.down
+        case 115: return fk.home
+        case 119: return fk.end
+        case 116: return fk.prior
+        case 121: return fk.next
+        case 114: return fk.insert
+        case 117: return fk.delete
+        case 122: return fk.f1
+        case 120: return fk.f2
+        case 99: return fk.f3
+        case 118: return fk.f4
+        case 96: return fk.f5
+        case 97: return fk.f6
+        case 98: return fk.f7
+        case 100: return fk.f8
+        case 101: return fk.f9
+        case 109: return fk.f10
+        case 103: return fk.f11
+        case 111: return fk.f12
+        default: return nil
+        }
+    }
+
+    private static func facilityKeyModsFromNSEventFlags(_ flags: NSEvent.ModifierFlags) -> Int {
+        var m = 0
+        if flags.contains(.shift) { m |= TZForth.FacilityFKey.shiftMask }
+        if flags.contains(.control) { m |= TZForth.FacilityFKey.ctrlMask }
+        if flags.contains(.option) { m |= TZForth.FacilityFKey.altMask }
+        return m
+    }
+
+    /// Full K-* id (base + shift/ctrl/alt masks) from an AppKit key event.
+    private static func facilityFKeyId(from event: NSEvent) -> Int? {
+        let mods = facilityKeyModsFromNSEventFlags(event.modifierFlags)
+        if let scalar = event.charactersIgnoringModifiers?.unicodeScalars.first,
+           let base = facilityFKeyBaseId(functionUnicode: scalar.value) {
+            return base | mods
+        }
+        if let base = facilityFKeyBaseId(keyCode: event.keyCode) {
+            return base | mods
         }
         return nil
+    }
+
+    private func facilityKeyEvent(from press: KeyPress) -> Int? {
+        let mods = facilityKeyMods(press.modifiers)
+        if press.characters.count == 1, let scalar = press.characters.unicodeScalars.first {
+            let v = scalar.value
+            if let base = Self.facilityFKeyBaseId(functionUnicode: v) {
+                return TZForth.makeFKeyEvent(base | mods)
+            }
+            let code = Int(v)
+            if code >= 32 || code == 9 {
+                return TZForth.makeCharKeyEvent(code, mods: mods)
+            }
+        }
+        if press.key == .delete {
+            return TZForth.makeFKeyEvent(TZForth.FacilityFKey.delete | mods)
+        }
+        return nil
+    }
+}
+
+/// NSTextView that can intercept function keys for EKEY while the Forth engine is waiting.
+private final class FacilityConsoleTextView: NSTextView {
+    var onFacilityKeyDown: ((NSEvent) -> Bool)?
+
+    override func keyDown(with event: NSEvent) {
+        if onFacilityKeyDown?(event) == true {
+            return
+        }
+        super.keyDown(with: event)
     }
 }
 
@@ -1275,6 +1362,7 @@ private struct ConsoleTextView: NSViewRepresentable {
     @FocusState.Binding var isFocused: Bool
     @Binding var pinCaretRequest: Int
     var onReturnPressed: () -> Bool
+    var onFacilityKeyDown: ((NSEvent) -> Bool)?
     var onTextViewReady: (NSTextView) -> Void
 
     func makeCoordinator() -> Coordinator {
@@ -1282,10 +1370,29 @@ private struct ConsoleTextView: NSViewRepresentable {
     }
 
     func makeNSView(context: Context) -> NSScrollView {
-        let scrollView = NSTextView.scrollableTextView()
-        guard let textView = scrollView.documentView as? NSTextView else {
-            return scrollView
+        let scrollView = NSScrollView()
+        scrollView.hasVerticalScroller = true
+        scrollView.hasHorizontalScroller = false
+        scrollView.autohidesScrollers = true
+        scrollView.borderType = .noBorder
+        scrollView.drawsBackground = true
+        scrollView.backgroundColor = .white
+
+        let textView = FacilityConsoleTextView()
+        textView.onFacilityKeyDown = { event in
+            context.coordinator.parent.onFacilityKeyDown?(event) ?? false
         }
+        textView.isVerticallyResizable = true
+        textView.isHorizontallyResizable = false
+        textView.autoresizingMask = [.width]
+        textView.minSize = NSSize(width: 0, height: scrollView.contentSize.height)
+        textView.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
+        textView.textContainer?.widthTracksTextView = true
+        textView.textContainer?.containerSize = NSSize(
+            width: scrollView.contentSize.width,
+            height: .greatestFiniteMagnitude
+        )
+        scrollView.documentView = textView
 
         textView.delegate = context.coordinator
         textView.isRichText = false
@@ -1311,20 +1418,17 @@ private struct ConsoleTextView: NSViewRepresentable {
         let end = (text as NSString).length
         textView.setSelectedRange(NSRange(location: end, length: 0))
 
-        scrollView.drawsBackground = true
-        scrollView.backgroundColor = .white
-        scrollView.hasVerticalScroller = true
-        scrollView.hasHorizontalScroller = false
-        scrollView.autohidesScrollers = true
-
         context.coordinator.textView = textView
         onTextViewReady(textView)
         return scrollView
     }
 
     func updateNSView(_ scrollView: NSScrollView, context: Context) {
-        guard let textView = scrollView.documentView as? NSTextView else { return }
+        guard let textView = scrollView.documentView as? FacilityConsoleTextView else { return }
         context.coordinator.parent = self
+        textView.onFacilityKeyDown = { event in
+            context.coordinator.parent.onFacilityKeyDown?(event) ?? false
+        }
 
         var shouldScroll = false
         let needsPinCaret = context.coordinator.lastHandledPinCaretRequest != pinCaretRequest

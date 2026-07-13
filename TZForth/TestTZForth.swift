@@ -9,7 +9,7 @@
 //      cat TZForth/TZForth.swift TZForth/TZForthSettings.swift TZForth/TZForthBlock.swift TZForth/TZForthTests.swift TZForth/TestTZForth.swift > /tmp/combined.swift
 //      swift /tmp/combined.swift
 //
-//      # For automated tests (\\ block comments, \S, FLOAD behavior + 299 ANS spot-checks):
+//      # For automated tests (\\ block comments, \S, FLOAD behavior + 317 ANS spot-checks):
 //      FTEST=1 swift /tmp/combined.swift
 //
 //      # For John Hayes / forth2012-test-suite (incl. Block; 0 T{ failures target):

@@ -282,7 +282,7 @@ t-under .            → -3
 
 - [x] All §9.3.1 codes -3…-17 mapped or explicitly exempted (see **Codes not mapped**); file-access -68/-74 for kernel paths
 - [x] `grep errorFlag = true` only `handleUnhandledThrow` + `recoverFromError` (2 sites in `TZForth.swift`)
-- [x] FTEST / `ANS-VALIDATE` **299/299** (289 `ansTest` + 10 harness-only checks); unified FLOAD/INCLUDE load loop; colon `CATCH`+`>R`; Hayes forth2012 suite **0 errors** (Block omitted)
+- [x] FTEST / `ANS-VALIDATE` **317/317** (incl. Block subsystem + TZ `.blk` extensions); unified FLOAD/INCLUDE load loop; colon `CATCH`+`>R`; Hayes forth2012 suite **0 errors** (Block included)
 - [x] `ANS-VALIDATE` exception suite (mirrors FTEST CATCH/THROW; nested CATCH, safe-fload, mid-include, `.ERROR` file codes)
 
 ---
@@ -310,4 +310,4 @@ t-under .            → -3
 | 5 | Done | User -40; closed file -67; catchable mid-FLOAD (-13); -70 |
 | 5b | Done | Nested CATCH; safe-fload; mid-INCLUDE-FILE; `.ERROR` file codes |
 
-**FTEST:** `FTEST=1 swift /tmp/combined.swift` (concatenate `TZForth.swift`, `TZForthTests.swift`, `TestTZForth.swift`).
+**FTEST:** `FTEST=1 swift /tmp/combined.swift` (concatenate `TZForth.swift`, `TZForthSettings.swift`, `TZForthBlock.swift`, `TZForthTests.swift`, `TestTZForth.swift`).

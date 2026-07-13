@@ -2,7 +2,7 @@
 
 This document tracks implementation status of the 2012 ANS Forth Standard word sets in TZForth (Swift port of the lbForth model). Generated from codebase inspection (`TZForth/TZForth.swift`, `TestTZForth.swift`, `TZForthTests.swift`).
 
-Last update: Hayes forth2012-test-suite **0 errors** (Block omitted); Facility complete on TZForth host; FTEST / `ANS-VALIDATE` **299/299**.
+Last update: Hayes forth2012-test-suite **0 errors** (Block included); Facility + Block complete on TZForth host; FTEST / `ANS-VALIDATE` **317/317**.
 
 ## Summary
 
@@ -19,9 +19,10 @@ Last update: Hayes forth2012-test-suite **0 errors** (Block omitted); Facility c
 | **Double-Number (8)** | Complete — 8.6.1 + 8.6.2 (`2ROT`, `2VALUE`, `DU<`); trailing `.` literals |
 | **Locals (13)** | Complete — `(LOCAL)`, `LOCALS|`, `{:`; `TO` for locals; max 32 (`#LOCALS`) |
 | **Facility (10)** | Complete (TZForth host) — structures, `PAGE`/`AT-XY`, `MS`, `TIME&DATE`, `EKEY*`, `EMIT?`, `K-*`; Hayes `facilitytest.fth` 0 errors |
-| **Other optional sets** | Mostly absent — Float, Block, Extended-Character, etc. |
+| **Block (10)** | Complete — file-backed `.blk`, LRU buffer cache; Hayes `blocktest.fth` 0 errors; FTEST Block + TZ extension spot-checks |
+| **Other optional sets** | Mostly absent — Float, Extended-Character, etc. |
 
-FTEST harness: run with `FTEST=1 swift /tmp/combined.swift` (concatenate `TZForth.swift`, `TZForthTests.swift`, `TestTZForth.swift`). Current count: **299/299** TEST6 spot-checks (289 `ansTest` calls + 10 harness-only checks) plus block-comment / FLOAD / INCLUDE load tests. In-app **`ANS-VALIDATE`** runs the same suite and overwrites **`TZForth/ANS-VALIDATE.txt`** (tracked baseline in the Xcode project; excluded from the app bundle so it stays writable). During validation, `onMsDelayRequested` is cleared so **`MS`** uses the engine `Thread.sleep` fallback (synchronous `feedLine` / `ansTest` output checks).
+FTEST harness: run with `FTEST=1 swift /tmp/combined.swift` (concatenate `TZForth.swift`, `TZForthSettings.swift`, `TZForthBlock.swift`, `TZForthTests.swift`, `TestTZForth.swift`). Current count: **317/317** TEST6 spot-checks plus block-comment / FLOAD / INCLUDE load tests. In-app **`ANS-VALIDATE`** runs the same suite and overwrites **`TZForth/ANS-VALIDATE.txt`** (tracked baseline in the Xcode project; excluded from the app bundle so it stays writable). Validation restores dictionary bytes and interpret-session state (`evaluateNesting`, input-source stack, block subsystem) so the REPL still prints **`OK`** after `ANS-VALIDATE` or Hayes `fload test`. During validation, `onMsDelayRequested` is cleared so **`MS`** uses the engine `Thread.sleep` fallback (synchronous `feedLine` / `ansTest` output checks).
 
 ## Core (6.1) — Complete
 
@@ -190,7 +191,7 @@ Pre-allocated growable **`.blk`** files, per-file block numbering, LRU buffer ca
 | TZForth extensions | `CREATE-BLOCK-FILE`, `OPEN-BLOCK-FILE`, `CLOSE-BLOCK-FILE`, `GROW-BLOCK-FILE`, `USE-BLOCK-FILE`, `BLOCK-FILE`, `.BLOCK-FILES` |
 | ENVIRONMENT? | `BLOCK`, `/BLOCK`, `BLOCK-EXT` |
 
-Default: `BLOCK-SIZE` = 1024, `BLOCK-BUFFER-COUNT` = 4, buffers at `blockPoolBase` (below PNO). `BYE`/app quit calls `shutdownBlockSubsystem()` (flush all dirty buffers, close open block files).
+Default: `BLOCK-SIZE` = 1024, `BLOCK-BUFFER-COUNT` = 4, buffers at `blockPoolBase` (below PNO). `BYE`/app quit calls `shutdownBlockSubsystem()` (flush all dirty buffers, close open block files). FTEST / `ANS-VALIDATE` cover ANS Block words plus TZ extensions (`CREATE/OPEN/USE/CLOSE/GROW-BLOCK-FILE`, `.BLOCK-FILES`, `.SETTINGS`). `ANS-VALIDATE` calls `resetBlockSubsystemSession()` and restores the pre-validation dictionary so Hayes `fload test` can run immediately afterward.
 
 **Standard THROW codes (Phases 1–5, complete):** Runtime (-3…-9), memory (-7), compile-only (-14), control (-15/-16), limits (-17), search order (-20), names (-10), undefined (-13), dictionary misuse (-20), file-access (-67 closed file, -68 invalid file-id, -70 I/O abort, -74 not found). User range from **-40**. **`OPEN-FILE`** and related words still return **`ior`** on the stack (ANS file-access). Named **`FLOAD`** loads synchronously (`onPerformNamedLoad` in the app) so parsing words can be wrapped with `['] fload catch`. Mid-file line errors propagate the **specific** fault code to the enclosing `CATCH`. Full map: **`THROW_CODES.md`**.
 
@@ -363,13 +364,12 @@ During an active structure, **`ALIGNED`** aligns the structure offset (for `ALIG
 Not implemented (no current plan unless requested):
 
 - **Float**
-- **Block**
 - **Extended-Character**
 - Remaining **Programming-Tools** (`NEEDS`, Gforth-style source `LOCATE`, …)
 
 ## Recommendations
 
-- TZForth is highly functional for classic Forth sources, REPL, sandboxed `FLOAD`/`EDIT`/`CHDIR`, Hayes forth2012 validation (0 errors on implemented subsets), FTEST / `ANS-VALIDATE` (299/299), and ANS File-Access file I/O / `INCLUDED`.
-- Next logical steps (if desired): Float, Block, Extended-Character, or remaining Programming-Tools (`NEEDS`, Gforth-style source `LOCATE`, …).
+- TZForth is highly functional for classic Forth sources, REPL, sandboxed `FLOAD`/`EDIT`/`CHDIR`, Hayes forth2012 validation (**0 errors**, Block included), FTEST / `ANS-VALIDATE` (**317/317**), file-backed Block (`.blk`), and ANS File-Access file I/O / `INCLUDED`.
+- Next logical steps (if desired): Float, Extended-Character, or remaining Programming-Tools (`NEEDS`, Gforth-style source `LOCATE`, …).
 
 For full standard details, see the official 2012 ANS Forth document (sections 6.1, 6.2, and optional word sets in chapters 7–18).

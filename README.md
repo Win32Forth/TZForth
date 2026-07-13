@@ -1,6 +1,6 @@
 # TZForth
 
-A SwiftUI-based host and development environment for based on Leif Bruder's Pblic Domain lbForth system.
+A SwiftUI-based host and development environment based on Leif Bruder's public-domain lbForth system.
 
 **GitHub:** https://github.com/Win32Forth/TZForth (previously named FPCForth in the repo)
 
@@ -32,7 +32,7 @@ The REPL console is fully working (see TZForth/ConsoleView.swift + TZForth.swift
 - Classic load semantics (shared by `FLOAD`, `INCLUDE`, `INCLUDE-FILE`): `FILE-ECHO ON` at top of a file takes effect for that load; `\S` aborts remainder of *that* file only; compile errors mid-load abort the rest of the file and leave REPL clean/interpreting; no per-line OK spam during loads.
 - **Exception handling:** kernel faults are **CATCH-able** (standard ANS throw codes). **`.ERROR`** prints a spaced message for a code on the stack. Named **`fload`** completes synchronously so you can write `: safe-fload  ['] fload catch ?dup if  ." load failed:" .error  else  drop  then ;` — see **`THROW_CODES.md`** for the full code map.
 
-Automated tests (`FTEST=1`; see `TestTZForth.swift` header) cover load/comment harnesses plus **299** ANS spot-checks (Core, Core Ext, File-Access, String, **Facility** (structures, terminal, `EKEY*`/`MS`/`TIME&DATE`), Exception, Memory, Double, Locals, Programming-Tools, etc.). In-app: `ANS-VALIDATE` (same suite; overwrites `TZForth/ANS-VALIDATE.txt`, a tracked baseline in the Xcode project — regenerate anytime). Hayes **forth2012-test-suite** (Block omitted): **0 errors** incl. Facility — see `Tests/forth2012-test-suite/src/HAYES-RESULTS.txt`.
+Automated tests (`FTEST=1`; see `TestTZForth.swift` header) cover load/comment harnesses plus **317** ANS spot-checks (Core, Core Ext, File-Access, String, **Facility** (structures, terminal, `EKEY*`/`MS`/`TIME&DATE`), Exception, Memory, Double, Locals, Programming-Tools, **Block** + TZ `.blk` extensions, etc.). In-app: **`ANS-VALIDATE`** (same suite; overwrites `TZForth/ANS-VALIDATE.txt`, a tracked baseline in the Xcode project — regenerate anytime). After `ANS-VALIDATE` or `fload test`, the REPL restores dictionary and interpret-session state so normal commands still print **`OK`**. Hayes **forth2012-test-suite** (Block **included**): **0 errors** across all word sets — see `Tests/forth2012-test-suite/src/HAYES-RESULTS.txt`. Details: **`ANS_COMPLIANCE.md`**.
 
 ## Sandbox and FLOAD (important for loading your own Forthing.fth etc.)
 
@@ -85,4 +85,4 @@ This is an experimental modern re-hosting effort.
 
 ---
 
-Built with SwiftUI • Experiment in progress (May 2026)
+Built with SwiftUI • Experiment in progress (July 2026)

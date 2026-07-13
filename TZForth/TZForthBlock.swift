@@ -13,20 +13,35 @@ extension TZForth {
 
     func captureVariableDataAddr(named name: String) -> Cell {
         let hdr = self.findWord(name)
-        guard hdr != 0 else { return 0 }
-        let cfa = self.getCFA(hdr)
-        guard self.readCell(Int(cfa)) == self.docolID,
-              self.readCell(Int(cfa) + 8) == self.litID else { return 0 }
-        return self.readCell(Int(cfa) + 16)
+        if hdr != 0 {
+            let cfa = self.getCFA(hdr)
+            if self.readCell(Int(cfa)) == self.docolID,
+               self.readCell(Int(cfa) + 8) == self.litID {
+                return self.readCell(Int(cfa) + 16)
+            }
+        }
+        return self.variableDataAddrTraversing(named: name)
     }
 
-    func initializeBlockVariablesFromSettings() {
-        self.blockSizeVarAddr = self.captureVariableDataAddr(named: "BLOCK-SIZE")
-        self.defaultBlockCountVarAddr = self.captureVariableDataAddr(named: "DEFAULT-BLOCK-COUNT")
-        self.blockBufferCountVarAddr = self.captureVariableDataAddr(named: "BLOCK-BUFFER-COUNT")
-        self.blkVarAddr = self.captureVariableDataAddr(named: "BLK")
-        self.blockFileVarAddr = self.captureVariableDataAddr(named: "BLOCK-FILE")
-        self.scrVarAddr = self.captureVariableDataAddr(named: "SCR")
+    /// Resolve VARIABLE data-field addresses from the bootstrap dictionary. Only updates
+    /// each cached addr when capture succeeds — after registerBlockWords the BLOCK-FILE
+    /// primitive shadows VARIABLE BLOCK-FILE in findWord, so re-capture must not zero addrs.
+    func captureBlockVariableAddrs() {
+        let bs = self.captureVariableDataAddr(named: "BLOCK-SIZE")
+        if bs != 0 { self.blockSizeVarAddr = bs }
+        let dbc = self.captureVariableDataAddr(named: "DEFAULT-BLOCK-COUNT")
+        if dbc != 0 { self.defaultBlockCountVarAddr = dbc }
+        let bbc = self.captureVariableDataAddr(named: "BLOCK-BUFFER-COUNT")
+        if bbc != 0 { self.blockBufferCountVarAddr = bbc }
+        let blk = self.captureVariableDataAddr(named: "BLK")
+        if blk != 0 { self.blkVarAddr = blk }
+        let bf = self.captureVariableDataAddr(named: "BLOCK-FILE")
+        if bf != 0 { self.blockFileVarAddr = bf }
+        let scr = self.captureVariableDataAddr(named: "SCR")
+        if scr != 0 { self.scrVarAddr = scr }
+    }
+
+    func syncBlockVariablesFromSettings() {
         if self.blockSizeVarAddr != 0 {
             self.writeCell(self.blockSizeVarAddr, Cell(self.settings.blockSize))
         }
@@ -45,6 +60,11 @@ extension TZForth {
         if self.scrVarAddr != 0 {
             self.writeCell(self.scrVarAddr, 0)
         }
+    }
+
+    func initializeBlockVariablesFromSettings() {
+        self.captureBlockVariableAddrs()
+        self.syncBlockVariablesFromSettings()
     }
 
     func effectiveBlockSize() -> Int {
@@ -214,6 +234,7 @@ extension TZForth {
     }
 
     func ensureCurrentBlockFile() {
+        guard self.blockFileVarAddr != 0 else { return }
         let current = Int(self.readCell(self.blockFileVarAddr))
         if current != 0, let entry = self.openBlockFiles[current], entry.isOpen {
             return
@@ -234,10 +255,15 @@ extension TZForth {
     }
 
     func currentBlockFileId() -> Int {
-        Int(self.readCell(self.blockFileVarAddr))
+        guard self.blockFileVarAddr != 0 else { return 0 }
+        return Int(self.readCell(self.blockFileVarAddr))
     }
 
     func useBlockFile(_ bid: Int) {
+        guard self.blockFileVarAddr != 0 else {
+            self.throwInvalidFileId("? USE-BLOCK-FILE: BLOCK-FILE variable not initialized")
+            return
+        }
         guard let entry = self.openBlockFiles[bid], entry.isOpen else {
             self.throwInvalidFileId("? USE-BLOCK-FILE: invalid block file")
             return
@@ -331,7 +357,7 @@ extension TZForth {
             self.openBlockFiles[bid] = entry
         }
         self.invalidateBlockBufferSlots(for: bid)
-        if self.currentBlockFileId() == bid {
+        if self.blockFileVarAddr != 0, self.currentBlockFileId() == bid {
             self.writeCell(self.blockFileVarAddr, 0)
         }
         return self.FILE_IO_SUCCESS
@@ -552,7 +578,8 @@ extension TZForth {
         self.lastBlockAccessSlotIndex = -1
         self.blockCacheSequence = 0
         self.invalidateAllBlockBufferSlots()
-        self.initializeBlockVariablesFromSettings()
+        self.captureBlockVariableAddrs()
+        self.syncBlockVariablesFromSettings()
     }
 
     // MARK: - LIST / LOAD

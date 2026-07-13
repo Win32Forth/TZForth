@@ -1109,7 +1109,8 @@ public final class TZForth {
         logicalCurrentDirectory = FileManager.default.currentDirectoryPath
 
         self.repositionPnoAndHeap()
-        self.initializeBlockVariablesFromSettings()
+        self.captureBlockVariableAddrs()
+        self.syncBlockVariablesFromSettings()
         self.registerBlockWords()
 
         // Record kernel boundary after bootstrap + block subsystem so RESET / resetToSafeState
@@ -2728,6 +2729,38 @@ public final class TZForth {
             return Int(self.readCell(cfa + 8))
         }
         return nil
+    }
+
+    /// Walk the FORTH wordlist for a VARIABLE (docol lit addr) even when a same-named
+    /// primitive shadows it in findWord (e.g. BLOCK-FILE after registerBlockWords).
+    internal func variableDataAddrTraversing(named name: String) -> Cell {
+        let upper = name.uppercased()
+        var link = self.readCell(self.LATEST)
+        var safety = 0
+        while link != 0 && safety < 10000 {
+            safety += 1
+            if !self.isValidDictionaryLink(link) { break }
+            let flagsLen = self.readByte(link + 8)
+            let namelen = Int(flagsLen & self.MASK_NAMELENGTH)
+            if namelen == upper.utf8.count {
+                var match = true
+                for (i, ch) in upper.utf8.enumerated() {
+                    if self.up(self.readByte(link + 9 + i)) != self.up(ch) {
+                        match = false
+                        break
+                    }
+                }
+                if match {
+                    let cfa = Int(self.getCFA(link))
+                    if self.readCell(cfa) == self.docolID,
+                       self.readCell(cfa + 8) == self.litID {
+                        return self.readCell(cfa + 16)
+                    }
+                }
+            }
+            link = self.readCell(link)
+        }
+        return 0
     }
 
     private func deferStorageFromXt(_ deferXt: Cell) -> Int? {

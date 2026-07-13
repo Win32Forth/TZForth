@@ -282,6 +282,30 @@ fload \(fnInnerLate.lastPathComponent)
         self.logicalCurrentDirectory = savedLog2b
         _ = fm.changeCurrentDirectoryPath(savedCwd2b)
 
+        // === Test 2b-nestedline: nested multi-line FLOAD must not advance parent line counter ===
+        resetTest()
+        let fnNestedChild = tmp.appendingPathComponent("ansval_nested_child_\(suffix).fth")
+        let fnNestedParent = tmp.appendingPathComponent("ansval_nested_parent_\(suffix).fth")
+        let fnNestedMissing = "ansval_nested_missing_\(suffix).fth"
+        do {
+            try (1...8).map { "\\ line \($0)\n" }.joined().write(to: fnNestedChild, atomically: true, encoding: String.Encoding.utf8)
+            try "fload \(fnNestedChild.lastPathComponent)\nfload \(fnNestedMissing)\n"
+                .write(to: fnNestedParent, atomically: true, encoding: String.Encoding.utf8)
+        } catch {
+            results += "TEST2b-nestedline write fail: \(error)\n"
+        }
+        collected = ""
+        _ = fm.changeCurrentDirectoryPath(tmp.path)
+        self.logicalCurrentDirectory = tmp.path
+        self.loadFile(fnNestedParent)
+        let nestedParentName = fnNestedParent.lastPathComponent
+        let citesParentLine2 = collected.contains("in \(nestedParentName) line 2:")
+        let avoidsParentLine9 = !collected.contains("in \(nestedParentName) line 9:")
+        let citesMissing = collected.contains("could not read '\(fnNestedMissing)'")
+        results += "TEST2b-nestedline: line2=\(citesParentLine2) notline9=\(avoidsParentLine9) missing=\(citesMissing) (expect true true true) out=\(collected.trimmingCharacters(in: .whitespacesAndNewlines))\n"
+        self.logicalCurrentDirectory = savedLog2b
+        _ = fm.changeCurrentDirectoryPath(savedCwd2b)
+
         // === Test 2c: DEBUG-ON/OFF in file ===
         resetTest()
         self.feedLine("FILE-ECHO OFF")

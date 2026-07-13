@@ -329,6 +329,28 @@ fload \(fnInnerLate.lastPathComponent)
     let avoidsParentFault = !collected.contains("\(parentName) line 1: ? notaword")
     print("TEST2b-faultline: child=\(citesChild) context=\(citesParentContext) notParent=\(avoidsParentFault) (expect true true true)")
 
+    // === Test 2b-nestedline: nested multi-line FLOAD must not advance parent line counter ===
+    resetTest()
+    let fnNestedChild = tmp.appendingPathComponent("ansval_nested_child_\(suffix).fth")
+    let fnNestedParent = tmp.appendingPathComponent("ansval_nested_parent_\(suffix).fth")
+    let fnNestedMissing = "ansval_nested_missing_\(suffix).fth"
+    do {
+        try (1...8).map { "\\ line \($0)\n" }.joined().write(to: fnNestedChild, atomically: true, encoding: String.Encoding.utf8)
+        try "fload \(fnNestedChild.lastPathComponent)\nfload \(fnNestedMissing)\n"
+            .write(to: fnNestedParent, atomically: true, encoding: String.Encoding.utf8)
+    } catch {
+        print("TEST2b-nestedline write fail: \(error)")
+    }
+    collected = ""
+    _ = fm.changeCurrentDirectoryPath(tmp.path)
+    forth.logicalCurrentDirectory = tmp.path
+    forth.loadFile(fnNestedParent)
+    let nestedParentName = fnNestedParent.lastPathComponent
+    let citesParentLine2 = collected.contains("in \(nestedParentName) line 2:")
+    let avoidsParentLine9 = !collected.contains("in \(nestedParentName) line 9:")
+    let citesMissing = collected.contains("could not read '\(fnNestedMissing)'")
+    print("TEST2b-nestedline: line2=\(citesParentLine2) notline9=\(avoidsParentLine9) missing=\(citesMissing) (expect true true true)")
+
     // === Test 2c: DEBUG-ON / DEBUG-OFF inside a loaded file should take effect immediately
     // for subsequent lines in *that* file (live flag change during the shared load loop).
     // We expect [DEBUG] dumps only for lines between DEBUG-ON and DEBUG-OFF.

@@ -303,6 +303,8 @@ public final class TZForth {
     internal var loadNesting = 0  // TZForthBlock.swift
     /// Current 1-based source line number while includeFileInterpret is running.
     private var fileInterpretLineNumber = 0
+    /// Saved outer line counters while a nested FLOAD/INCLUDED runs (blocktest must not advance test.fth's line).
+    private var fileInterpretLineNumberStack: [Int] = []
     /// True when SOURCE was last filled by the REFILL word (vs the FLOAD line loop).
     private var sourceLoadedByRefill = false
     /// Byte offset in the open interpreter file where the current SOURCE line begins.
@@ -318,13 +320,20 @@ public final class TZForth {
         var message: String
         var enclosingFileId: Int
         var enclosingLine: Int
+        /// True when a nested FLOAD/INCLUDED could not open its target file (no inner source to cite).
+        var isOpenFailure: Bool = false
     }
     private var fileLoadErrorSite: FileLoadErrorSite?
     private var fileLoadErrorReported = false
     /// Load label for the innermost active includeFileInterpret (FLOAD vs INCLUDED vs INCLUDE-FILE).
     private var currentIncludeLoadLabel = "INCLUDE-FILE"
-    /// Call chain of file/line for each active runInterpreter inside includeFileInterpret.
-    private var fileLoadEnclosingStack: [(fileId: Int, line: Int)] = []
+    /// Call chain of file/line/source for each active runInterpreter inside includeFileInterpret.
+    private struct FileLoadCallerFrame {
+        var fileId: Int
+        var line: Int
+        var sourceLine: String
+    }
+    private var fileLoadEnclosingStack: [FileLoadCallerFrame] = []
 
     /// True while FLOAD / INCLUDED / INCLUDE-FILE is interpreting source (nested counts included).
     /// The console host uses this to explain why typed commands may not get OK immediately.
@@ -1520,12 +1529,35 @@ public final class TZForth {
         self.fileLoadErrorReported = false
     }
 
+    private func isFileLoadOpenFailureMessage(_ message: String) -> Bool {
+        message.contains("could not read") || message.contains("could not open")
+    }
+
+    private func formatLoadErrorLead(_ message: String) -> String {
+        let trimmed = message.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.hasPrefix("?") { return trimmed }
+        return "? \(trimmed)"
+    }
+
     /// Emit a load-time fault with filename, line number, and the offending source line.
-    private func reportFileLoadError(fileId: Int, line: Int, sourceLine: String, loadLabel: String, message: String, enclosingFileId: Int = 0, enclosingLine: Int = 0) {
+    private func reportFileLoadError(fileId: Int, line: Int, sourceLine: String, loadLabel: String, message: String, enclosingFileId: Int = 0, enclosingLine: Int = 0, isOpenFailure: Bool = false) {
         // Enclosing CATCH should receive the throw code without duplicate load diagnostics.
         if !self.exceptionFrames.isEmpty { return }
-        let name = self.fileDisplayName(forFileId: fileId)
         let trimmed = sourceLine.trimmingCharacters(in: .whitespacesAndNewlines)
+        if isOpenFailure {
+            if !message.isEmpty {
+                self.tell("\(self.formatLoadErrorLead(message))\n")
+            }
+            if enclosingFileId >= 2, enclosingLine > 0 {
+                let outerName = self.fileDisplayName(forFileId: enclosingFileId)
+                self.tell("    in \(outerName) line \(enclosingLine):\n")
+            }
+            if !trimmed.isEmpty {
+                self.tell("    \(trimmed)\n")
+            }
+            return
+        }
+        let name = self.fileDisplayName(forFileId: fileId)
         if !message.isEmpty {
             self.tell("? \(name) line \(line): \(message)\n")
         }
@@ -1551,7 +1583,8 @@ public final class TZForth {
                 loadLabel: site.loadLabel,
                 message: site.message,
                 enclosingFileId: site.enclosingFileId,
-                enclosingLine: site.enclosingLine
+                enclosingLine: site.enclosingLine,
+                isOpenFailure: site.isOpenFailure
             )
             self.fileLoadErrorReported = true
             return
@@ -2370,6 +2403,9 @@ public final class TZForth {
         self.inSlashSlashComment = false
         defer {
             if loadNesting > 0 { loadNesting -= 1 }
+            if !self.fileInterpretLineNumberStack.isEmpty {
+                self.fileInterpretLineNumber = self.fileInterpretLineNumberStack.removeLast()
+            }
             popInputSourceFrame()
             // Only clear when the outermost load ends; nested INCLUDED must not clobber the
             // parent's interpreterInputFileId (Hayes filetest SI2 REFILL after REQUIRED).
@@ -2400,6 +2436,7 @@ public final class TZForth {
             }
         }
         self.midFileLoadAborted = false
+        self.fileInterpretLineNumberStack.append(self.fileInterpretLineNumber)
         self.fileInterpretLineNumber = 0
         while refillFromFile(fileId) {
             if self.floadLinesToSkip > 0 {
@@ -2424,7 +2461,7 @@ public final class TZForth {
                 // twice (once here, again on the next refill after the file rewind).
                 self.floadExtraLinesConsumed = 0
                 self.countFloadInterpreterRefills = true
-                self.fileLoadEnclosingStack.append((fileId: fileId, line: lineNumber))
+                self.fileLoadEnclosingStack.append(FileLoadCallerFrame(fileId: fileId, line: lineNumber, sourceLine: raw))
                 self.pushInputSourceFrame()
                 runInterpreter()
                 self.countFloadInterpreterRefills = false
@@ -8942,12 +8979,24 @@ public final class TZForth {
         if self.isInterpretingLoadedFile() {
             // Defer to reportFileLoadError so the user sees filename + line number.
             self.fileLoadPendingErrorMessage = message
-            if self.interpreterInputFileId >= 2 {
-                let enclosing: (fileId: Int, line: Int)
+            if self.isFileLoadOpenFailureMessage(message), let caller = self.fileLoadEnclosingStack.last {
+                let loadLabel = message.contains("INCLUDED") ? "INCLUDED" : "FLOAD"
+                self.fileLoadErrorSite = FileLoadErrorSite(
+                    fileId: 0,
+                    line: 0,
+                    sourceLine: caller.sourceLine,
+                    loadLabel: loadLabel,
+                    message: message,
+                    enclosingFileId: caller.fileId,
+                    enclosingLine: caller.line,
+                    isOpenFailure: true
+                )
+            } else if self.interpreterInputFileId >= 2 {
+                let enclosing: FileLoadCallerFrame
                 if self.fileLoadEnclosingStack.count >= 2 {
                     enclosing = self.fileLoadEnclosingStack[self.fileLoadEnclosingStack.count - 2]
                 } else {
-                    enclosing = (0, 0)
+                    enclosing = FileLoadCallerFrame(fileId: 0, line: 0, sourceLine: "")
                 }
                 self.fileLoadErrorSite = FileLoadErrorSite(
                     fileId: Int(self.interpreterInputFileId),

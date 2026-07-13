@@ -884,6 +884,29 @@ fload \(fnInnerLate.lastPathComponent)
         ansTest("RESTORE-INPUT fail", "SAVE-INPUT 2DROP 0 RESTORE-INPUT .", "-1")
         ansTest("SAVE-INPUT nested", "SAVE-INPUT S\" 11 .\" EVALUATE RESTORE-INPUT . 22 .", "0 22")
         ansTest("FILE-ECHO default", "FILE-ECHO @ .", "0")
+        ansTest("WARNING default", "WARNING @ .", "-1")
+        resetTest()
+        collected = ""
+        self.feedLine(": TZWRDEF1 1 ;")
+        self.feedLine(": TZWRDEF1 2 ;")
+        ansTotal += 1
+        if collected.contains("TZWRDEF1 isn't unique") {
+            ansPassed += 1
+            results += "TEST6 WARNING redef: pass\n"
+        } else {
+            results += "TEST6 WARNING redef: FAIL out='\(collected.trimmingCharacters(in: .whitespacesAndNewlines))'\n"
+        }
+        collected = ""
+        self.feedLine("WARNING OFF")
+        self.feedLine(": TZWRDEF1 3 ;")
+        ansTotal += 1
+        if !collected.contains("isn't unique") {
+            ansPassed += 1
+            results += "TEST6 WARNING off: pass\n"
+        } else {
+            results += "TEST6 WARNING off: FAIL out='\(collected.trimmingCharacters(in: .whitespacesAndNewlines))'\n"
+        }
+        self.feedLine("WARNING ON")
         resetTest()
         _ = fm.changeCurrentDirectoryPath(tmp.path)
         self.logicalCurrentDirectory = tmp.path

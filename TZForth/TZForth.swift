@@ -495,6 +495,8 @@ public final class TZForth {
 
     // Address of the FILE-ECHO variable's data cell (populated at bootstrap).
     private var fileEchoAddr: Cell = 0
+    /// Data cell for kernel VARIABLE WARNING (F-PC style redefinition warnings when non-zero).
+    private var warningAddr: Cell = 0
     /// Set when a colon definition stores 0 into >IN (!); outer offset is restored after it returns.
     private var inVarZeroedInColon = false
     /// Set when @ on >IN runs after inVarZeroedInColon (t6in); suppresses outer-line rescan on return.
@@ -2795,7 +2797,23 @@ public final class TZForth {
         writeCell(DP_ADDR, h + 1)
     }
 
+    private func warningsEnabled() -> Bool {
+        if self.warningAddr == 0 { return true }
+        return self.readCell(self.warningAddr) != 0
+    }
+
+    /// F-PC %ALREADY_DEF: warn when a visible name is defined again (suppressed when WARNING is off).
+    private func maybeWarnRedefinition(of name: String) {
+        guard !name.isEmpty, self.warningsEnabled() else { return }
+        if self.findWord(name) != 0 {
+            self.tell("\n\(name) isn't unique\n")
+        }
+    }
+
     internal func createWord(name: String, immediate: Bool) {
+        if !name.isEmpty {
+            self.maybeWarnRedefinition(of: name)
+        }
         // Dictionary headers must be cell-aligned (Hayes core.fr: HERE 1 ALLOT then CONSTANT).
         alignHere()
         let newLatest = readCell(DP_ADDR)
@@ -8002,6 +8020,8 @@ public final class TZForth {
         // Created via the VARIABLE word so it appears in WORDS / SEE / FORGET etc.
         // Default is 0 (off) because the data cell lives in the zeroed memory area.
         self.feedLine("VARIABLE FILE-ECHO")
+        self.feedLine("VARIABLE WARNING")
+        self.feedLine("-1 WARNING !")
         self.feedLine("VARIABLE INCLUDED-NAMES")
         self.feedLine("VARIABLE BLOCK-SIZE")
         self.feedLine("VARIABLE DEFAULT-BLOCK-COUNT")
@@ -8029,6 +8049,20 @@ public final class TZForth {
             // Fallback (should never happen): allocate a cell now.
             self.fileEchoAddr = self.readCell(self.DP_ADDR)
             self.writeCell(self.DP_ADDR, self.fileEchoAddr + 8)
+        }
+
+        self.warningAddr = 0
+        let hdrWarn = self.findWord("WARNING")
+        if hdrWarn != 0 {
+            let cfa = self.getCFA(hdrWarn)
+            if self.readCell(Int(cfa)) == self.docolID {
+                if self.readCell(Int(cfa) + 8) == self.litID {
+                    self.warningAddr = self.readCell(Int(cfa) + 16)
+                }
+            }
+        }
+        if self.warningAddr != 0 {
+            self.writeCell(self.warningAddr, -1)
         }
 
         let hdrIn = self.findWord("INCLUDED-NAMES")
@@ -9411,6 +9445,20 @@ public final class TZForth {
             }
         }
         // If still 0 (shouldn't happen), FLOAD will just treat echo as off; safe.
+
+        self.warningAddr = 0
+        let hdrWarn = self.findWord("WARNING")
+        if hdrWarn != 0 {
+            let cfa = self.getCFA(hdrWarn)
+            if self.readCell(Int(cfa)) == self.docolID {
+                if self.readCell(Int(cfa) + 8) == self.litID {
+                    self.warningAddr = self.readCell(Int(cfa) + 16)
+                }
+            }
+        }
+        if self.warningAddr != 0 {
+            self.writeCell(self.warningAddr, -1)
+        }
 
         self.includedNamesVarAddr = 0
         let hdrIn = self.findWord("INCLUDED-NAMES")

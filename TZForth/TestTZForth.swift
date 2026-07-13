@@ -1199,6 +1199,7 @@ fload \(fnInnerLate.lastPathComponent)
     print("=== TZForth Programming-Tools assembler (CODE ;CODE RET noop) ===")
     ansTest("CODE noop", "CODE tnoop ;CODE 1 tnoop .", "1")
     ansTest("CODE RET", "CODE tnoop2 RET ;CODE 2 tnoop2 .", "2")
+    ansTest("SEE CODE", "CODE TSEECODE RET ;CODE SEE TSEECODE", "CODE TSEECODE RET ;CODE")
 
     print("=== TZForth Block subsystem (ANS Block + TZ ext .blk words; TZ ext = non-ANS) ===")
     ansTest("TZ ext CREATE-BLOCK-FILE", "S\" \(blkVol)\" 8 CREATE-BLOCK-FILE SWAP . .", "0")

@@ -8985,20 +8985,18 @@ public final class TZForth {
     }
 
     /// Shared decompiler used by both SEE and HELP.
-    /// Prints the classic ": NAME body ;" or primitive form.
+    /// Prints ": NAME body ;", "CODE NAME body ;CODE", or primitive form.
     private func printDecompiled(name: String, hdr: Cell) {
-        self.tell(": " + name + " ")
-
         let cfa = self.getCFA(hdr)
         var ip = Int(cfa)
 
         let first = self.readCell(ip)
+        let isCodeWord = first == self.codeEntryID
 
-        if first == self.docolID || first == self.codeEntryID {
-            ip += 8
-            if first == self.codeEntryID {
-                self.tell("CODE ")
-            }
+        if isCodeWord {
+            self.tell("CODE " + name + " ")
+        } else if first == self.docolID {
+            self.tell(": " + name + " ")
         } else if first < Cell(self.MAX_BUILTIN_ID) {
             if let pname = self.primitiveNames[first] {
                 self.tell(pname + " (primitive) ;\n")
@@ -9007,8 +9005,12 @@ public final class TZForth {
             }
             return
         } else {
-            self.tell("??? ;\n")
+            self.tell("???\n")
             return
+        }
+
+        if first == self.docolID || first == self.codeEntryID {
+            ip += 8
         }
 
         var safety = 0
@@ -9022,6 +9024,9 @@ public final class TZForth {
             ip += 8
 
             if cell == self.exitID {
+                if isCodeWord {
+                    self.tell("RET ")
+                }
                 break
             }
 
@@ -9187,7 +9192,11 @@ public final class TZForth {
             }
         }
 
-        self.tell(";\n")
+        if isCodeWord {
+            self.tell(";CODE\n")
+        } else {
+            self.tell(";\n")
+        }
     }
 
     // MARK: - Public helpers for the console / education

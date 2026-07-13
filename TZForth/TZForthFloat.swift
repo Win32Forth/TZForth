@@ -274,6 +274,16 @@ extension TZForth {
             self.tell(self.formatFloatOutput(self.fpop()))
         }
 
+        _ = self.register(".FS") {
+            let depth = Int(self.fspGet() - 1)
+            self.tell("<\(depth)> ")
+            for i in 0..<depth {
+                let val = self.readFloat(self.fstackBase + i * 8)
+                self.tell(self.formatFloatOutput(val))
+            }
+            self.putkey(10)
+        }
+
         _ = self.register("FLITERAL", immediate: true) {
             if self.readCell(self.STATE) == 0 {
                 self.throwCompileOnly("? FLITERAL only while compiling")

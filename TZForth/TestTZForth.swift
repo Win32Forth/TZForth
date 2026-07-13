@@ -6,7 +6,7 @@
 //  How to run (note: multi-file swift script needs concatenation on current Swift):
 //
 //      cd /path/to/TZForth
-//      cat TZForth/TZForth.swift TZForth/TZForthSettings.swift TZForth/TZForthBlock.swift TZForth/TZForthXChar.swift TZForth/TZForthTests.swift TZForth/TestTZForth.swift > /tmp/combined.swift
+//      cat TZForth/TZForth.swift TZForth/TZForthSettings.swift TZForth/TZForthBlock.swift TZForth/TZForthXChar.swift TZForth/TZForthAssembler.swift TZForth/TZForthTests.swift TZForth/TestTZForth.swift > /tmp/combined.swift
 //      swift /tmp/combined.swift
 //
 //      # For automated tests (\\ block comments, \S, FLOAD behavior + 357 ANS spot-checks):
@@ -623,7 +623,7 @@ fload \(fnInnerLate.lastPathComponent)
     // Dictionary / introspection (current words)
     ansTest(">HEADER >NFA ID.", "VARIABLE t6v ' t6v >NFA COUNT TYPE", "t6v")
     ansTest("' CFA >HEADER", "' DUP >HEADER 0<> .", "-1")
-    ansTest(">XID DUP", "' DUP >XID .", "8")
+    ansTest(">XID DUP", "' DUP >XID .", "9")
     ansTest("['] CFA", ": t6xt ['] DUP ; ' DUP t6xt = .", "-1")
     ansTest("ID.", "' t6v ID.", "t6v")
     ansTest("HERE (value) DP", "HERE DP @ = .", "-1")  // they should match per current impl
@@ -1195,6 +1195,10 @@ fload \(fnInnerLate.lastPathComponent)
     ansTest("ENVIRONMENT? XCHAR-ENCODING text", "S\" XCHAR-ENCODING\" ENVIRONMENT? DROP S\" UTF-8\" COMPARE 0= .", "-1")
     ansTest("ENVIRONMENT? MAX-XCHAR", "S\" MAX-XCHAR\" ENVIRONMENT? DROP HEX U. DECIMAL", "10FFFF")
     ansTest("ENVIRONMENT? XCHAR-MAXMEM", "S\" XCHAR-MAXMEM\" ENVIRONMENT? DROP .", "4")
+
+    print("=== TZForth Programming-Tools assembler (CODE ;CODE RET noop) ===")
+    ansTest("CODE noop", "CODE tnoop ;CODE 1 tnoop .", "1")
+    ansTest("CODE RET", "CODE tnoop2 RET ;CODE 2 tnoop2 .", "2")
 
     print("=== TZForth Block subsystem (ANS Block + TZ ext .blk words; TZ ext = non-ANS) ===")
     ansTest("TZ ext CREATE-BLOCK-FILE", "S\" \(blkVol)\" 8 CREATE-BLOCK-FILE SWAP . .", "0")

@@ -85,7 +85,7 @@ public final class TZForth {
     private let MAX_BUILTIN_ID = 512    // primitive dispatch table size (IDs 0 ..< 512)
 
     private let FLAG_IMMEDIATE: UInt8 = 0x80
-    private let FLAG_HIDDEN: UInt8 = 0x40
+    internal let FLAG_HIDDEN: UInt8 = 0x40
     private let MASK_NAMELENGTH: UInt8 = 0x1F
 
     // MARK: - Cell model (64-bit Int on Apple Silicon)
@@ -108,7 +108,7 @@ public final class TZForth {
     internal var IN:       Int { 48 }   // >IN ( -- addr )  current offset in input source; internal for tests
     internal var CURRENT: Int { 64 } // compilation wordlist head-cell (GET-CURRENT / SET-CURRENT); internal for test harness snapshots
 
-    private let MAX_VOCABS = 8
+    internal let MAX_VOCABS = 8
     internal var searchOrder: [Cell] = []  // array of wl head-cell-addrs; [0] is top (first searched)
 
     private var stackBase: Int
@@ -450,7 +450,15 @@ public final class TZForth {
 
     // ID of critical words we need during bootstrap
     internal var docolID: Cell = 0  // TZForthBlock.swift
-    private var exitID: Cell = 0
+    internal var exitID: Cell = 0   // TZForthAssembler.swift
+    /// Marker at CFA of CODE definitions (thread body at cfa+8, like DOCOL for colon words).
+    internal var codeEntryID: Cell = 0
+    /// True while a CODE … ;CODE assembler definition is open.
+    internal var assemblerCompileActive = false
+    /// Header link field of the CODE definition being assembled.
+    internal var codeDefinitionHeader: Cell = 0
+    /// True when CODE prepended ASSEMBLER to the search order.
+    internal var assemblerSearchPushed = false
     internal var litID: Cell = 0  // TZForthBlock.swift
     private var emitID: Cell = 0
     private var dotQuoteID: Cell = 0   // runtime ID for (." ) used by . " to embed compact string literals
@@ -475,8 +483,8 @@ public final class TZForth {
     private var zeroBranchID: Cell = 0
 
     // CREATE / DOES> support (ANS 2012)
-    private var createRuntimeID: Cell = 0
-    private var dodoesID: Cell = 0
+    internal var createRuntimeID: Cell = 0
+    internal var dodoesID: Cell = 0
     private var doesPatchID: Cell = 0
     private var synonymID: Cell = 0
     private var compileCfaID: Cell = 0
@@ -795,8 +803,9 @@ public final class TZForth {
         ("CS-PICK", "( u -- )",           "pick uth control-flow-stack item during compilation (immediate)"),
         ("CS-ROLL", "( u -- )",           "roll uth control-flow-stack item during compilation (immediate)"),
         ("AHEAD",   "( -- )",             "unresolved forward branch (immediate; use with THEN)"),
-        ("CODE",    "( -- ) name",        "start assembler definition (not implemented)"),
-        (";CODE",   "( -- )",             "end assembler definition (not implemented)"),
+        ("CODE",    "( -- ) name",        "start assembler definition (TZForth threaded CODE)"),
+        (";CODE",   "( -- )",             "end assembler definition"),
+        ("RET",     "( -- )",             "assembler: compile EXIT into CODE body (ASSEMBLER vocab)"),
         ("[IF]",    "( flag -- )",        "conditional compilation (immediate; Core Ext)"),
         ("[ELSE]",  "( -- )",             "else branch for [IF] (immediate)"),
         ("[THEN]",  "( -- )",             "end [IF] (immediate)"),
@@ -1147,8 +1156,9 @@ public final class TZForth {
         self.syncBlockVariablesFromSettings()
         self.registerBlockWords()
         self.registerXCharWords()
+        self.registerAssemblerWords()
 
-        // Record kernel boundary after bootstrap + block/block/xchar subsystems so RESET / resetToSafeState
+        // Record kernel boundary after bootstrap + block/xchar/assembler subsystems so RESET / resetToSafeState
         // retain ANS Block and TZForth .blk extension words (CREATE/OPEN/USE-BLOCK-FILE, etc.).
         kernelLatest = readCell(LATEST)
         kernelHere = readCell(DP_ADDR)
@@ -2639,7 +2649,7 @@ public final class TZForth {
         return Cell(max(0, limit - here))
     }
 
-    private func alignHere() {
+    internal func alignHere() {
         var h = readCell(DP_ADDR)
         while (h & 7) != 0 {
             writeByte(h, 0)
@@ -2662,7 +2672,7 @@ public final class TZForth {
         writeCell(DP_ADDR, h + 1)
     }
 
-    private func createWord(name: String, immediate: Bool) {
+    internal func createWord(name: String, immediate: Bool) {
         // Dictionary headers must be cell-aligned (Hayes core.fr: HERE 1 ALLOT then CONSTANT).
         alignHere()
         let newLatest = readCell(DP_ADDR)
@@ -2859,7 +2869,7 @@ public final class TZForth {
     /// First cell at a CFA when it is a kernel primitive dispatch ID; nil for colon/CREATE words.
     private func primitiveID(atCFA cfa: Cell) -> Cell? {
         let first = readCell(Int(cfa))
-        if first < Cell(MAX_BUILTIN_ID) && first != docolID && first != createRuntimeID && first != dodoesID && first != synonymID {
+        if first < Cell(MAX_BUILTIN_ID) && first != docolID && first != codeEntryID && first != createRuntimeID && first != dodoesID && first != synonymID {
             return first
         }
         return nil
@@ -2868,7 +2878,8 @@ public final class TZForth {
     /// IP at which to start threading a word's CFA (skip DOCOL marker only).
     private func threadedEntryIP(forCFA cfa: Cell) -> Int {
         let addr = Int(cfa)
-        if self.readCell(addr) == self.docolID { return addr + 8 }
+        let first = self.readCell(addr)
+        if first == self.docolID || first == self.codeEntryID { return addr + 8 }
         return addr
     }
 
@@ -3606,6 +3617,20 @@ public final class TZForth {
         return id
     }
 
+    /// Register a primitive into a specific word list (e.g. ASSEMBLER vocab RET).
+    internal func installVocabPrimitive(_ name: String, wordlist wid: Cell, immediate: Bool = false, _ body: @escaping () -> Void) -> Cell {
+        let savedCurrent = self.readCell(self.CURRENT)
+        self.writeCell(self.CURRENT, wid)
+        let id = Cell(self.primitives.count)
+        self.primitives.append(body)
+        self.primitiveNames[id] = name.uppercased()
+        self.createWord(name: name, immediate: immediate)
+        self.writeCellHere(id)
+        self.writeCellHere(self.exitID)
+        self.writeCell(self.CURRENT, savedCurrent)
+        return id
+    }
+
     private func registerCorePrimitives() {
         // We must define EXIT and DOCOL first because everything else uses them.
 
@@ -3624,6 +3649,12 @@ public final class TZForth {
         primitives.append {
             self.endLocalFrame()
             self.ip = self.rpop()
+        }
+
+        // CODE entry marker (first cell at CFA of CODE definitions; body at cfa+8).
+        self.codeEntryID = Cell(primitives.count)
+        primitives.append {
+            self.ip = Int(self.currentCodeAddr) + 8
         }
 
         // LIT
@@ -6644,13 +6675,7 @@ public final class TZForth {
             self.controlFlowStack.append(placeholderAddr)
         }
 
-        // Assembler words — stubs (no machine-code assembler in TZForth yet).
-        _ = register("CODE") {
-            self.throwIllegalArgument("? CODE assembler not implemented")
-        }
-        _ = register(";CODE") {
-            self.throwIllegalArgument("? ;CODE assembler not implemented")
-        }
+        // CODE / ;CODE / RET — registered in registerAssemblerWords() after bootstrap (needs ASSEMBLER vocab).
         // [IF] / [ELSE] / [THEN] — conditional compilation and interpret-time conditional execution.
         _ = register("[IF]", immediate: true) {
             let compiling = self.isActiveCompilation()
@@ -8844,13 +8869,13 @@ public final class TZForth {
         if firstCell < Cell(MAX_BUILTIN_ID), let body = primitives[Int(firstCell)] {
             // For primitives that are not DOCOL we just call them.
             // DOCOL is special: it sets up threading.
-            if firstCell == docolID {
-                // This is a colon definition. Push return address and start threading.
+            if firstCell == docolID || firstCell == codeEntryID {
+                // Colon definition (DOCOL) or CODE definition (codeEntryID): thread the body.
                 let stopRsp = Int(self.rspGet())
                 rpush(ip)
                 ip = self.threadedEntryIP(forCFA: cfa)
                 if ip < 0 || ip + 8 > memory.count {
-                    throwInvalidToken("? Bad colon definition target (cfa=\(cfa))")
+                    throwInvalidToken("? Bad definition target (cfa=\(cfa))")
                 } else {
                     innerThread(stopWhenRspAtMost: stopRsp)
                     if throwActive { return }
@@ -8969,8 +8994,11 @@ public final class TZForth {
 
         let first = self.readCell(ip)
 
-        if first == self.docolID {
+        if first == self.docolID || first == self.codeEntryID {
             ip += 8
+            if first == self.codeEntryID {
+                self.tell("CODE ")
+            }
         } else if first < Cell(self.MAX_BUILTIN_ID) {
             if let pname = self.primitiveNames[first] {
                 self.tell(pname + " (primitive) ;\n")

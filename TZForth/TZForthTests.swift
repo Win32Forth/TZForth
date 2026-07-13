@@ -563,7 +563,7 @@ fload \(fnInnerLate.lastPathComponent)
         ansTest(">HEADER >NFA ID.", "VARIABLE t6v ' t6v >NFA COUNT TYPE", "t6v")
         ansTest("ID.", "' t6v ID.", "t6v")
         ansTest("' CFA >HEADER", "' DUP >HEADER 0<> .", "-1")
-        ansTest(">XID DUP", "' DUP >XID .", "8")
+        ansTest(">XID DUP", "' DUP >XID .", "9")
         ansTest("['] CFA", ": t6xt ['] DUP ; ' DUP t6xt = .", "-1")
         ansTest("HERE (value) DP", "HERE DP @ = .", "-1")
         ansTest("LATEST", "LATEST @ 0= 0= .", "-1")
@@ -1133,6 +1133,10 @@ fload \(fnInnerLate.lastPathComponent)
         ansTest("ENVIRONMENT? XCHAR-ENCODING text", "S\" XCHAR-ENCODING\" ENVIRONMENT? DROP S\" UTF-8\" COMPARE 0= .", "-1")
         ansTest("ENVIRONMENT? MAX-XCHAR", "S\" MAX-XCHAR\" ENVIRONMENT? DROP HEX U. DECIMAL", "10FFFF")
         ansTest("ENVIRONMENT? XCHAR-MAXMEM", "S\" XCHAR-MAXMEM\" ENVIRONMENT? DROP .", "4")
+
+        results += "=== TZForth Programming-Tools assembler (CODE ;CODE RET noop) ===\n"
+        ansTest("CODE noop", "CODE tnoop ;CODE 1 tnoop .", "1")
+        ansTest("CODE RET", "CODE tnoop2 RET ;CODE 2 tnoop2 .", "2")
 
         results += "=== TZForth Block subsystem (ANS Block + TZ ext .blk words; TZ ext = non-ANS) ===\n"
         ansTest("TZ ext CREATE-BLOCK-FILE", "S\" \(blkVol)\" 8 CREATE-BLOCK-FILE SWAP . .", "0")

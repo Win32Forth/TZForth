@@ -11,9 +11,9 @@ TEST2b post-slash exec: saw123=true out=123 OK
 TEST2b-include: echopre=true echopost=false sawEcho=true
 TEST2b-repl: prebatch=true postbatch=false (expect true false)
 TEST2b-err: shouldnot=false line1=true (expect false true) out=true verbose !
-? ansval_errstop_0C8AEAD1.fth line 1: ? verbose
+? ansval_errstop_839AFB85.fth line 1: ? verbose
     true verbose !
-? FLOAD of ansval_errstop_0C8AEAD1.fth aborted at line 1
+? FLOAD of ansval_errstop_839AFB85.fth aborted at line 1
 TEST2b-err-catch: caught=true out=OK
 -13  ? THROW 27 OK
 TEST2b-nested: before=true inner=true neverinner=false after=true neverouter=false (expect true true false true false)
@@ -384,6 +384,9 @@ TEST6 ENVIRONMENT? XCHAR-ENCODING len: pass
 TEST6 ENVIRONMENT? XCHAR-ENCODING text: pass
 TEST6 ENVIRONMENT? MAX-XCHAR: pass
 TEST6 ENVIRONMENT? XCHAR-MAXMEM: pass
+=== TZForth Programming-Tools assembler (CODE ;CODE RET noop) ===
+TEST6 CODE noop: pass
+TEST6 CODE RET: pass
 === TZForth Block subsystem (ANS Block + TZ ext .blk words; TZ ext = non-ANS) ===
 TEST6 TZ ext CREATE-BLOCK-FILE: pass
 TEST6 TZ ext OPEN-BLOCK-FILE: pass
@@ -403,6 +406,6 @@ TEST6 Block LIST/SCR: pass
 TEST6 Block LOAD: pass
 TEST6 Block THRU: pass
 TEST6 Block BLK: pass
-TEST6 ANS core summary: 357/357 passed
+TEST6 ANS core summary: 359/359 passed
 
 === ANS-VALIDATE complete ===

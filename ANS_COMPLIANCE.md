@@ -2,7 +2,7 @@
 
 This document tracks implementation status of the 2012 ANS Forth Standard word sets in TZForth (Swift port of the lbForth model). Generated from codebase inspection (`TZForth/TZForth.swift`, `TestTZForth.swift`, `TZForthTests.swift`).
 
-Last update: Hayes forth2012-test-suite **0 errors** (Block included); Facility + Block + Extended-Character complete on TZForth host; FTEST / `ANS-VALIDATE` **357/357**.
+Last update: Hayes forth2012-test-suite **0 errors** (Block included); Facility + Block + Extended-Character + Programming-Tools CODE complete on TZForth host; FTEST / `ANS-VALIDATE` **359/359**.
 
 ## Summary
 
@@ -11,7 +11,7 @@ Last update: Hayes forth2012-test-suite **0 errors** (Block included); Facility 
 | **Core (6.1)** | Complete — all required words implemented with FTEST coverage |
 | **Core Ext (6.2)** | Complete — all standard Core Ext words implemented |
 | **Search-Order (16)** | Complete — 16.6.1 + 16.6.2; `SEARCH-WORDLIST`, `ENVIRONMENT?` `WORDLISTS` (8) |
-| **Programming-Tools** | Partial — 15.6.1/15.6.2 words below; assembler `CODE`/`;CODE` stubbed |
+| **Programming-Tools** | Complete — 15.6.1/15.6.2; minimal threaded `CODE`/`;CODE` with `RET` (ASSEMBLER vocab) |
 | **File-Access (11)** | Complete — 11.6.1 + 11.6.2; Hayes filetest 0 errors |
 | **Exception (9)** | Complete — `CATCH`, `THROW`, `.ERROR`; kernel faults CATCH-able; `ABORT`/`ABORT"` → `-1`/`-2` |
 | **String (17)** | Complete — 17.6.1 + 17.6.2 (`REPLACES`, `SUBSTITUTE`, `UNESCAPE`); Hayes stringtest 0 errors |
@@ -23,7 +23,7 @@ Last update: Hayes forth2012-test-suite **0 errors** (Block included); Facility 
 | **Extended-Character (18)** | Complete — UTF-8 codec; shadow `CHAR`/`[CHAR]`/`PARSE`; `XEMIT`/`XKEY`/`XKEY?`/`EKEY>XCHAR`; `XHOLD`; `XC-WIDTH`/`X-WIDTH`; ENVIRONMENT? queries |
 | **Other optional sets** | Mostly absent — Float, etc. |
 
-FTEST harness: run with `FTEST=1 swift /tmp/combined.swift` (concatenate `TZForth.swift`, `TZForthSettings.swift`, `TZForthBlock.swift`, `TZForthXChar.swift`, `TZForthTests.swift`, `TestTZForth.swift`). Current count: **357/357** TEST6 spot-checks plus block-comment / FLOAD / INCLUDE load tests. In-app **`ANS-VALIDATE`** runs the same suite and overwrites **`TZForth/ANS-VALIDATE.txt`** (tracked baseline in the Xcode project; excluded from the app bundle so it stays writable). Validation restores dictionary bytes and interpret-session state (`evaluateNesting`, input-source stack, block subsystem) so the REPL still prints **`OK`** after `ANS-VALIDATE` or Hayes `fload test`. During validation, `onMsDelayRequested` is cleared so **`MS`** uses the engine `Thread.sleep` fallback (synchronous `feedLine` / `ansTest` output checks).
+FTEST harness: run with `FTEST=1 swift /tmp/combined.swift` (concatenate `TZForth.swift`, `TZForthSettings.swift`, `TZForthBlock.swift`, `TZForthXChar.swift`, `TZForthAssembler.swift`, `TZForthTests.swift`, `TestTZForth.swift`). Current count: **359/359** TEST6 spot-checks plus block-comment / FLOAD / INCLUDE load tests. In-app **`ANS-VALIDATE`** runs the same suite and overwrites **`TZForth/ANS-VALIDATE.txt`** (tracked baseline in the Xcode project; excluded from the app bundle so it stays writable). Validation restores dictionary bytes and interpret-session state (`evaluateNesting`, input-source stack, block subsystem) so the REPL still prints **`OK`** after `ANS-VALIDATE` or Hayes `fload test`. During validation, `onMsDelayRequested` is cleared so **`MS`** uses the engine `Thread.sleep` fallback (synchronous `feedLine` / `ansTest` output checks).
 
 ## Core (6.1) — Complete
 
@@ -258,9 +258,9 @@ ANS word set 13.6.1 and extension 13.6.2. Locals are searched before the diction
 
 `TO name` works for locals during compilation. Minimum **32** locals per definition (`ENVIRONMENT?` `#LOCALS`). FTEST covers `LOCALS|`, `{:`, `TO`, and `DO`/`LOOP`.
 
-## Programming-Tools (15) — Partial
+## Programming-Tools (15) — Complete
 
-Hayes **toolstest.fth** subset (implemented words only): **0 errors**. Remaining ANS gap: `CODE`/`;CODE` (assembler) stubbed.
+Hayes **toolstest.fth** subset (implemented words only): **0 errors**. TZForth implements a **minimal threaded assembler** (not machine code): `CODE`/`;CODE` build definitions whose CFA holds a `codeEntry` marker and threaded body; `RET` in the **ASSEMBLER** vocabulary compiles `EXIT`; `;CODE` appends `EXIT` when the body is empty (noop). FTEST covers noop and explicit `RET`.
 
 ANS words implemented from 15.6.1 / extensions:
 
@@ -281,9 +281,11 @@ ANS words implemented from 15.6.1 / extensions:
 | `N>R` / `NR>` | Block transfer between data and return stacks |
 | `CS-PICK` / `CS-ROLL` | Control-flow stack = data stack during compilation |
 | `AHEAD` | Unconditional forward branch placeholder (with `THEN`) |
-| `EDITOR` / `ASSEMBLER` | Empty vocabularies (Search-Order stubs) |
+| `EDITOR` / `ASSEMBLER` | Vocabs for search order; **ASSEMBLER** holds `RET` |
+| `CODE` / `;CODE` | Threaded CODE definitions (TZForth model; see above) |
+| `RET` | Assembler vocab — compile `EXIT` into open CODE body |
 
-`[IF]` / `[ELSE]` / `[THEN]` also satisfy Core Ext conditional compilation. Stubbed (error at use): `CODE`, `;CODE`.
+`[IF]` / `[ELSE]` / `[THEN]` also satisfy Core Ext conditional compilation.
 
 ## Dictionary introspection (fig-style extensions)
 
@@ -300,7 +302,7 @@ TZForth exposes the linked-list header layout for debugging (not ANS-standard; p
 
 Compiled colon bodies still store **compact primitive IDs** for kernel words; use `>XID` to map cfa → dispatch ID. `COMPILE,` and `[']` accept cfa from `'`.
 
-Example: `' DUP >HEADER 32 DUMP` · `' DUP H.` · `' DUP >XID .` → `8`.
+Example: `' DUP >HEADER 32 DUMP` · `' DUP H.` · `' DUP >XID .` → primitive dispatch ID (implementation-defined).
 
 ## TZForth-specific extensions (non-ANS)
 
@@ -376,11 +378,10 @@ FTEST / `ANS-VALIDATE` cover codec, memory/string words, shadow parsing, I/O, pi
 Not implemented (no current plan unless requested):
 
 - **Float**
-- **Programming-Tools** assembler (`CODE`, `;CODE`)
 
 ## Recommendations
 
-- TZForth is highly functional for classic Forth sources, REPL, sandboxed `FLOAD`/`EDIT`/`CHDIR`, Hayes forth2012 validation (**0 errors**, Block included), FTEST / `ANS-VALIDATE` (**357/357**), file-backed Block (`.blk`), UTF-8 Extended-Character, and ANS File-Access file I/O / `INCLUDED`.
-- Next logical step (if desired): **Float** or a working **assembler** (`CODE`/`;CODE`).
+- TZForth is highly functional for classic Forth sources, REPL, sandboxed `FLOAD`/`EDIT`/`CHDIR`, Hayes forth2012 validation (**0 errors**, Block included), FTEST / `ANS-VALIDATE`, file-backed Block (`.blk`), UTF-8 Extended-Character, minimal threaded `CODE`, and ANS File-Access file I/O / `INCLUDED`.
+- Next logical step (if desired): **Float**.
 
 For full standard details, see the official 2012 ANS Forth document (sections 6.1, 6.2, and optional word sets in chapters 7–18).

@@ -1075,7 +1075,7 @@ fload \(fnInnerLate.lastPathComponent)
         try? fm.removeItem(atPath: frenamedPath)
         try? fm.removeItem(at: tmp.appendingPathComponent("\(blkVol).blk"))
         try? fm.removeItem(at: URL(fileURLWithPath: blkLoadPath))
-        self.shutdownBlockSubsystem()
+        self.resetBlockSubsystemSession()
 
         // Restore dict to exactly the state before this ANS-VALIDATE run. All the test-only
         // words defined during the ansTest feeds (t6mem, t6if, t6until, t6do, t6dop, etc.)

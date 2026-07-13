@@ -9168,6 +9168,9 @@ public final class TZForth {
             self.repositionPnoAndHeap()
         }
         self.resetHeapState(clearAllocateFlag: !snap.allocateEverUsed)
+        if self.blockPoolBase > 0 {
+            self.heapBump = self.blockPoolBase
+        }
     }
 
     /// Non-fatal post-restore checks for harness logging (FILE-ECHO, BASE, memory, etc.).

@@ -528,6 +528,33 @@ extension TZForth {
         }
     }
 
+    /// Full block subsystem reset after harness runs (e.g. ANS-VALIDATE). Flushes and
+    /// drops all volumes, clears interpret/restore state, and re-syncs kernel variables
+    /// from settings so Hayes blocktest / FLOAD can run immediately afterward.
+    func resetBlockSubsystemSession() {
+        self.shutdownBlockSubsystem()
+        self.openBlockFiles.removeAll(keepingCapacity: false)
+        self.nextBlockFileId = Self.BLOCK_FILE_ID_BASE
+        self.blockInterpretActive = false
+        self.blockLoadDepth = 0
+        self.blockInterpretFileId = 0
+        self.blockInterpretBlockNum = 0
+        self.blockInterpretEndBlock = 0
+        self.blockInterpretStopBlock = 0
+        self.blockRefillMaxBlock = 0
+        self.blockRefillInProgress = false
+        self.blockInterpretLine = 0
+        self.blockRestoreResumeTail = []
+        self.blockRestoreResumeBlock = -1
+        self.blockRestoreResumeLine = -1
+        self.lastBlockAccessNum = -1
+        self.lastBlockAccessFileId = -1
+        self.lastBlockAccessSlotIndex = -1
+        self.blockCacheSequence = 0
+        self.invalidateAllBlockBufferSlots()
+        self.initializeBlockVariablesFromSettings()
+    }
+
     // MARK: - LIST / LOAD
 
     func blockList(_ u: Int) {

@@ -967,6 +967,31 @@ public final class TZForth {
         ("FLUSH-FILE","( fileid -- ior )",  "flush buffered file data to disk"),
         ("RENAME-FILE","( c-addr1 u1 c-addr2 u2 -- ior )", "rename file"),
 
+        // Block (ANS 10.6.1 + TZForth .blk file extensions)
+        ("BLOCK",   "( u -- a-addr )",    "copy block u from current volume to a buffer; return buffer address"),
+        ("BUFFER",  "( u -- a-addr )",    "same as BLOCK (buffer for block u of current volume)"),
+        ("UPDATE",  "( -- )",             "mark last-accessed block buffer dirty (written on FLUSH)"),
+        ("FLUSH",   "( -- )",             "merge dirty buffers and write current volume to disk"),
+        ("EMPTY-BUFFERS","( -- )",        "discard buffer cache (dirty slots merged to volume first)"),
+        ("SAVE-BUFFERS","( -- )",          "merge dirty buffers of current volume into in-memory copy"),
+        ("BLK",     "( -- addr )",        "variable: last block number during BLOCK/LOAD (addr of cell)"),
+        ("SCR",     "( -- addr )",        "variable: last block listed by LIST (addr of cell)"),
+        ("LOAD",    "( u -- )",           "interpret 16 lines of block u from current volume"),
+        ("LIST",    "( u -- )",           "type block u; set SCR"),
+        ("THRU",    "( u1 u2 -- )",       "LOAD blocks u1 through u2 inclusive"),
+        ("BLOCK-FILE","( -- addr )",      "variable: current volume id (0=none; auto-opens default .blk on first use)"),
+        ("CREATE-BLOCK-FILE","( c-addr u n -- bid ior )", "create new .blk with n blocks; does not select—USE-BLOCK-FILE after"),
+        ("OPEN-BLOCK-FILE","( c-addr u -- bid ior )", "open existing .blk (cwd-relative, .blk appended); does not select volume"),
+        ("USE-BLOCK-FILE","( bid -- )",   "select open volume as current; flush previous; set BLOCK-FILE @"),
+        ("CLOSE-BLOCK-FILE","( bid -- ior )", "flush, close volume bid; clear BLOCK-FILE @ if it was current"),
+        ("GROW-BLOCK-FILE","( bid n -- ior )", "append n zero-filled blocks to open volume"),
+        (".BLOCK-FILES","( -- )",         "list open block volumes (id path block-count open|closed)"),
+        ("BLOCK-SIZE","( -- addr )",      "variable: bytes per block (default 1024; SAVE-SETTINGS + restart for pool)"),
+        ("DEFAULT-BLOCK-COUNT","( -- addr )", "variable: blocks in a newly auto-created default .blk file"),
+        ("BLOCK-BUFFER-COUNT","( -- addr )", "variable: LRU buffer slots (default 4; SAVE-SETTINGS + restart)"),
+        (".SETTINGS","( -- )",            "display block/memory settings and how to change them"),
+        ("SAVE-SETTINGS","( -- )",         "persist BLOCK-SIZE, buffer count, default block count, memory MB"),
+
         // New for FLOAD / EDIT / file helpers (cwd + dialog driven by host for sandbox friendliness)
         ("\\",      "( -- )",             "comment to end of line (immediate)"),
         ("\\\\",    "( -- )",             "block comment to next '{' (spans lines; use \\ not single \\ for single-line comments) (immediate)"),
@@ -1077,11 +1102,6 @@ public final class TZForth {
         // Bootstrap a tiny set of immediate and defining words by hand
         bootstrapMinimalDictionary()
 
-        // Record the end of the kernel dictionary (and HERE) so FORGET/RESET cannot
-        // delete or go before the kernel + bootstrap words (TRUE, FILE-ECHO, >LFA, etc.).
-        kernelLatest = readCell(LATEST)
-        kernelHere = readCell(DP_ADDR)
-
         // Seed the interpreter IP at the QUIT code we just created
         ip = quitCodeAddress
 
@@ -1091,6 +1111,11 @@ public final class TZForth {
         self.repositionPnoAndHeap()
         self.initializeBlockVariablesFromSettings()
         self.registerBlockWords()
+
+        // Record kernel boundary after bootstrap + block subsystem so RESET / resetToSafeState
+        // retain ANS Block and TZForth .blk extension words (CREATE/OPEN/USE-BLOCK-FILE, etc.).
+        kernelLatest = readCell(LATEST)
+        kernelHere = readCell(DP_ADDR)
 
         // === Strong diagnostic after registration ===
         print("=== TZForth INIT DIAGNOSTICS ===")
@@ -6206,7 +6231,7 @@ public final class TZForth {
             self.clearScreenRequested = true
         }
 
-        // ANS-VALIDATE — run the 2012 ANS Forth validation tests (299 spot-checks: Core,
+        // ANS-VALIDATE — run the 2012 ANS Forth validation tests (Core + Block subsystem spot-checks:
         // Core Ext, File-Access, String, Facility, Exception, Memory, Double, Locals, Programming-Tools;
         // ported from TestTZForth FTEST, originally TestLBForth.swift) and write ANS-VALIDATE.txt
         // in the folder containing the TestTZForth.swift (i.e. next to the tests source).
@@ -9465,7 +9490,7 @@ public final class TZForth {
     }
 
     // MARK: - ANS Validation Tests (ported/adapted from TestTZForth.swift FTEST, originally TestLBForth.swift)
-    // These sources and runner allow the ANS-VALIDATE word to run 299 ANS spot-checks
+    // These sources and runner allow the ANS-VALIDATE word to run ANS + Block subsystem spot-checks
     // (Core, Core Ext, File-Access, String, Exception, Memory, Double, Locals, Programming-Tools)
     // from inside the interpreter and write results to ANS-VALIDATE.txt next to TestTZForth.swift.
     // The test logic and sources originated in the standalone tester; we respect the lbForth model origins internally.

@@ -1,4 +1,4 @@
-=== ANS-VALIDATE: 2012 ANS Forth validation (299 spot-checks: Core, Core Ext, File-Access, String, Facility, Exception, Memory, Double, Locals, Programming-Tools; from TestTZForth FTEST) ===
+=== ANS-VALIDATE: 2012 ANS Forth validation (Core, Core Ext, File-Access, String, Facility, Exception, Memory, Double, Locals, Programming-Tools, Block subsystem; from TestTZForth FTEST) ===
 
 TEST1 block: load1=true noskip1=false after1=true load2=true
 TEST1 exec load1: saw11=true out=11 OK
@@ -11,9 +11,9 @@ TEST2b post-slash exec: saw123=true out=123 OK
 TEST2b-include: echopre=true echopost=false sawEcho=true
 TEST2b-repl: prebatch=true postbatch=false (expect true false)
 TEST2b-err: shouldnot=false line1=true (expect false true) out=true verbose !
-? ansval_errstop_E992A75F.fth line 1: ? verbose
+? ansval_errstop_4FB8AB1D.fth line 1: ? verbose
     true verbose !
-? FLOAD of ansval_errstop_E992A75F.fth aborted at line 1
+? FLOAD of ansval_errstop_4FB8AB1D.fth aborted at line 1
 TEST2b-err-catch: caught=true out=OK
 -13  ? THROW 27 OK
 TEST2b-nested: before=true inner=true neverinner=false after=true neverouter=false (expect true true false true false)
@@ -338,6 +338,25 @@ TEST6 CATCH INCLUDE-FILE mid-file: pass
 TEST6 .ERROR closed file: pass
 TEST6 .ERROR file I/O: pass
 TEST6 .ERROR not found: pass
-TEST6 ANS core summary: 299/299 passed
+=== TZForth Block subsystem (ANS Block + TZ ext .blk words; TZ ext = non-ANS) ===
+TEST6 TZ ext CREATE-BLOCK-FILE: pass
+TEST6 TZ ext OPEN-BLOCK-FILE: pass
+TEST6 TZ ext USE-BLOCK-FILE: pass
+TEST6 TZ ext GROW-BLOCK-FILE: pass
+TEST6 TZ ext .BLOCK-FILES: pass
+TEST6 TZ ext CLOSE-BLOCK-FILE: pass
+TEST6 TZ ext BLOCK-FILE: pass
+TEST6 TZ ext .SETTINGS: pass
+TEST6 TZ ext SAVE-SETTINGS: pass
+TEST6 Block BUFFER: pass
+TEST6 Block UPDATE: pass
+TEST6 Block SAVE-BUFFERS: pass
+TEST6 Block FLUSH: pass
+TEST6 Block EMPTY-BUFFERS: pass
+TEST6 Block LIST/SCR: pass
+TEST6 Block LOAD: pass
+TEST6 Block THRU: pass
+TEST6 Block BLK: pass
+TEST6 ANS core summary: 317/317 passed
 
 === ANS-VALIDATE complete ===

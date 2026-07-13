@@ -17,7 +17,7 @@ import Foundation
 
 extension TZForth {
     // The runANSValidation (and its nested helpers) implement the full port of
-    // the FTEST ANS spot-checks (299 checks) so that "ANS-VALIDATE" works from
+    // the FTEST ANS spot-checks so that "ANS-VALIDATE" works from
     // within Forth (writes ANS-VALIDATE.txt next to TestTZForth.swift when CHDIRed there).
     public func runANSValidation() -> String {
         // Snapshot the "current" dir at start (the folder of the test .swift as user set via CHDIR or launch).
@@ -37,8 +37,9 @@ extension TZForth {
         let preValidationSearchOrder = self.searchOrder
         let preValidationDictBytes = self.captureValidationDictionaryBytes(upTo: preValidationHere)
         let preValidationEnvironment = self.captureSessionEnvironment()
+        let preValidationSettings = self.settings
 
-        var results = "=== ANS-VALIDATE: 2012 ANS Forth validation (299 spot-checks: Core, Core Ext, File-Access, String, Facility, Exception, Memory, Double, Locals, Programming-Tools; from TestTZForth FTEST) ===\n\n"
+        var results = "=== ANS-VALIDATE: 2012 ANS Forth validation (Core, Core Ext, File-Access, String, Facility, Exception, Memory, Double, Locals, Programming-Tools, Block subsystem; from TestTZForth FTEST) ===\n\n"
         var collected = ""
 
         let originalOnOutput = self.onOutput
@@ -418,6 +419,19 @@ fload \(fnInnerLate.lastPathComponent)
                 results += "TEST6 \(desc): FAIL got '\(out)' (expected contain '\(expectedSubstring)')\n"
             }
         }
+        /// Block words with no output (UPDATE, FLUSH, …): pass when no error/throw text.
+        func ansTestBlockOp(_ desc: String, _ line: String) {
+            resetTest()
+            self.feedLine(line)
+            ansTotal += 1
+            let out = collected
+            if !out.contains("?") && !self.errorFlag && !self.throwActive {
+                ansPassed += 1
+                results += "TEST6 \(desc): pass\n"
+            } else {
+                results += "TEST6 \(desc): FAIL got '\(out.trimmingCharacters(in: .whitespacesAndNewlines))'\n"
+            }
+        }
 
         // Arithmetic (6.1.0120 + etc.)
         ansTest("+", "3 4 + .", "7")
@@ -729,7 +743,8 @@ fload \(fnInnerLate.lastPathComponent)
         ansTest("MS brief", "1 MS", "OK")
 
         // Memory-Allocation (14): GROWMEMORYMB first (once per session), then ALLOCATE FREE RESIZE
-        ansTest("GROWMEMORYMB grow", "4 GROWMEMORYMB UNUSED 3000000 > .", "-1")
+        let growMBTarget = max(5, self.memory.count / (1024 * 1024) + 4)
+        ansTest("GROWMEMORYMB grow", "\(growMBTarget) GROWMEMORYMB UNUSED 3000000 > .", "-1")
         ansTest("ALLOCATE", "64 ALLOCATE DROP DUP 42 SWAP ! DUP @ .", "42")
         ansTest("ALLOCATE ior", "128 ALLOCATE NIP 0= .", "-1")
         ansTest("FREE", "64 ALLOCATE DROP DUP FREE 0= .", "-1")
@@ -1007,6 +1022,41 @@ fload \(fnInnerLate.lastPathComponent)
         ansTest(".ERROR file I/O", "-70 .ERROR", "? File I/O exception")
         ansTest(".ERROR not found", "-74 .ERROR", "? File not found")
 
+        // Block subsystem (ANS Block 10.6.1 + TZForth .blk extensions). "TZ ext" = non-ANS.
+        let blkVol = "ansval_\(suffix)_vol"
+        let blkLoad = "ansval_\(suffix)_load"
+        let blkLoadPath = tmp.appendingPathComponent("\(blkLoad).blk").path
+        do {
+            let bs = self.effectiveBlockSize()
+            var data = Data(repeating: 0, count: bs)
+            let line = "42 ."
+            for (i, b) in line.utf8.enumerated() where i < 64 {
+                data[i] = b
+            }
+            try data.write(to: URL(fileURLWithPath: blkLoadPath))
+        } catch {
+            results += "TEST7 block LOAD file setup fail: \(error)\n"
+        }
+        results += "=== TZForth Block subsystem (ANS Block + TZ ext .blk words; TZ ext = non-ANS) ===\n"
+        ansTest("TZ ext CREATE-BLOCK-FILE", "S\" \(blkVol)\" 8 CREATE-BLOCK-FILE SWAP . .", "0")
+        ansTest("TZ ext OPEN-BLOCK-FILE", "S\" \(blkVol)\" OPEN-BLOCK-FILE . .", "0")
+        ansTest("TZ ext USE-BLOCK-FILE", "S\" \(blkVol)\" OPEN-BLOCK-FILE DROP DUP USE-BLOCK-FILE BLOCK-FILE @ = .", "-1")
+        ansTest("TZ ext GROW-BLOCK-FILE", "S\" \(blkVol)\" OPEN-BLOCK-FILE DROP DUP 4 GROW-BLOCK-FILE .", "0")
+        ansTest("TZ ext .BLOCK-FILES", "S\" \(blkVol)\" OPEN-BLOCK-FILE DROP .BLOCK-FILES", "open")
+        ansTest("TZ ext CLOSE-BLOCK-FILE", "S\" \(blkVol)\" OPEN-BLOCK-FILE DROP DUP CLOSE-BLOCK-FILE . BLOCK-FILE @ .", "0 0")
+        ansTest("TZ ext BLOCK-FILE", "S\" \(blkVol)\" OPEN-BLOCK-FILE DROP USE-BLOCK-FILE BLOCK-FILE @ 99 > .", "-1")
+        ansTest("TZ ext .SETTINGS", ".SETTINGS", "BLOCK-SIZE")
+        ansTest("TZ ext SAVE-SETTINGS", "SAVE-SETTINGS", "Settings saved")
+        ansTest("Block BUFFER", "S\" \(blkVol)\" OPEN-BLOCK-FILE DROP USE-BLOCK-FILE 0 BLOCK 0 BUFFER = .", "-1")
+        ansTestBlockOp("Block UPDATE", "S\" \(blkVol)\" OPEN-BLOCK-FILE DROP USE-BLOCK-FILE 0 BLOCK DROP UPDATE")
+        ansTestBlockOp("Block SAVE-BUFFERS", "S\" \(blkVol)\" OPEN-BLOCK-FILE DROP USE-BLOCK-FILE 0 BLOCK DROP UPDATE SAVE-BUFFERS")
+        ansTestBlockOp("Block FLUSH", "S\" \(blkVol)\" OPEN-BLOCK-FILE DROP USE-BLOCK-FILE FLUSH")
+        ansTestBlockOp("Block EMPTY-BUFFERS", "S\" \(blkVol)\" OPEN-BLOCK-FILE DROP USE-BLOCK-FILE 0 BLOCK DROP UPDATE EMPTY-BUFFERS")
+        ansTest("Block LIST/SCR", "S\" \(blkVol)\" OPEN-BLOCK-FILE DROP USE-BLOCK-FILE 0 LIST SCR @ .", "0")
+        ansTest("Block LOAD", "S\" \(blkLoad)\" OPEN-BLOCK-FILE DROP USE-BLOCK-FILE 0 LOAD", "42")
+        ansTest("Block THRU", "S\" \(blkLoad)\" OPEN-BLOCK-FILE DROP USE-BLOCK-FILE 0 0 THRU", "42")
+        ansTest("Block BLK", "S\" \(blkLoad)\" OPEN-BLOCK-FILE DROP USE-BLOCK-FILE 0 LOAD BLK @ .", "0")
+
         results += "TEST6 ANS core summary: \(ansPassed)/\(ansTotal) passed\n"
         if ansPassed != ansTotal {
             results += "WARNING: some ANS 2012 core tests failed — review against standard stack effects.\n"
@@ -1023,6 +1073,9 @@ fload \(fnInnerLate.lastPathComponent)
         try? fm.removeItem(at: fwr)
         try? fm.removeItem(at: fbad)
         try? fm.removeItem(atPath: frenamedPath)
+        try? fm.removeItem(at: tmp.appendingPathComponent("\(blkVol).blk"))
+        try? fm.removeItem(at: URL(fileURLWithPath: blkLoadPath))
+        self.shutdownBlockSubsystem()
 
         // Restore dict to exactly the state before this ANS-VALIDATE run. All the test-only
         // words defined during the ansTest feeds (t6mem, t6if, t6until, t6do, t6dop, etc.)
@@ -1059,6 +1112,13 @@ fload \(fnInnerLate.lastPathComponent)
         // ANS-VALIDATE, because EDIT needs an active scope for NSWorkspace handoff + resolve.
         if let cb = self.onDirectoryChanged {
             cb(URL(fileURLWithPath: originalLogical))
+        }
+
+        do {
+            try preValidationSettings.save()
+            self.settings = preValidationSettings
+        } catch {
+            results += "WARNING: could not restore settings.json after validation: \(error.localizedDescription)\n"
         }
 
         self.onOutput = originalOnOutput

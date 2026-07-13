@@ -13,6 +13,44 @@ extension TZForth {
 
     static let maxXchar: UInt32 = 0x10_FFFF
 
+    /// ANS XC-WIDTH lookup ranges (width, first, last) from reference wc-table.
+    private static let xcWidthRanges: [(width: Int, first: UInt32, last: UInt32)] = [
+        (0, 0x0300, 0x0357), (0, 0x035D, 0x036F), (0, 0x0483, 0x0486), (0, 0x0488, 0x0489),
+        (0, 0x0591, 0x05A1), (0, 0x05A3, 0x05B9), (0, 0x05BB, 0x05BD), (0, 0x05BF, 0x05BF),
+        (0, 0x05C1, 0x05C2), (0, 0x05C4, 0x05C4), (0, 0x0600, 0x0603), (0, 0x0610, 0x0615),
+        (0, 0x064B, 0x0658), (0, 0x0670, 0x0670), (0, 0x06D6, 0x06E4), (0, 0x06E7, 0x06E8),
+        (0, 0x06EA, 0x06ED), (0, 0x070F, 0x070F), (0, 0x0711, 0x0711), (0, 0x0730, 0x074A),
+        (0, 0x07A6, 0x07B0), (0, 0x0901, 0x0902), (0, 0x093C, 0x093C), (0, 0x0941, 0x0948),
+        (0, 0x094D, 0x094D), (0, 0x0951, 0x0954), (0, 0x0962, 0x0963), (0, 0x0981, 0x0981),
+        (0, 0x09BC, 0x09BC), (0, 0x09C1, 0x09C4), (0, 0x09CD, 0x09CD), (0, 0x09E2, 0x09E3),
+        (0, 0x0A01, 0x0A02), (0, 0x0A3C, 0x0A3C), (0, 0x0A41, 0x0A42), (0, 0x0A47, 0x0A48),
+        (0, 0x0A4B, 0x0A4D), (0, 0x0A70, 0x0A71), (0, 0x0A81, 0x0A82), (0, 0x0ABC, 0x0ABC),
+        (0, 0x0AC1, 0x0AC5), (0, 0x0AC7, 0x0AC8), (0, 0x0ACD, 0x0ACD), (0, 0x0AE2, 0x0AE3),
+        (0, 0x0B01, 0x0B01), (0, 0x0B3C, 0x0B3C), (0, 0x0B3F, 0x0B3F), (0, 0x0B41, 0x0B43),
+        (0, 0x0B4D, 0x0B4D), (0, 0x0B56, 0x0B56), (0, 0x0B82, 0x0B82), (0, 0x0BC0, 0x0BC0),
+        (0, 0x0BCD, 0x0BCD), (0, 0x0C3E, 0x0C40), (0, 0x0C46, 0x0C48), (0, 0x0C4A, 0x0C4D),
+        (0, 0x0C55, 0x0C56), (0, 0x0CBC, 0x0CBC), (0, 0x0CBF, 0x0CBF), (0, 0x0CC6, 0x0CC6),
+        (0, 0x0CCC, 0x0CCD), (0, 0x0D41, 0x0D43), (0, 0x0D4D, 0x0D4D), (0, 0x0DCA, 0x0DCA),
+        (0, 0x0DD2, 0x0DD4), (0, 0x0DD6, 0x0DD6), (0, 0x0E31, 0x0E31), (0, 0x0E34, 0x0E3A),
+        (0, 0x0E47, 0x0E4E), (0, 0x0EB1, 0x0EB1), (0, 0x0EB4, 0x0EB9), (0, 0x0EBB, 0x0EBC),
+        (0, 0x0EC8, 0x0ECD), (0, 0x0F18, 0x0F19), (0, 0x0F35, 0x0F35), (0, 0x0F37, 0x0F37),
+        (0, 0x0F39, 0x0F39), (0, 0x0F71, 0x0F7E), (0, 0x0F80, 0x0F84), (0, 0x0F86, 0x0F87),
+        (0, 0x0F90, 0x0F97), (0, 0x0F99, 0x0FBC), (0, 0x0FC6, 0x0FC6), (0, 0x102D, 0x1030),
+        (0, 0x1032, 0x1032), (0, 0x1036, 0x1037), (0, 0x1039, 0x1039), (0, 0x1058, 0x1059),
+        (1, 0x0000, 0x1100), (2, 0x1100, 0x115F), (0, 0x1160, 0x11FF), (0, 0x1712, 0x1714),
+        (0, 0x1732, 0x1734), (0, 0x1752, 0x1753), (0, 0x1772, 0x1773), (0, 0x17B4, 0x17B5),
+        (0, 0x17B7, 0x17BD), (0, 0x17C6, 0x17C6), (0, 0x17C9, 0x17D3), (0, 0x17DD, 0x17DD),
+        (0, 0x180B, 0x180D), (0, 0x18A9, 0x18A9), (0, 0x1920, 0x1922), (0, 0x1927, 0x1928),
+        (0, 0x1932, 0x1932), (0, 0x1939, 0x193B), (0, 0x200B, 0x200F), (0, 0x202A, 0x202E),
+        (0, 0x2060, 0x2063), (0, 0x206A, 0x206F), (0, 0x20D0, 0x20EA), (2, 0x2329, 0x232A),
+        (0, 0x302A, 0x302F), (2, 0x2E80, 0x303E), (0, 0x3099, 0x309A), (2, 0x3040, 0xA4CF),
+        (2, 0xAC00, 0xD7A3), (2, 0xF900, 0xFAFF), (0, 0xFB1E, 0xFB1E), (0, 0xFE00, 0xFE0F),
+        (0, 0xFE20, 0xFE23), (2, 0xFE30, 0xFE6F), (0, 0xFEFF, 0xFEFF), (2, 0xFF00, 0xFF60),
+        (2, 0xFFE0, 0xFFE6), (0, 0xFFF9, 0xFFFB), (0, 0x1D167, 0x1D169), (0, 0x1D173, 0x1D182),
+        (0, 0x1D185, 0x1D18B), (0, 0x1D1AA, 0x1D1AD), (2, 0x20000, 0x2FFFD), (2, 0x30000, 0x3FFFD),
+        (0, 0xE0001, 0xE0001), (0, 0xE0020, 0xE007F), (0, 0xE0100, 0xE01EF),
+    ]
+
     // MARK: - UTF-8 codec (internal)
 
     /// Encoded byte length for a code point (ANS XC-SIZE). Throws on invalid code points.
@@ -211,6 +249,33 @@ extension TZForth {
             return Cell(low)
         }
         return Cell(x & 0xFFFFFF)
+    }
+
+    // MARK: - Display width (18.6.2)
+
+    /// ANS XC-WIDTH — monospace display columns for one xchar (default 1).
+    func xcDisplayWidth(of codePoint: UInt32) -> Int {
+        for range in Self.xcWidthRanges where codePoint >= range.first && codePoint <= range.last {
+            return range.width
+        }
+        return 1
+    }
+
+    /// ANS X-WIDTH — sum of XC-WIDTH over a bounded UTF-8 xchar string.
+    func xWidth(xcAddr: Int, u1: Int) throws -> Int {
+        if u1 <= 0 { return 0 }
+        var total = 0
+        var addr = xcAddr
+        let end = xcAddr + u1
+        while addr < end {
+            let decoded = try self.xcDecode(at: addr)
+            if decoded.nextAddr > end {
+                throw TZForthXCharError.malformed
+            }
+            total += self.xcDisplayWidth(of: UInt32(truncatingIfNeeded: decoded.codePoint))
+            addr = decoded.nextAddr
+        }
+        return total
     }
 
     // MARK: - String helpers (18.6.2)
@@ -439,6 +504,26 @@ extension TZForth {
             } else {
                 self.push(Cell(x))
                 self.push(0)
+            }
+        }
+
+        _ = register("XC-WIDTH") {
+            let cp = self.xcharCodePointFromStack(self.pop())
+            do {
+                _ = try self.xcEncodedSize(of: cp)
+                self.push(Cell(self.xcDisplayWidth(of: cp)))
+            } catch {
+                self.throwMalformedXchar()
+            }
+        }
+
+        _ = register("X-WIDTH") {
+            let u1 = Int(self.pop())
+            let xcAddr = Int(self.pop())
+            do {
+                self.push(Cell(try self.xWidth(xcAddr: xcAddr, u1: u1)))
+            } catch {
+                self.throwMalformedXchar()
             }
         }
 

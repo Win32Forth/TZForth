@@ -1021,6 +1021,8 @@ public final class TZForth {
         ("XKEY?",   "( -- flag )",         "true when XKEY can complete without blocking"),
         ("EKEY>XCHAR", "( x -- xchar true | x false )", "decode EKEY char event to xchar"),
         ("XHOLD",   "( xchar -- )",         "prepend UTF-8 xchar into pictured numeric output"),
+        ("XC-WIDTH", "( xchar -- n )",      "display columns for xchar (monospace em units)"),
+        ("X-WIDTH", "( xc-addr u -- n )",  "display columns for bounded UTF-8 xchar string"),
 
         // New for FLOAD / EDIT / file helpers (cwd + dialog driven by host for sandbox friendliness)
         ("\\",      "( -- )",             "comment to end of line (immediate)"),

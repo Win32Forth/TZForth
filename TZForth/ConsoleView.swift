@@ -847,6 +847,18 @@ struct ConsoleView: View {
     /// Named FLOAD: activate sandbox scope, resolve case, and load synchronously (returns success).
     @discardableResult
     private func performScopedNamedLoad(url: URL) -> Bool {
+        // Chdir to the loaded file's folder so relative INCLUDED/FLOAD inside that file resolve,
+        // then restore the pre-load directory when the load returns (e.g. test.fth → fp/runfptests.fth
+        // must not leave cwd stuck in fp/).
+        let savedLogicalCwd = forth.logicalCurrentDirectory
+        let savedProcessCwd = FileManager.default.currentDirectoryPath
+        defer {
+            let restorePath = savedLogicalCwd.isEmpty ? savedProcessCwd : savedLogicalCwd
+            if restorePath != forth.logicalCurrentDirectory {
+                activateLastDirectoryScope(parent: URL(fileURLWithPath: restorePath))
+            }
+        }
+
         // Activate the (bookmarked) dir scope first. This makes subsequent access (including
         // Data for load, and later EDIT handoff) work for files inside the dir.
         // Note: we pass the pre-correction parent for activate's path set (it will use bookmark anyway).

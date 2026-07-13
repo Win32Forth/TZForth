@@ -11,9 +11,9 @@ TEST2b post-slash exec: saw123=true out=123 OK
 TEST2b-include: echopre=true echopost=false sawEcho=true
 TEST2b-repl: prebatch=true postbatch=false (expect true false)
 TEST2b-err: shouldnot=false line1=true (expect false true) out=true verbose !
-? ansval_errstop_FAD2E6D9.fth line 1: ? verbose
+? ansval_errstop_6398EC32.fth line 1: ? verbose
     true verbose !
-? FLOAD of ansval_errstop_FAD2E6D9.fth aborted at line 1
+? FLOAD of ansval_errstop_6398EC32.fth aborted at line 1
 TEST2b-err-catch: caught=true out=OK
 -13  ? THROW 27 OK
 TEST2b-nested: before=true inner=true neverinner=false after=true neverouter=false (expect true true false true false)

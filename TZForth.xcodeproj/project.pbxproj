@@ -14,7 +14,7 @@
 		29A09F162FCB95CE00778693 /* Exceptions for "TZForth" folder in "TZForth" target */ = {
 			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
 			membershipExceptions = (
-				ANS-VALIDATE.txt,
+				"ANS-VALIDATE.txt",
 				TestTZForth.swift,
 			);
 			target = 29A09F072FCB95CE00778693 /* TZForth */;

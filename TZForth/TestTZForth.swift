@@ -6,7 +6,7 @@
 //  How to run (note: multi-file swift script needs concatenation on current Swift):
 //
 //      cd /path/to/TZForth
-//      cat TZForth/TZForth.swift TZForth/TZForthSettings.swift TZForth/TZForthBlock.swift TZForth/TZForthTests.swift TZForth/TestTZForth.swift > /tmp/combined.swift
+//      cat TZForth/TZForth.swift TZForth/TZForthSettings.swift TZForth/TZForthBlock.swift TZForth/TZForthXChar.swift TZForth/TZForthTests.swift TZForth/TestTZForth.swift > /tmp/combined.swift
 //      swift /tmp/combined.swift
 //
 //      # For automated tests (\\ block comments, \S, FLOAD behavior + 317 ANS spot-checks):
@@ -808,8 +808,17 @@ fload \(fnInnerLate.lastPathComponent)
     ansTest("MS brief", "1 MS", "OK")
 
     // Memory-Allocation (14): GROWMEMORYMB first (once per session), then ALLOCATE FREE RESIZE
-    let growMBTarget = max(5, forth.memory.count / (1024 * 1024) + 4)
-    ansTest("GROWMEMORYMB grow", "\(growMBTarget) GROWMEMORYMB UNUSED 3000000 > .", "-1")
+    // Cap at 64 MB (GROWMEMORYMB limit). If settings.json already restored full memory, skip grow.
+    let maxGrowMB = 64
+    let currentMB = max(1, forth.memory.count / (1024 * 1024))
+    if currentMB >= maxGrowMB {
+        // Memory already at cap (e.g. settings.json from SAVE-SETTINGS); consume one-time slot.
+        ansTest("GROWMEMORYMB grow", "\(maxGrowMB) GROWMEMORYMB", "cannot shrink")
+        ansTest("GROWMEMORYMB at-cap UNUSED", "UNUSED 3000000 > .", "-1")
+    } else {
+        let growMBTarget = min(maxGrowMB, max(5, currentMB + 4))
+        ansTest("GROWMEMORYMB grow", "\(growMBTarget) GROWMEMORYMB UNUSED 3000000 > .", "-1")
+    }
     ansTest("ALLOCATE", "64 ALLOCATE DROP DUP 42 SWAP ! DUP @ .", "42")
     ansTest("ALLOCATE ior", "128 ALLOCATE NIP 0= .", "-1")
     ansTest("FREE", "64 ALLOCATE DROP DUP FREE 0= .", "-1")
@@ -1099,6 +1108,25 @@ fload \(fnInnerLate.lastPathComponent)
     } catch {
         print("TEST7 block LOAD file setup fail: \(error)")
     }
+    print("=== TZForth Extended-Character (ANS 18.6 UTF-8 memory + string words) ===")
+    ansTest("XC-SIZE 0", "HEX 0 XC-SIZE DECIMAL .", "1")
+    ansTest("XC-SIZE 7F", "HEX 7F XC-SIZE DECIMAL .", "1")
+    ansTest("XC-SIZE 80", "HEX 80 XC-SIZE DECIMAL .", "2")
+    ansTest("XC-SIZE 7FF", "HEX 7FF XC-SIZE DECIMAL .", "2")
+    ansTest("XC-SIZE 800", "HEX 800 XC-SIZE DECIMAL .", "3")
+    ansTest("XC-SIZE FFFF", "HEX FFFF XC-SIZE DECIMAL .", "3")
+    ansTest("XC-SIZE 10000", "HEX 10000 XC-SIZE DECIMAL .", "4")
+    ansTest("XC!+ XC@+", "HEX 80 PAD XC!+ DROP PAD XC@+ NIP 80 = .", "-1")
+    ansTest("XC, encode size", "HEX PAD DUP 800 SWAP XC!+ SWAP - 3 = .", "-1")
+    ansTest("XC!+?", "HEX FFFF PAD 2 XC!+? NIP NIP 0= .", "-1")
+    ansTest("XCHAR+/-", "HEX PAD 16 ERASE 41 PAD SWAP XC!+ DUP XCHAR- XCHAR+ = .", "-1")
+    ansTest("+X/STRING", "HEX PAD 16 ERASE PAD DUP 41 SWAP XC!+ 42 SWAP XC!+ DROP 2 +X/STRING NIP DUP 1 = .", "-1")
+    ansTest("X\\STRING-", "HEX PAD 16 ERASE PAD DUP 41 SWAP XC!+ 42 SWAP XC!+ DROP 2 X\\STRING- NIP DUP 1 = .", "-1")
+    ansTest("-TRAILING-GARBAGE ok", "HEX PAD 16 ERASE PAD DUP 41 SWAP XC!+ DROP 1 -TRAILING-GARBAGE NIP 1 = .", "-1")
+    ansTest("-TRAILING-GARBAGE trim", "HEX PAD 16 ERASE C0 PAD C! PAD 1 -TRAILING-GARBAGE NIP 0= .", "-1")
+    resetTest()
+    forth.feedLine("DECIMAL")
+
     print("=== TZForth Block subsystem (ANS Block + TZ ext .blk words; TZ ext = non-ANS) ===")
     ansTest("TZ ext CREATE-BLOCK-FILE", "S\" \(blkVol)\" 8 CREATE-BLOCK-FILE SWAP . .", "0")
     ansTest("TZ ext OPEN-BLOCK-FILE", "S\" \(blkVol)\" OPEN-BLOCK-FILE . .", "0")

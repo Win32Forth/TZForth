@@ -541,6 +541,7 @@ public final class TZForth {
         static let invalidFileId: Cell = -68
         static let fileIOError: Cell = -70
         static let fileNotFound: Cell = -74
+        static let malformedXchar: Cell = -77
     }
     /// Depth of `[` … `]` compile-time interpret brackets (for SLITERAL et al.).
     private var bracketCompileDepth: Int = 0
@@ -992,6 +993,19 @@ public final class TZForth {
         (".SETTINGS","( -- )",            "display block/memory settings and how to change them"),
         ("SAVE-SETTINGS","( -- )",         "persist BLOCK-SIZE, buffer count, default block count, memory MB"),
 
+        // Extended-Character (ANS 18.6.1 — UTF-8)
+        ("XC-SIZE", "( xchar -- u )",       "bytes to encode xchar in memory"),
+        ("X-SIZE",  "( xc-addr u -- u )",   "encoded size of first xchar from leading byte"),
+        ("XC@+",    "( xc-addr -- xc-addr' xchar )", "fetch xchar; advance addr past encoding"),
+        ("XC!+",    "( xchar xc-addr -- xc-addr' )", "store xchar encoding; return addr after"),
+        ("XC!+?",   "( xchar xc-addr u -- xc-addr' u' flag )", "store if buffer has room (-1/0 flag)"),
+        ("XC,",     "( xchar -- )",         "append xchar encoding at HERE"),
+        ("XCHAR+",  "( xc-addr -- xc-addr' )", "advance addr past one encoded xchar"),
+        ("XCHAR-",  "( xc-addr -- xc-addr' )", "retreat to start of previous encoded xchar"),
+        ("+X/STRING", "( xc-addr u -- xc-addr' u' )", "skip first xchar in buffer; return remainder"),
+        ("X\\STRING-", "( xc-addr u -- xc-addr u' )", "string with all xchars except the last"),
+        ("-TRAILING-GARBAGE", "( xc-addr u -- xc-addr u' )", "drop incomplete final xchar from tail"),
+
         // New for FLOAD / EDIT / file helpers (cwd + dialog driven by host for sandbox friendliness)
         ("\\",      "( -- )",             "comment to end of line (immediate)"),
         ("\\\\",    "( -- )",             "block comment to next '{' (spans lines; use \\ not single \\ for single-line comments) (immediate)"),
@@ -1112,8 +1126,9 @@ public final class TZForth {
         self.captureBlockVariableAddrs()
         self.syncBlockVariablesFromSettings()
         self.registerBlockWords()
+        self.registerXCharWords()
 
-        // Record kernel boundary after bootstrap + block subsystem so RESET / resetToSafeState
+        // Record kernel boundary after bootstrap + block/block/xchar subsystems so RESET / resetToSafeState
         // retain ANS Block and TZForth .blk extension words (CREATE/OPEN/USE-BLOCK-FILE, etc.).
         kernelLatest = readCell(LATEST)
         kernelHere = readCell(DP_ADDR)
@@ -8635,6 +8650,7 @@ public final class TZForth {
         case StdThrow.invalidFileId: return "? Invalid file-id"
         case StdThrow.fileIOError: return "? File I/O exception"
         case StdThrow.fileNotFound: return "? File not found"
+        case StdThrow.malformedXchar: return "? Malformed xchar"
         default: return nil
         }
     }
@@ -8649,6 +8665,11 @@ public final class TZForth {
 
     private func throwDivisionByZero() {
         kernelThrow(StdThrow.divisionByZero, message: "? Division by zero")
+    }
+
+    /// Invalid or unencodable extended character (ANS Extended-Character, throw code -77).
+    func throwMalformedXchar() {
+        self.kernelThrow(StdThrow.malformedXchar, message: "? Malformed xchar")
     }
 
     /// Compile-only / interpret-state misuse (ANS -14). Caught throw leaves STATE unchanged.

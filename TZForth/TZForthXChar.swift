@@ -2,7 +2,7 @@
 //  TZForthXChar.swift
 //  TZForth
 //
-//  ANS Forth 2012 Extended-Character word set (chapter 18) — UTF-8 codec, memory, string, parsing words.
+//  ANS Forth 2012 Extended-Character word set (chapter 18) — UTF-8 codec, memory, string, parsing, I/O words.
 //
 
 import Foundation
@@ -174,6 +174,43 @@ extension TZForth {
         }
         self.writeCell(self.IN, Cell(endPos))
         return (self.SOURCE_BUFFER + startPos, len)
+    }
+
+    // MARK: - Terminal I/O helpers (18.6.1)
+
+    /// Decode a collected UTF-8 byte prefix; nil until the sequence is complete and valid.
+    func decodeAssembledXKeyBytes() -> Cell? {
+        if self.xkeyAssembly.isEmpty { return nil }
+        guard let need = try? self.xcLeadingByteEncodedSize(self.xkeyAssembly[0]) else {
+            return nil
+        }
+        if self.xkeyAssembly.count < need { return nil }
+        let slice = Array(self.xkeyAssembly.prefix(need))
+        guard let decoded = try? self.xcDecodeBytes(slice) else { return nil }
+        return decoded
+    }
+
+    /// True when a complete xchar is already buffered for XKEY / XKEY?.
+    func xkeyCompleteInAssembly() -> Bool {
+        self.decodeAssembledXKeyBytes() != nil
+    }
+
+    private func xcDecodeBytes(_ bytes: [UInt8]) throws -> Cell {
+        for (i, b) in bytes.enumerated() {
+            self.writeByte(self.PAD_BUFFER + i, b)
+        }
+        return try self.xcDecode(at: self.PAD_BUFFER).codePoint
+    }
+
+    /// xchar from a TZForth EKEY character event (see makeCharKeyEvent).
+    func xcharFromCharKeyEvent(_ x: Int) -> Cell? {
+        if !self.isCharKeyEvent(x) { return nil }
+        let low = x & 0xFF
+        let mid = (x >> 8) & 0xFFFF
+        if mid != 0 && low < 0x80 {
+            return Cell(low)
+        }
+        return Cell(x & 0xFFFFFF)
     }
 
     // MARK: - String helpers (18.6.2)
@@ -366,6 +403,42 @@ extension TZForth {
             if let parsed = self.parseSourceDelimitedByXchar(cp), !self.throwActive {
                 self.push(Cell(parsed.addr))
                 self.push(Cell(parsed.len))
+            }
+        }
+
+        // Terminal I/O (18.6.1 / 18.6.2)
+        _ = register("XEMIT") {
+            let cp = self.xcharCodePointFromStack(self.pop())
+            if let bytes = try? self.xcEncode(cp) {
+                self.emitUtf8Bytes(bytes)
+            } else {
+                self.throwMalformedXchar()
+            }
+        }
+
+        _ = register("XKEY") {
+            if let cp = self.decodeAssembledXKeyBytes(),
+               let need = try? self.xcLeadingByteEncodedSize(self.xkeyAssembly[0]) {
+                self.xkeyAssembly.removeFirst(need)
+                self.push(cp)
+                return
+            }
+            self.waitingForXKey = true
+            self.waitingForKey = true
+        }
+
+        _ = register("XKEY?") {
+            self.push(self.xkeyCompleteInAssembly() ? -1 : 0)
+        }
+
+        _ = register("EKEY>XCHAR") {
+            let x = Int(self.pop())
+            if let cp = self.xcharFromCharKeyEvent(x) {
+                self.push(cp)
+                self.push(-1)
+            } else {
+                self.push(Cell(x))
+                self.push(0)
             }
         }
     }

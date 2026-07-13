@@ -1129,6 +1129,55 @@ fload \(fnInnerLate.lastPathComponent)
     ansTest("CHAR utf8", "DECIMAL CHAR é .", "233")
     ansTest("[CHAR] utf8", ": xc [CHAR] é ; xc .", "233")
     ansTest("PARSE utf8 delim", "DECIMAL $20AC PARSE abc€ NIP 4 = .", "-1")
+    print("=== TZForth Extended-Character (ANS 18.6.1 I/O — XEMIT, XKEY, XKEY?, EKEY>XCHAR) ===")
+    ansTest("XEMIT ascii", "65 XEMIT", "A")
+    ansTest("XEMIT utf8", "DECIMAL 8364 XEMIT", "€")
+    ansTest("EKEY>XCHAR a", "\(TZForth.makeCharKeyEvent(97)) EKEY>XCHAR DROP DUP 97 = .", "-1")
+    ansTest("EKEY>XCHAR euro", "\(TZForth.makeCharKeyEvent(8364)) EKEY>XCHAR DROP DUP 8364 = .", "-1")
+    ansTest("EKEY>XCHAR fkey", "\(TZForth.makeFKeyEvent(TZForth.FacilityFKey.left)) EKEY>XCHAR NIP .", "0")
+    ansTest("XKEY? idle", "XKEY? .", "0")
+    resetTest()
+    collected = ""
+    forth.feedLine("XKEY .")
+    ansTotal += 1
+    if forth.waitingForXKey && forth.waitingForKey {
+        forth.provideKey(65)
+    }
+    let xkeyOut = collected.trimmingCharacters(in: .whitespacesAndNewlines)
+    if xkeyOut.contains("65") {
+        ansPassed += 1
+        print("TEST6 XKEY ascii: pass")
+    } else {
+        print("TEST6 XKEY ascii: FAIL got '\(xkeyOut)'")
+    }
+    resetTest()
+    collected = ""
+    forth.feedLine("XKEY .")
+    ansTotal += 1
+    if forth.waitingForXKey {
+        forth.provideKey(0xC3)
+    }
+    if forth.waitingForXKey && forth.waitingForKey {
+        forth.provideKey(0xA9)
+    }
+    let xkeyUtf8Out = collected.trimmingCharacters(in: .whitespacesAndNewlines)
+    if xkeyUtf8Out.contains("233") {
+        ansPassed += 1
+        print("TEST6 XKEY utf8: pass")
+    } else {
+        print("TEST6 XKEY utf8: FAIL got '\(xkeyUtf8Out)'")
+    }
+    resetTest()
+    forth.xkeyAssembly = [0xC3, 0xA9]
+    collected = ""
+    forth.feedLine("XKEY? .")
+    ansTotal += 1
+    if collected.contains("-1") {
+        ansPassed += 1
+        print("TEST6 XKEY? ready: pass")
+    } else {
+        print("TEST6 XKEY? ready: FAIL got '\(collected.trimmingCharacters(in: .whitespacesAndNewlines))'")
+    }
     resetTest()
     forth.feedLine("DECIMAL")
 

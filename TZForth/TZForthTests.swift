@@ -1067,6 +1067,55 @@ fload \(fnInnerLate.lastPathComponent)
         ansTest("CHAR utf8", "DECIMAL CHAR é .", "233")
         ansTest("[CHAR] utf8", ": xc [CHAR] é ; xc .", "233")
         ansTest("PARSE utf8 delim", "DECIMAL $20AC PARSE abc€ NIP 4 = .", "-1")
+        results += "=== TZForth Extended-Character (ANS 18.6.1 I/O — XEMIT, XKEY, XKEY?, EKEY>XCHAR) ===\n"
+        ansTest("XEMIT ascii", "65 XEMIT", "A")
+        ansTest("XEMIT utf8", "DECIMAL 8364 XEMIT", "€")
+        ansTest("EKEY>XCHAR a", "\(TZForth.makeCharKeyEvent(97)) EKEY>XCHAR DROP DUP 97 = .", "-1")
+        ansTest("EKEY>XCHAR euro", "\(TZForth.makeCharKeyEvent(8364)) EKEY>XCHAR DROP DUP 8364 = .", "-1")
+        ansTest("EKEY>XCHAR fkey", "\(TZForth.makeFKeyEvent(TZForth.FacilityFKey.left)) EKEY>XCHAR NIP .", "0")
+        ansTest("XKEY? idle", "XKEY? .", "0")
+        resetTest()
+        collected = ""
+        self.feedLine("XKEY .")
+        ansTotal += 1
+        if self.waitingForXKey && self.waitingForKey {
+            self.provideKey(65)
+        }
+        let xkeyOut = collected.trimmingCharacters(in: .whitespacesAndNewlines)
+        if xkeyOut.contains("65") {
+            ansPassed += 1
+            results += "TEST6 XKEY ascii: pass\n"
+        } else {
+            results += "TEST6 XKEY ascii: FAIL got '\(xkeyOut)'\n"
+        }
+        resetTest()
+        collected = ""
+        self.feedLine("XKEY .")
+        ansTotal += 1
+        if self.waitingForXKey {
+            self.provideKey(0xC3)
+        }
+        if self.waitingForXKey && self.waitingForKey {
+            self.provideKey(0xA9)
+        }
+        let xkeyUtf8Out = collected.trimmingCharacters(in: .whitespacesAndNewlines)
+        if xkeyUtf8Out.contains("233") {
+            ansPassed += 1
+            results += "TEST6 XKEY utf8: pass\n"
+        } else {
+            results += "TEST6 XKEY utf8: FAIL got '\(xkeyUtf8Out)'\n"
+        }
+        resetTest()
+        self.xkeyAssembly = [0xC3, 0xA9]
+        collected = ""
+        self.feedLine("XKEY? .")
+        ansTotal += 1
+        if collected.contains("-1") {
+            ansPassed += 1
+            results += "TEST6 XKEY? ready: pass\n"
+        } else {
+            results += "TEST6 XKEY? ready: FAIL got '\(collected.trimmingCharacters(in: .whitespacesAndNewlines))'\n"
+        }
         resetTest()
         forth.feedLine("DECIMAL")
 

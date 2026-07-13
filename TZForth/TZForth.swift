@@ -78,7 +78,7 @@ public final class TZForth {
     private let STRING_BUFFER: Int = MemLayout.stringBuffer
     private let STRING_BUFFER_SIZE = MemLayout.stringBufferSize
     private let STRING_BUFFER_SLOT_SIZE = MemLayout.stringBufferSlotSize
-    private let PAD_BUFFER: Int = MemLayout.padBuffer
+    internal let PAD_BUFFER: Int = MemLayout.padBuffer
     private let PAD_BUFFER_SIZE = MemLayout.padBufferSize
     /// Max chars for counted strings in STRING_BUFFER slots (ANS /COUNTED-STRING = 255).
     private let STRING_BUFFER_MAX_COUNTED_CHARS = 255
@@ -180,6 +180,11 @@ public final class TZForth {
     /// True when MS is waiting for an asynchronous host delay (see onMsDelayRequested).
     public var waitingForMs = false
 
+    /// True when XKEY is assembling a multi-byte UTF-8 sequence via repeated KEY reads.
+    internal var waitingForXKey = false
+    /// Bytes collected so far for an in-progress XKEY (UTF-8).
+    internal var xkeyAssembly: [UInt8] = []
+
     /// Host schedules MS delays without blocking the UI thread. Invoked with milliseconds and a
     /// completion handler that must call resumeAfterMs() on the engine (done automatically if
     /// the closure only calls the passed completion).
@@ -214,9 +219,14 @@ public final class TZForth {
         public static let f12 = 22
     }
 
-    /// EKEY character event: modifiers in bits 8..23, character in low 8 bits.
+    /// EKEY character event: tag `0x01` in bits 24..25; ASCII (+ optional mods in 8..23) or
+    /// full xchar code point in low 24 bits when char > $FF.
     public static func makeCharKeyEvent(_ char: Int, mods: Int = 0) -> Int {
-        (1 << 24) | ((mods & 0xFFFF) << 8) | (char & 0xFF)
+        let cp = char & 0x1FFFFF
+        if cp > 0xFF {
+            return (1 << 24) | cp
+        }
+        return (1 << 24) | ((mods & 0xFFFF) << 8) | cp
     }
 
     /// EKEY function-key event for EKEY>FKEY / K-* constants.
@@ -1006,6 +1016,10 @@ public final class TZForth {
         ("X\\STRING-", "( xc-addr u -- xc-addr u' )", "string with all xchars except the last"),
         ("-TRAILING-GARBAGE", "( xc-addr u -- xc-addr u' )", "drop incomplete final xchar from tail"),
         ("[CHAR]",  "( \"<spaces>name\" -- )", "compile first xchar of name as literal (immediate)"),
+        ("XEMIT",   "( xchar -- )",         "emit UTF-8 encoding of xchar on terminal"),
+        ("XKEY",    "( -- xchar )",        "read one xchar from terminal (blocking UTF-8)"),
+        ("XKEY?",   "( -- flag )",         "true when XKEY can complete without blocking"),
+        ("EKEY>XCHAR", "( x -- xchar true | x false )", "decode EKEY char event to xchar"),
 
         // New for FLOAD / EDIT / file helpers (cwd + dialog driven by host for sandbox friendliness)
         ("\\",      "( -- )",             "comment to end of line (immediate)"),
@@ -1420,6 +1434,20 @@ public final class TZForth {
         }
     }
 
+    /// Emit a UTF-8 byte sequence to the terminal or `onOutput` (Extended-Character XEMIT).
+    internal func emitUtf8Bytes(_ bytes: [UInt8]) {
+        if bytes.isEmpty { return }
+        if self.facilityTerminal.isActive {
+            for b in bytes {
+                if b == 10 { self.facilityTerminal.newline() }
+                else { self.facilityTerminal.emit(b) }
+            }
+            self.terminalRefreshPending = true
+        } else {
+            self.tell(String(bytes: bytes, encoding: .utf8) ?? "")
+        }
+    }
+
     private func flushTerminalRefreshIfNeeded() {
         guard self.terminalRefreshPending, self.facilityTerminal.isActive else { return }
         self.terminalRefreshPending = false
@@ -1548,6 +1576,19 @@ public final class TZForth {
     /// pending KEY and resumes interpretation (outer or threaded) from the suspension point.
     public func provideKey(_ char: Int) {
         if !self.waitingForKey { return }
+        if self.waitingForXKey {
+            self.xkeyAssembly.append(UInt8(char & 0xff))
+            if let cp = self.decodeAssembledXKeyBytes() {
+                self.waitingForXKey = false
+                self.waitingForKey = false
+                self.xkeyAssembly.removeAll(keepingCapacity: true)
+                self.push(Cell(cp))
+                self.resumeBlockingPrimitive()
+            } else {
+                self.waitingForKey = true
+            }
+            return
+        }
         self.waitingForKey = false
         self.resumeBlockingPrimitive(pushValue: char)
     }
@@ -1576,7 +1617,7 @@ public final class TZForth {
         return self.extendedKeyQueue.removeFirst()
     }
 
-    private func isCharKeyEvent(_ x: Int) -> Bool {
+    internal func isCharKeyEvent(_ x: Int) -> Bool {
         (x & (3 << 24)) == (1 << 24)
     }
 
@@ -9273,6 +9314,8 @@ public final class TZForth {
         waitingForKey = false
         waitingForExtendedKey = false
         waitingForMs = false
+        waitingForXKey = false
+        xkeyAssembly.removeAll(keepingCapacity: true)
         extendedKeyQueue.removeAll(keepingCapacity: true)
         fileLoadRequested = false
         fileEditRequested = false
@@ -9382,6 +9425,8 @@ public final class TZForth {
         //    This is the main fix for "left over stuff in a buffer".
         inputQueue.removeAll(keepingCapacity: true)
         waitingForKey = false
+        waitingForXKey = false
+        xkeyAssembly.removeAll(keepingCapacity: true)
         fileLoadRequested = false
         fileEditRequested = false
         pendingEditURL = nil

@@ -1062,6 +1062,11 @@ fload \(fnInnerLate.lastPathComponent)
         ansTest("X\\STRING-", "HEX PAD 16 ERASE PAD DUP 41 SWAP XC!+ 42 SWAP XC!+ DROP 2 X\\STRING- NIP DUP 1 = .", "-1")
         ansTest("-TRAILING-GARBAGE ok", "HEX PAD 16 ERASE PAD DUP 41 SWAP XC!+ DROP 1 -TRAILING-GARBAGE NIP 1 = .", "-1")
         ansTest("-TRAILING-GARBAGE trim", "HEX PAD 16 ERASE C0 PAD C! PAD 1 -TRAILING-GARBAGE NIP 0= .", "-1")
+        results += "=== TZForth Extended-Character (ANS 18.6.2 parsing — shadow CHAR, [CHAR], PARSE) ===\n"
+        ansTest("CHAR ascii", "DECIMAL CHAR Z .", "90")
+        ansTest("CHAR utf8", "DECIMAL CHAR é .", "233")
+        ansTest("[CHAR] utf8", ": xc [CHAR] é ; xc .", "233")
+        ansTest("PARSE utf8 delim", "DECIMAL $20AC PARSE abc€ NIP 4 = .", "-1")
         resetTest()
         forth.feedLine("DECIMAL")
 

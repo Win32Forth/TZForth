@@ -656,7 +656,7 @@ public final class TZForth {
         ("ORDER",   "( -- )",             "display search order and compilation word list"),
         ("PREVIOUS","( -- )",             "remove first word list from search order"),
         ("SOURCE",  "( -- c-addr u )",    "current input source buffer and length"),
-        ("PARSE",   "( char -- c-addr u )", "parse text from input up to char (leaves delim, updates >IN)"),
+        ("PARSE",   "( xchar -- c-addr u )", "parse text delimited by xchar in SOURCE (UTF-8; updates >IN)"),
         ("PAD",     "( -- addr )",        "transient user scratch (1024 bytes); not used by system parsers"),
         ("QUIT",    "( -- )",             "empty return stack, set interpret state, return to outer interpreter"),
         ("SP!",     "( n -- )",           "set data stack pointer (updates both cell and internal)"),
@@ -905,7 +905,7 @@ public final class TZForth {
         ("TUCK",    "( a b -- b a b )",   "tuck"),
         ("NIP",     "( a b -- b )",       "nip"),
         ("BL",      "( -- 32 )",          "blank (space)"),
-        ("CHAR",    "( -- c )",           "parse next word, return its first char"),
+        ("CHAR",    "( \"<spaces>name\" -- xchar )", "parse BL-delimited name, return first xchar (UTF-8)"),
         ("WORD",    "( char -- addr )",   "parse input up to delimiter char, return addr of counted string (trailing NUL)"),
         ("COUNT",   "( c-addr -- addr u )", "from counted string addr return char-addr and length"),
 
@@ -1005,6 +1005,7 @@ public final class TZForth {
         ("+X/STRING", "( xc-addr u -- xc-addr' u' )", "skip first xchar in buffer; return remainder"),
         ("X\\STRING-", "( xc-addr u -- xc-addr u' )", "string with all xchars except the last"),
         ("-TRAILING-GARBAGE", "( xc-addr u -- xc-addr u' )", "drop incomplete final xchar from tail"),
+        ("[CHAR]",  "( \"<spaces>name\" -- )", "compile first xchar of name as literal (immediate)"),
 
         // New for FLOAD / EDIT / file helpers (cwd + dialog driven by host for sandbox friendliness)
         ("\\",      "( -- )",             "comment to end of line (immediate)"),
@@ -8373,7 +8374,7 @@ public final class TZForth {
 
     /// Consume one byte from the input source (queue), advancing >IN by 1.
     /// Used by all parsers (WORD, PARSE, comments, ACCEPT, etc.) so that SOURCE + >IN stay in sync.
-    private func consumeInput() -> UInt8? {
+    internal func consumeInput() -> UInt8? {
         if inputQueue.isEmpty { return nil }
         let b = inputQueue.removeFirst()
         let pos = readCell(IN)
@@ -8396,7 +8397,7 @@ public final class TZForth {
     // Skips leading exact delims, collects until delim or line-end, builds counted string
     // (len byte + chars + trailing NUL) in the next STRING_BUFFER slot. Returns c-addr.
     // The trailing delim (if any) is left in queue. Transient — ring may reuse slots.
-    private func parseToWordBuffer(using delim: UInt8) -> Cell {
+    internal func parseToWordBuffer(using delim: UInt8) -> Cell {
         var collected: [UInt8] = []
 
         // Skip leading delimiters (exact ascii or smart-double for ")
@@ -8618,7 +8619,7 @@ public final class TZForth {
 
     /// Raise a standard (or user) throw from kernel code. Caught → CATCH receives code only.
     /// Uncaught → handleUnhandledThrow prints lastKernelThrowMessage and resets.
-    private func kernelThrow(_ code: Cell, message: String? = nil) {
+    internal func kernelThrow(_ code: Cell, message: String? = nil) {
         if let message, !message.isEmpty {
             lastKernelThrowMessage = message
         } else if lastKernelThrowMessage.isEmpty {
@@ -8673,7 +8674,7 @@ public final class TZForth {
     }
 
     /// Compile-only / interpret-state misuse (ANS -14). Caught throw leaves STATE unchanged.
-    private func throwCompileOnly(_ message: String) {
+    internal func throwCompileOnly(_ message: String) {
         kernelThrow(StdThrow.compileOnly, message: message)
     }
 
@@ -8689,7 +8690,7 @@ public final class TZForth {
         kernelThrow(StdThrow.invalidAddress, message: message)
     }
 
-    private func throwZeroLengthName(_ message: String) {
+    internal func throwZeroLengthName(_ message: String) {
         kernelThrow(StdThrow.zeroLengthName, message: message)
     }
 

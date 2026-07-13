@@ -2,7 +2,7 @@
 //  TZForthXChar.swift
 //  TZForth
 //
-//  ANS Forth 2012 Extended-Character word set (chapter 18) — UTF-8 codec, memory + string words.
+//  ANS Forth 2012 Extended-Character word set (chapter 18) — UTF-8 codec, memory, string, parsing words.
 //
 
 import Foundation
@@ -125,6 +125,55 @@ extension TZForth {
 
     func xcharCodePointFromStack(_ cell: Cell) -> UInt32 {
         UInt32(truncatingIfNeeded: cell)
+    }
+
+    // MARK: - Parsing helpers (18.6.2 — shadow CHAR, [CHAR], PARSE)
+
+    private func inputQueueHasPrefix(_ bytes: [UInt8]) -> Bool {
+        if bytes.isEmpty || self.inputQueue.count < bytes.count { return false }
+        for i in 0..<bytes.count where self.inputQueue[i] != bytes[i] {
+            return false
+        }
+        return true
+    }
+
+    /// ANS XCHAR CHAR / [CHAR]: BL-delimited name → first xchar (nil when throw already raised).
+    func parseNameFirstXchar() -> Cell? {
+        let counted = Int(self.parseToWordBuffer(using: 32))
+        let len = Int(self.readByte(counted))
+        if len <= 0 {
+            self.kernelThrow(StdThrow.undefinedWord, message: "? CHAR")
+            return nil
+        }
+        if let decoded = try? self.xcDecode(at: counted + 1) {
+            return decoded.codePoint
+        }
+        self.throwMalformedXchar()
+        return nil
+    }
+
+    /// ANS XCHAR PARSE — parse SOURCE up to an xchar delimiter (byte length u).
+    func parseSourceDelimitedByXchar(_ codePoint: UInt32) -> (addr: Int, len: Int)? {
+        guard let delimBytes = try? self.xcEncode(codePoint) else {
+            self.throwMalformedXchar()
+            return nil
+        }
+        let startPos = Int(self.readCell(self.IN))
+        var len = 0
+        while !self.inputQueue.isEmpty {
+            let b = self.inputQueue.first!
+            if b == 10 || b == 13 { break }
+            if self.inputQueueHasPrefix(delimBytes) { break }
+            _ = self.consumeInput()
+            len += 1
+        }
+        var endPos = startPos + len
+        if self.inputQueueHasPrefix(delimBytes) {
+            for _ in delimBytes { _ = self.consumeInput() }
+            endPos += delimBytes.count
+        }
+        self.writeCell(self.IN, Cell(endPos))
+        return (self.SOURCE_BUFFER + startPos, len)
     }
 
     // MARK: - String helpers (18.6.2)
@@ -293,6 +342,31 @@ extension TZForth {
             let result = self.trailingGarbageTrim(xcAddr: xcAddr, u1: u1)
             self.push(Cell(result.xcAddr))
             self.push(Cell(result.u2))
+        }
+
+        // Shadow Core CHAR / [CHAR] / PARSE (ANS 18.6.2; registered after kernel primitives).
+        _ = register("CHAR") {
+            if let cp = self.parseNameFirstXchar(), !self.throwActive {
+                self.push(cp)
+            }
+        }
+
+        _ = register("[CHAR]", immediate: true) {
+            if self.readCell(self.STATE) == 0 {
+                self.throwCompileOnly("? [CHAR] only while compiling")
+                return
+            }
+            guard let cp = self.parseNameFirstXchar(), !self.throwActive else { return }
+            self.push(self.litID); self.comma()
+            self.push(cp); self.comma()
+        }
+
+        _ = register("PARSE") {
+            let cp = self.xcharCodePointFromStack(self.pop())
+            if let parsed = self.parseSourceDelimitedByXchar(cp), !self.throwActive {
+                self.push(Cell(parsed.addr))
+                self.push(Cell(parsed.len))
+            }
         }
     }
 }

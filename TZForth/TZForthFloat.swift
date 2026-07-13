@@ -11,8 +11,8 @@ extension TZForth {
 
     // MARK: - Float stack (separate from data/return stacks)
 
-    private func fspGet() -> Cell { floatingStackPointer }
-    private func fspSet(_ v: Cell) { floatingStackPointer = v }
+    internal func fspGet() -> Cell { floatingStackPointer }  // TZForth.swift (resetRuntimeState)
+    internal func fspSet(_ v: Cell) { floatingStackPointer = v }  // TZForth.swift (resetRuntimeState)
 
     internal func fpop() -> Double {
         var s = self.fspGet()

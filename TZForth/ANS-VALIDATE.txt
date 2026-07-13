@@ -1,4 +1,4 @@
-=== ANS-VALIDATE: 2012 ANS Forth validation (Core, Core Ext, File-Access, String, Facility, Exception, Memory, Double, Locals, Programming-Tools, Extended-Character, Block subsystem; from TestTZForth FTEST) ===
+=== ANS-VALIDATE: 2012 ANS Forth validation (Core, Core Ext, File-Access, String, Facility, Exception, Memory, Double, Locals, Programming-Tools, Extended-Character, Float Tier A, Block subsystem; from TestTZForth FTEST) ===
 
 TEST1 block: load1=true noskip1=false after1=true load2=true
 TEST1 exec load1: saw11=true out=11 OK
@@ -11,9 +11,9 @@ TEST2b post-slash exec: saw123=true out=123 OK
 TEST2b-include: echopre=true echopost=false sawEcho=true
 TEST2b-repl: prebatch=true postbatch=false (expect true false)
 TEST2b-err: shouldnot=false line1=true (expect false true) out=true verbose !
-? ansval_errstop_FEE06AA7.fth line 1: ? verbose
+? ansval_errstop_5E652E7A.fth line 1: ? verbose
     true verbose !
-? FLOAD of ansval_errstop_FEE06AA7.fth aborted at line 1
+? FLOAD of ansval_errstop_5E652E7A.fth aborted at line 1
 TEST2b-err-catch: caught=true out=OK
 -13  ? THROW 27 OK
 TEST2b-nested: before=true inner=true neverinner=false after=true neverouter=false (expect true true false true false)
@@ -384,6 +384,28 @@ TEST6 ENVIRONMENT? XCHAR-ENCODING len: pass
 TEST6 ENVIRONMENT? XCHAR-ENCODING text: pass
 TEST6 ENVIRONMENT? MAX-XCHAR: pass
 TEST6 ENVIRONMENT? XCHAR-MAXMEM: pass
+=== TZForth Float Tier A (ANS 12 — minimal IEEE 64-bit, separate F stack) ===
+TEST6 float literal: pass
+TEST6 S>F: pass
+TEST6 F+: pass
+TEST6 F-: pass
+TEST6 F*: pass
+TEST6 F/: pass
+TEST6 FNEGATE: pass
+TEST6 FDUP: pass
+TEST6 FSWAP: pass
+TEST6 FDEPTH: pass
+TEST6 FLOATS: pass
+TEST6 F@ F!: pass
+TEST6 FALIGNED: pass
+TEST6 D>F: pass
+TEST6 >FLOAT: pass
+TEST6 FCONSTANT: pass
+TEST6 FLITERAL colon: pass
+TEST6 scientific literal: pass
+=== TZForth Float Tier A (ANS 12.3.2 ENVIRONMENT?) ===
+TEST6 ENVIRONMENT? FLOATING: pass
+TEST6 ENVIRONMENT? FLOATING-STACK: pass
 === TZForth Programming-Tools assembler (CODE ;CODE RET noop) ===
 TEST6 CODE noop: pass
 TEST6 CODE RET: pass
@@ -407,6 +429,6 @@ TEST6 Block LIST/SCR: pass
 TEST6 Block LOAD: pass
 TEST6 Block THRU: pass
 TEST6 Block BLK: pass
-TEST6 ANS core summary: 360/360 passed
+TEST6 ANS core summary: 380/380 passed
 
 === ANS-VALIDATE complete ===

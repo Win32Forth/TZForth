@@ -63,6 +63,7 @@ public final class TZForth {
     private static let HEAP_HEADER_BYTES = 8
     private let STACK_SIZE = 256         // data stack depth (cells)
     private let RSTACK_SIZE = 256        // return stack depth (cells)
+    internal let FSTACK_SIZE = 16        // floating-point stack depth (IEEE 64-bit values)
     /// Fixed low-memory layout: SOURCE, STRING_BUFFER (parse scratch ring), PAD (user only), then stacks.
     private enum MemLayout {
         static let sourceBuffer = 128
@@ -113,12 +114,14 @@ public final class TZForth {
 
     private var stackBase: Int
     private var rstackBase: Int
+    internal var fstackBase: Int         // TZForthFloat.swift
 
     // The actual live stack depths. Stored in Swift instance variables (not in the flat memory buffer)
     // so they cannot be corrupted by bad user writes, wild branches, or buggy control-flow code.
     // This is the key robustness fix for the recurring "SP cell trashed → constant underflows" problem.
     private var dataStackPointer: Cell = 1
     private var returnStackPointer: Cell = 1
+    private var floatingStackPointer: Cell = 1
 
     // Current IP for the threaded interpreter
     private var ip: Int = 0
@@ -460,6 +463,7 @@ public final class TZForth {
     /// True when CODE prepended ASSEMBLER to the search order.
     internal var assemblerSearchPushed = false
     internal var litID: Cell = 0  // TZForthBlock.swift
+    internal var flitID: Cell = 0  // TZForthFloat.swift
     private var emitID: Cell = 0
     private var dotQuoteID: Cell = 0   // runtime ID for (." ) used by . " to embed compact string literals
     private var cQuoteID: Cell = 0     // runtime for (C") used by C" to embed counted string literals
@@ -1117,13 +1121,14 @@ public final class TZForth {
         let memBytes = max(Self.DEFAULT_MEMORY_BYTES, self.settings.defaultMemoryMB * 1024 * 1024)
         memory = Array(repeating: 0, count: memBytes)
 
-        // Layout fixed buffers (SOURCE, STRING_BUFFER, PAD) then data/return stacks above PAD.
+        // Layout fixed buffers (SOURCE, STRING_BUFFER, PAD) then data/return/float stacks above PAD.
         stackBase = (PAD_BUFFER + PAD_BUFFER_SIZE + 7) & ~7
         rstackBase = stackBase + STACK_SIZE * CELL_SIZE
+        fstackBase = rstackBase + RSTACK_SIZE * CELL_SIZE
 
         // Initialize system variables
         writeCell(LATEST, 0)
-        writeCell(DP_ADDR, rstackBase + RSTACK_SIZE * CELL_SIZE)   // initial value of the dictionary pointer (stored at DP_ADDR)
+        writeCell(DP_ADDR, fstackBase + FSTACK_SIZE * CELL_SIZE)   // initial value of the dictionary pointer (stored at DP_ADDR)
         writeCell(STATE, 0)
         writeCell(BASE, 10)
         writeCell(IN, 0)
@@ -1134,6 +1139,7 @@ public final class TZForth {
         // We still write the old fixed locations for any future raw memory inspection or "SP @" compatibility.
         dataStackPointer = 1
         returnStackPointer = 1
+        floatingStackPointer = 1
         writeCell(SP, 1)
         writeCell(RSP, 1)
 
@@ -1157,8 +1163,9 @@ public final class TZForth {
         self.registerBlockWords()
         self.registerXCharWords()
         self.registerAssemblerWords()
+        self.registerFloatWords()
 
-        // Record kernel boundary after bootstrap + block/xchar/assembler subsystems so RESET / resetToSafeState
+        // Record kernel boundary after bootstrap + block/xchar/assembler/float subsystems so RESET / resetToSafeState
         // retain ANS Block and TZForth .blk extension words (CREATE/OPEN/USE-BLOCK-FILE, etc.).
         kernelLatest = readCell(LATEST)
         kernelHere = readCell(DP_ADDR)
@@ -3140,6 +3147,9 @@ public final class TZForth {
         "XCHAR-ENCODING",
         "MAX-XCHAR",
         "XCHAR-MAXMEM",
+        "FLOATING",
+        "FLOATING-STACK",
+        "MAX-FLOAT",
     ]
 
     /// ANS ENVIRONMENT? values for a query string, or nil if unsupported.
@@ -3155,8 +3165,13 @@ public final class TZForth {
             return [255, -1]
         case "WORDLISTS":
             return [Cell(MAX_VOCABS), -1]
-        case "FILE", "FILE-ACCESS", "FILE-EXT", "EXCEPTION", "STRING", "MEMORY-ALLOCATION", "DOUBLE", "LOCALS", "PROGRAMMING-TOOLS", "FACILITY", "BLOCK", "BLOCK-EXT", "EXTENDED-CHARACTER":
+        case "FILE", "FILE-ACCESS", "FILE-EXT", "EXCEPTION", "STRING", "MEMORY-ALLOCATION", "DOUBLE", "LOCALS", "PROGRAMMING-TOOLS", "FACILITY", "BLOCK", "BLOCK-EXT", "EXTENDED-CHARACTER", "FLOATING":
             return [-1]
+        case "FLOATING-STACK":
+            return [Cell(self.FSTACK_SIZE), -1]
+        case "MAX-FLOAT":
+            let maxBits = Cell(bitPattern: UInt(truncatingIfNeeded: Double.greatestFiniteMagnitude.bitPattern))
+            return [maxBits, -1]
         case "XCHAR-ENCODING":
             if self.xcharEncodingAddr != 0 {
                 return [Cell(self.xcharEncodingAddr), 5, -1]
@@ -8120,6 +8135,12 @@ public final class TZForth {
                         self.push(d.lo)
                         self.push(d.hi)
                     }
+                } else if let f = self.parseTextFloat(name) {
+                    if self.readCell(self.STATE) != 0 {
+                        self.compileFloatLiteral(f)
+                    } else {
+                        self.fpush(f)
+                    }
                 } else if let num = self.parseTextNumber(name, base: b) {
                     if readCell(STATE) != 0 {
                         let nextWord = self.peekNextParsedWord()
@@ -9057,6 +9078,18 @@ public final class TZForth {
                 continue
             }
 
+            if cell == self.flitID {
+                if ip + 8 <= self.memory.count {
+                    let bits = self.readCell(ip)
+                    ip += 8
+                    let shown = self.formatFloatForDecompile(bits)
+                    self.tell("FLIT \(shown) ")
+                } else {
+                    break
+                }
+                continue
+            }
+
             // Special handling for the runtime string emitter used by ."
             // This lets SEE produce traditional readable output instead of trying to
             // decompile the inlined string bytes as instructions.
@@ -9366,6 +9399,7 @@ public final class TZForth {
     public func resetRuntimeState() {
         spSet(1)
         rspSet(1)
+        self.fspSet(1)
         ip = 0
         commandAddress = 0
         errorFlag = false

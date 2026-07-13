@@ -6,7 +6,7 @@
 //  How to run (note: multi-file swift script needs concatenation on current Swift):
 //
 //      cd /path/to/TZForth
-//      cat TZForth/TZForth.swift TZForth/TZForthSettings.swift TZForth/TZForthBlock.swift TZForth/TZForthXChar.swift TZForth/TZForthAssembler.swift TZForth/TZForthTests.swift TZForth/TestTZForth.swift > /tmp/combined.swift
+//      cat TZForth/TZForth.swift TZForth/TZForthSettings.swift TZForth/TZForthBlock.swift TZForth/TZForthXChar.swift TZForth/TZForthAssembler.swift TZForth/TZForthFloat.swift TZForth/TZForthTests.swift TZForth/TestTZForth.swift > /tmp/combined.swift
 //      swift /tmp/combined.swift
 //
 //      # For automated tests (\\ block comments, \S, FLOAD behavior + 357 ANS spot-checks):
@@ -1195,6 +1195,29 @@ fload \(fnInnerLate.lastPathComponent)
     ansTest("ENVIRONMENT? XCHAR-ENCODING text", "S\" XCHAR-ENCODING\" ENVIRONMENT? DROP S\" UTF-8\" COMPARE 0= .", "-1")
     ansTest("ENVIRONMENT? MAX-XCHAR", "S\" MAX-XCHAR\" ENVIRONMENT? DROP HEX U. DECIMAL", "10FFFF")
     ansTest("ENVIRONMENT? XCHAR-MAXMEM", "S\" XCHAR-MAXMEM\" ENVIRONMENT? DROP .", "4")
+
+    print("=== TZForth Float Tier A (ANS 12 — minimal IEEE 64-bit, separate F stack) ===")
+    ansTest("float literal", "2.5 FDEPTH .", "1")
+    ansTest("S>F", "42 S>F FDEPTH .", "1")
+    ansTest("F+", "1.5 2.5 F+ 4e0 FSWAP F- F0= .", "-1")
+    ansTest("F-", "5e0 2e0 F- 3e0 FSWAP F- F0= .", "-1")
+    ansTest("F*", "2e0 3e0 F* 6e0 FSWAP F- F0= .", "-1")
+    ansTest("F/", "8e0 2e0 F/ 4e0 FSWAP F- F0= .", "-1")
+    ansTest("FNEGATE", "-3e0 FNEGATE 3e0 FSWAP F- F0= .", "-1")
+    ansTest("FDUP", "2.5 FDUP FDEPTH .", "2")
+    ansTest("FSWAP", "2e0 1e0 FSWAP 1e0 FSWAP F- F0< .", "-1")
+    ansTest("FDEPTH", "1.5 2.5 FDEPTH .", "2")
+    ansTest("FLOATS", "FLOATS .", "8")
+    ansTest("F@ F!", "PAD 3.14 F! PAD F@ 3.14 FSWAP F- F0= .", "-1")
+    ansTest("FALIGNED", "HEX 1000 FALIGNED . DECIMAL", "-1")
+    ansTest("D>F", "10 0 D>F 10e0 FSWAP F- F0= .", "-1")
+    ansTest(">FLOAT", "S\" 1.25\" >FLOAT DROP FDEPTH .", "1")
+    ansTest("FCONSTANT", "3.14 FCONSTANT TPI TPI 3.14 FSWAP F- F0= .", "-1")
+    ansTest("FLITERAL colon", ": tf 2.5 ; tf 2.5 FSWAP F- F0= .", "-1")
+    ansTest("scientific literal", "1E2 100e0 FSWAP F- F0= .", "-1")
+    print("=== TZForth Float Tier A (ANS 12.3.2 ENVIRONMENT?) ===")
+    ansTest("ENVIRONMENT? FLOATING", "S\" FLOATING\" ENVIRONMENT? .", "-1")
+    ansTest("ENVIRONMENT? FLOATING-STACK", "S\" FLOATING-STACK\" ENVIRONMENT? DROP .", "16")
 
     print("=== TZForth Programming-Tools assembler (CODE ;CODE RET noop) ===")
     ansTest("CODE noop", "CODE tnoop ;CODE 1 tnoop .", "1")

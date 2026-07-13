@@ -2,7 +2,7 @@
 
 This document tracks implementation status of the 2012 ANS Forth Standard word sets in TZForth (Swift port of the lbForth model). Generated from codebase inspection (`TZForth/TZForth.swift`, `TestTZForth.swift`, `TZForthTests.swift`).
 
-Last update: Hayes forth2012-test-suite **0 errors** (Block included); Facility + Block + Extended-Character + Programming-Tools CODE complete on TZForth host; FTEST / `ANS-VALIDATE` **360/360**.
+Last update: Hayes forth2012-test-suite **0 errors** (Block included); Facility + Block + Extended-Character + Programming-Tools CODE + Float Tier A on TZForth host; FTEST / `ANS-VALIDATE` **380/380**.
 
 ## Summary
 
@@ -21,9 +21,9 @@ Last update: Hayes forth2012-test-suite **0 errors** (Block included); Facility 
 | **Facility (10)** | Complete (TZForth host) — structures, `PAGE`/`AT-XY`, `MS`, `TIME&DATE`, `EKEY*`, `EMIT?`, `K-*`; Hayes `facilitytest.fth` 0 errors |
 | **Block (10)** | Complete — file-backed `.blk`, LRU buffer cache; Hayes `blocktest.fth` 0 errors; FTEST Block + TZ extension spot-checks |
 | **Extended-Character (18)** | Complete — UTF-8 codec; shadow `CHAR`/`[CHAR]`/`PARSE`; `XEMIT`/`XKEY`/`XKEY?`/`EKEY>XCHAR`; `XHOLD`; `XC-WIDTH`/`X-WIDTH`; ENVIRONMENT? queries |
-| **Other optional sets** | Mostly absent — Float, etc. |
+| **Float (12)** | Tier A — IEEE 64-bit, separate 16-deep F stack; ~22 core words; decimal/scientific literals |
 
-FTEST harness: run with `FTEST=1 swift /tmp/combined.swift` (concatenate `TZForth.swift`, `TZForthSettings.swift`, `TZForthBlock.swift`, `TZForthXChar.swift`, `TZForthAssembler.swift`, `TZForthTests.swift`, `TestTZForth.swift`). Current count: **360/360** TEST6 spot-checks plus block-comment / FLOAD / INCLUDE load tests. In-app **`ANS-VALIDATE`** runs the same suite and overwrites **`TZForth/ANS-VALIDATE.txt`** (tracked baseline in the Xcode project; excluded from the app bundle so it stays writable). Validation restores dictionary bytes and interpret-session state (`evaluateNesting`, input-source stack, block subsystem) so the REPL still prints **`OK`** after `ANS-VALIDATE` or Hayes `fload test`. During validation, `onMsDelayRequested` is cleared so **`MS`** uses the engine `Thread.sleep` fallback (synchronous `feedLine` / `ansTest` output checks).
+FTEST harness: run with `FTEST=1 swift /tmp/combined.swift` (concatenate `TZForth.swift`, `TZForthSettings.swift`, `TZForthBlock.swift`, `TZForthXChar.swift`, `TZForthAssembler.swift`, `TZForthFloat.swift`, `TZForthTests.swift`, `TestTZForth.swift`). Current count: **380/380** TEST6 spot-checks plus block-comment / FLOAD / INCLUDE load tests. In-app **`ANS-VALIDATE`** runs the same suite and overwrites **`TZForth/ANS-VALIDATE.txt`** (tracked baseline in the Xcode project; excluded from the app bundle so it stays writable). Validation restores dictionary bytes and interpret-session state (`evaluateNesting`, input-source stack, block subsystem) so the REPL still prints **`OK`** after `ANS-VALIDATE` or Hayes `fload test`. During validation, `onMsDelayRequested` is cleared so **`MS`** uses the engine `Thread.sleep` fallback (synchronous `feedLine` / `ansTest` output checks).
 
 ## Core (6.1) — Complete
 
@@ -373,15 +373,30 @@ Shadow Core **`CHAR`**, **`[CHAR]`**, **`PARSE`** — first xchar / delimiter pa
 
 FTEST / `ANS-VALIDATE` cover codec, memory/string words, shadow parsing, I/O, pictured `XHOLD`, display width, and all four ENVIRONMENT? queries.
 
+## Float (12) — Tier A (partial)
+
+IEEE **64-bit double** on a **separate 16-deep floating-point stack** (low memory, after return stack). Decimal/scientific literals when `BASE` is 10 (ANS 12.3.7). Full Float Ext (trig, `F~`, `FVARIABLE`, etc.) not implemented.
+
+| Category | Words |
+|----------|-------|
+| Stack | `FDEPTH`, `FDROP`, `FDUP`, `FOVER`, `FSWAP` |
+| Memory | `F@`, `F!`, `FLOATS`, `FLOAT+`, `FALIGN`, `FALIGNED` |
+| Math | `F+`, `F-`, `F*`, `F/`, `FNEGATE` |
+| Compare | `F0=`, `F0<`, `F<` |
+| Convert | `S>F`, `D>F`, `>FLOAT` |
+| I/O | `F.` |
+| Defining | `FCONSTANT`, `FLITERAL` (+ threaded `FLIT`) |
+| ENVIRONMENT? | `FLOATING`, `FLOATING-STACK` (16), `MAX-FLOAT` |
+
 ## Missing optional / future word sets
 
 Not implemented (no current plan unless requested):
 
-- **Float**
+- **Float Ext** (remaining ~57 words: trig, `F~`, `FVARIABLE`, `FVALUE`, etc.)
 
 ## Recommendations
 
-- TZForth is highly functional for classic Forth sources, REPL, sandboxed `FLOAD`/`EDIT`/`CHDIR`, Hayes forth2012 validation (**0 errors**, Block included), FTEST / `ANS-VALIDATE`, file-backed Block (`.blk`), UTF-8 Extended-Character, minimal threaded `CODE`, and ANS File-Access file I/O / `INCLUDED`.
-- Next logical step (if desired): **Float**.
+- TZForth is highly functional for classic Forth sources, REPL, sandboxed `FLOAD`/`EDIT`/`CHDIR`, Hayes forth2012 validation (**0 errors**, Block included), FTEST / `ANS-VALIDATE`, file-backed Block (`.blk`), UTF-8 Extended-Character, minimal threaded `CODE`, Float Tier A, and ANS File-Access file I/O / `INCLUDED`.
+- Next logical step (if desired): **Float Ext** (trig, approximate compare, `FVARIABLE`/`FVALUE`).
 
 For full standard details, see the official 2012 ANS Forth document (sections 6.1, 6.2, and optional word sets in chapters 7–18).

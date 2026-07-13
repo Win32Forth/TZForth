@@ -11,7 +11,7 @@ Last update: Hayes forth2012-test-suite **0 errors** (Block included); Facility 
 | **Core (6.1)** | Complete — all required words implemented with FTEST coverage |
 | **Core Ext (6.2)** | Complete — all standard Core Ext words implemented |
 | **Search-Order (16)** | Complete — 16.6.1 + 16.6.2; `SEARCH-WORDLIST`, `ENVIRONMENT?` `WORDLISTS` (8) |
-| **Programming-Tools** | Partial — 15.6.1/15.6.2 words below; assembler `CODE`/`;CODE` stubbed; `LOCATE` (SEE alias); pre-ANS `COMPILE` omitted (`POSTPONE` / `[COMPILE]` / `COMPILE,` in Core); no `NEEDS` |
+| **Programming-Tools** | Partial — 15.6.1/15.6.2 words below; assembler `CODE`/`;CODE` stubbed |
 | **File-Access (11)** | Complete — 11.6.1 + 11.6.2; Hayes filetest 0 errors |
 | **Exception (9)** | Complete — `CATCH`, `THROW`, `.ERROR`; kernel faults CATCH-able; `ABORT`/`ABORT"` → `-1`/`-2` |
 | **String (17)** | Complete — 17.6.1 + 17.6.2 (`REPLACES`, `SUBSTITUTE`, `UNESCAPE`); Hayes stringtest 0 errors |
@@ -260,7 +260,7 @@ ANS word set 13.6.1 and extension 13.6.2. Locals are searched before the diction
 
 ## Programming-Tools (15) — Partial
 
-Hayes **toolstest.fth** subset (implemented words only): **0 errors**. Full ANS Programming-Tools set is not complete (`CODE`/`;CODE` stubbed, no `NEEDS`).
+Hayes **toolstest.fth** subset (implemented words only): **0 errors**. Remaining ANS gap: `CODE`/`;CODE` (assembler) stubbed.
 
 ANS words implemented from 15.6.1 / extensions:
 
@@ -282,27 +282,8 @@ ANS words implemented from 15.6.1 / extensions:
 | `CS-PICK` / `CS-ROLL` | Control-flow stack = data stack during compilation |
 | `AHEAD` | Unconditional forward branch placeholder (with `THEN`) |
 | `EDITOR` / `ASSEMBLER` | Empty vocabularies (Search-Order stubs) |
-| `LOCATE` | `( -- name )` — TZForth extension; **alias of `SEE`** (decompile from memory, not source-file context) |
 
 `[IF]` / `[ELSE]` / `[THEN]` also satisfy Core Ext conditional compilation. Stubbed (error at use): `CODE`, `;CODE`.
-
-### Compile-time control (Core / Core Ext — not Programming-Tools)
-
-Pre-ANS fig/F-PC `COMPILE` is **not** implemented and is **not planned**. ANS 2012 never standardized it; compilation control lives in Core and Core Ext instead:
-
-| Word | Set | Role |
-|------|-----|------|
-| `POSTPONE` | Core | Append compilation semantics of the next word; for immediates, emits `LIT xt EXECUTE` (preferred ANS form) |
-| `[COMPILE]` | Core | Force compile-time reference to the next word even if immediate (older ANS form) |
-| `COMPILE,` | Core Ext | `( xt -- )` — compile a known execution token |
-| `NAME>COMPILE` | Programming-Tools | `( nt -- xt )` — compilation token for a name token |
-
-Porting legacy sources that use `COMPILE name` should rewrite to `POSTPONE name`, `[COMPILE] name`, or `' name COMPILE,` as appropriate.
-
-### Not implemented
-
-- **`NEEDS`** — not planned.
-- **Gforth-style source `LOCATE`** (retained buffers, file:line) — future enhancement; TZForth `LOCATE` remains a `SEE` alias.
 
 ## Dictionary introspection (fig-style extensions)
 
@@ -323,7 +304,7 @@ Example: `' DUP >HEADER 32 DUMP` · `' DUP H.` · `' DUP >XID .` → `8`.
 
 ## TZForth-specific extensions (non-ANS)
 
-`FLOAD` (synchronous named load, catchable `-74`), `EDIT`, `CHDIR`, `DIR`, `FILE-ECHO`, `DEBUG-ON`/`DEBUG-OFF`, `RESET`, `CLS`, `BYE`, `ANS-VALIDATE`, `.ENVIRONMENT`, `.ERROR` (spaced throw message), `.INCLUDED` (list `INCLUDED-NAMES` registry), `CATCH-EVALUATE`, `LOCATE` (SEE alias), `FORGET-WORD`, `>LFA`, `>HEADER`, `>NFA`, `>XID`, `ID.`, `H.` (unsigned hex print, ignores `BASE`), `\\` (block comment to `{`), `\\S`, `DP`, high-level `HERE` (`DP @`), `ERASE` (`0 FILL`), `GROWMEMORYMB`, etc.
+`FLOAD` (synchronous named load, catchable `-74`), `EDIT`, `CHDIR`, `DIR`, `FILE-ECHO`, `DEBUG-ON`/`DEBUG-OFF`, `RESET`, `CLS`, `BYE`, `ANS-VALIDATE`, `.ENVIRONMENT`, `.ERROR` (spaced throw message), `.INCLUDED` (list `INCLUDED-NAMES` registry), `CATCH-EVALUATE`, `FORGET-WORD`, `>LFA`, `>HEADER`, `>NFA`, `>XID`, `ID.`, `H.` (unsigned hex print, ignores `BASE`), `\\` (block comment to `{`), `\\S`, `DP`, high-level `HERE` (`DP @`), `ERASE` (`0 FILL`), `GROWMEMORYMB`, etc.
 
 ## Facility (10) — Complete (TZForth host)
 
@@ -395,11 +376,11 @@ FTEST / `ANS-VALIDATE` cover codec, memory/string words, shadow parsing, I/O, pi
 Not implemented (no current plan unless requested):
 
 - **Float**
-- Remaining **Programming-Tools** (`NEEDS`, Gforth-style source `LOCATE`, …)
+- **Programming-Tools** assembler (`CODE`, `;CODE`)
 
 ## Recommendations
 
 - TZForth is highly functional for classic Forth sources, REPL, sandboxed `FLOAD`/`EDIT`/`CHDIR`, Hayes forth2012 validation (**0 errors**, Block included), FTEST / `ANS-VALIDATE` (**357/357**), file-backed Block (`.blk`), UTF-8 Extended-Character, and ANS File-Access file I/O / `INCLUDED`.
-- Next logical steps (if desired): Float or remaining Programming-Tools (`NEEDS`, Gforth-style source `LOCATE`, …).
+- Next logical step (if desired): **Float** or a working **assembler** (`CODE`/`;CODE`).
 
 For full standard details, see the official 2012 ANS Forth document (sections 6.1, 6.2, and optional word sets in chapters 7–18).

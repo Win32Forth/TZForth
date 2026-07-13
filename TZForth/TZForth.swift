@@ -1453,7 +1453,7 @@ public final class TZForth {
 
     // MARK: - Output
 
-    private func putkey(_ c: UInt8) {
+    internal func putkey(_ c: UInt8) {  // TZForthFloat.swift (.FS)
         if self.facilityTerminal.isActive {
             if c == 10 {
                 self.facilityTerminal.newline()

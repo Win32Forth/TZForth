@@ -2660,7 +2660,7 @@ public final class TZForth {
 
     // Direct memory versions — these do NOT touch the data stack.
     // Critical during init when building the primitive dictionary.
-    private func writeCellHere(_ value: Cell) {
+    internal func writeCellHere(_ value: Cell) {
         let h = readCell(DP_ADDR)
         writeCell(h, value)
         writeCell(DP_ADDR, h + 8)
@@ -8356,7 +8356,7 @@ public final class TZForth {
         }
     }
 
-    private func parseWord() -> String {
+    internal func parseWord() -> String {
         // Support \\ ... { block comments (can span lines in console REPL or during FLOAD).
         // Flag set by the \\ word (when it sees no '{' on its line); cleared when '{' found.
         if self.inSlashSlashComment {

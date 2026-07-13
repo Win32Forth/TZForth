@@ -309,6 +309,22 @@ public final class TZForth {
     private var currentFileLineStart: Int? = nil
     /// Pending error text for the current loaded line (reported with line number after the line ends).
     private var fileLoadPendingErrorMessage = ""
+    /// Innermost source location where a load-time fault occurred (nested FLOAD/INCLUDED).
+    private struct FileLoadErrorSite {
+        var fileId: Int
+        var line: Int
+        var sourceLine: String
+        var loadLabel: String
+        var message: String
+        var enclosingFileId: Int
+        var enclosingLine: Int
+    }
+    private var fileLoadErrorSite: FileLoadErrorSite?
+    private var fileLoadErrorReported = false
+    /// Load label for the innermost active includeFileInterpret (FLOAD vs INCLUDED vs INCLUDE-FILE).
+    private var currentIncludeLoadLabel = "INCLUDE-FILE"
+    /// Call chain of file/line for each active runInterpreter inside includeFileInterpret.
+    private var fileLoadEnclosingStack: [(fileId: Int, line: Int)] = []
 
     /// True while FLOAD / INCLUDED / INCLUDE-FILE is interpreting source (nested counts included).
     /// The console host uses this to explain why typed commands may not get OK immediately.
@@ -1498,8 +1514,14 @@ public final class TZForth {
         return "file \(fileId)"
     }
 
+    private func clearFileLoadErrorTracking() {
+        self.fileLoadPendingErrorMessage = ""
+        self.fileLoadErrorSite = nil
+        self.fileLoadErrorReported = false
+    }
+
     /// Emit a load-time fault with filename, line number, and the offending source line.
-    private func reportFileLoadError(fileId: Int, line: Int, sourceLine: String, loadLabel: String, message: String) {
+    private func reportFileLoadError(fileId: Int, line: Int, sourceLine: String, loadLabel: String, message: String, enclosingFileId: Int = 0, enclosingLine: Int = 0) {
         // Enclosing CATCH should receive the throw code without duplicate load diagnostics.
         if !self.exceptionFrames.isEmpty { return }
         let name = self.fileDisplayName(forFileId: fileId)
@@ -1510,7 +1532,40 @@ public final class TZForth {
         if !trimmed.isEmpty {
             self.tell("    \(trimmed)\n")
         }
+        if enclosingFileId >= 2, enclosingLine > 0,
+           enclosingFileId != fileId || enclosingLine != line {
+            let outerName = self.fileDisplayName(forFileId: enclosingFileId)
+            self.tell("    (while interpreting \(outerName) line \(enclosingLine))\n")
+        }
         self.tell("? \(loadLabel) of \(name) aborted at line \(line)\n")
+    }
+
+    /// Report the innermost nested fault once; fall back to the current include loop line.
+    private func reportFileLoadErrorOnce(outerFileId: Int, outerLine: Int, outerSourceLine: String, outerLoadLabel: String, pendingMessage: String) {
+        if self.fileLoadErrorReported { return }
+        if let site = self.fileLoadErrorSite {
+            self.reportFileLoadError(
+                fileId: site.fileId,
+                line: site.line,
+                sourceLine: site.sourceLine,
+                loadLabel: site.loadLabel,
+                message: site.message,
+                enclosingFileId: site.enclosingFileId,
+                enclosingLine: site.enclosingLine
+            )
+            self.fileLoadErrorReported = true
+            return
+        }
+        if !pendingMessage.isEmpty || self.errorFlag {
+            self.reportFileLoadError(
+                fileId: outerFileId,
+                line: outerLine,
+                sourceLine: outerSourceLine,
+                loadLabel: outerLoadLabel,
+                message: pendingMessage
+            )
+            self.fileLoadErrorReported = true
+        }
     }
 
     private func abortFileInterpretAfterLine(fileId: Int, line: Int, sourceLine: String, loadLabel: String) {
@@ -1518,16 +1573,31 @@ public final class TZForth {
         let message = self.fileLoadPendingErrorMessage
         self.fileLoadPendingErrorMessage = ""
         if self.throwActive {
-            // Throw already delivered to enclosing CATCH — suppress load diagnostics and propagate.
+            // CATCH will handle the throw; still emit load diagnostics once for the inner fault.
+            self.reportFileLoadErrorOnce(
+                outerFileId: fileId,
+                outerLine: line,
+                outerSourceLine: sourceLine,
+                outerLoadLabel: loadLabel,
+                pendingMessage: message
+            )
             self.errorFlag = false
             return
         }
-        if !message.isEmpty || self.errorFlag {
-            self.reportFileLoadError(fileId: fileId, line: line, sourceLine: sourceLine, loadLabel: loadLabel, message: message)
-        }
+        self.reportFileLoadErrorOnce(
+            outerFileId: fileId,
+            outerLine: line,
+            outerSourceLine: sourceLine,
+            outerLoadLabel: loadLabel,
+            pendingMessage: message
+        )
         self.errorFlag = false
         if !self.exceptionFrames.isEmpty {
-            self.kernelThrow(StdThrow.fileIOError, message: "? \(loadLabel) of \(self.fileDisplayName(forFileId: fileId)) aborted at line \(line)")
+            let reportFileId = self.fileLoadErrorSite?.fileId ?? fileId
+            let reportLine = self.fileLoadErrorSite?.line ?? line
+            let reportLabel = self.fileLoadErrorSite?.loadLabel ?? loadLabel
+            let reportName = self.fileDisplayName(forFileId: reportFileId)
+            self.kernelThrow(StdThrow.fileIOError, message: "? \(reportLabel) of \(reportName) aborted at line \(reportLine)")
         }
     }
 
@@ -1818,6 +1888,7 @@ public final class TZForth {
             let (fid, ior) = self.openTextFileForInterpret(at: target)
             guard ior == self.FILE_IO_SUCCESS else { continue }
             self.midFileLoadAborted = false
+            self.clearFileLoadErrorTracking()
             self.includeFileInterpret(Int(fid), closeWhenDone: true, loadLabel: "FLOAD")
             if self.midFileLoadAborted || self.throwActive {
                 self.pendingFloadSpec = ""
@@ -2275,6 +2346,7 @@ public final class TZForth {
     }
 
     private func includeFileInterpret(_ fileId: Int, closeWhenDone: Bool, loadLabel: String = "INCLUDE-FILE") {
+        self.currentIncludeLoadLabel = loadLabel
         switch self.fileIdStatus(fileId) {
         case .invalid:
             self.throwInvalidFileId("? INCLUDE-FILE: invalid fileid")
@@ -2285,10 +2357,14 @@ public final class TZForth {
         case .open:
             break
         }
+        let isOutermostLoad = self.loadNesting == 0
         pushInputSourceFrame()
         interpreterInputFileId = Cell(fileId)
         currentSourceId = Cell(fileId)
         loadNesting += 1
+        if isOutermostLoad {
+            self.clearFileLoadErrorTracking()
+        }
         self.sourceLoadedByRefill = false
         sourceLoadStop = false
         self.inSlashSlashComment = false
@@ -2325,7 +2401,6 @@ public final class TZForth {
         }
         self.midFileLoadAborted = false
         self.fileInterpretLineNumber = 0
-        self.fileLoadPendingErrorMessage = ""
         while refillFromFile(fileId) {
             if self.floadLinesToSkip > 0 {
                 self.floadLinesToSkip -= 1
@@ -2349,11 +2424,15 @@ public final class TZForth {
                 // twice (once here, again on the next refill after the file rewind).
                 self.floadExtraLinesConsumed = 0
                 self.countFloadInterpreterRefills = true
+                self.fileLoadEnclosingStack.append((fileId: fileId, line: lineNumber))
                 self.pushInputSourceFrame()
                 runInterpreter()
                 self.countFloadInterpreterRefills = false
                 self.floadLinesToSkip = self.floadExtraLinesConsumed
                 self.popInputSourceFrame()
+                if !self.fileLoadEnclosingStack.isEmpty {
+                    self.fileLoadEnclosingStack.removeLast()
+                }
                 self.finishInterpretedLoadLine()
             }
             // Undo only forward over-reads from `(` REFILL during this line. RESTORE-INPUT
@@ -2381,7 +2460,7 @@ public final class TZForth {
                 break
             }
         }
-        self.fileLoadPendingErrorMessage = ""
+        self.clearFileLoadErrorTracking()
     }
 
     // MARK: - INCLUDED-NAMES registry (ANS REQUIRE / REQUIRED)
@@ -8863,6 +8942,23 @@ public final class TZForth {
         if self.isInterpretingLoadedFile() {
             // Defer to reportFileLoadError so the user sees filename + line number.
             self.fileLoadPendingErrorMessage = message
+            if self.interpreterInputFileId >= 2 {
+                let enclosing: (fileId: Int, line: Int)
+                if self.fileLoadEnclosingStack.count >= 2 {
+                    enclosing = self.fileLoadEnclosingStack[self.fileLoadEnclosingStack.count - 2]
+                } else {
+                    enclosing = (0, 0)
+                }
+                self.fileLoadErrorSite = FileLoadErrorSite(
+                    fileId: Int(self.interpreterInputFileId),
+                    line: self.fileInterpretLineNumber,
+                    sourceLine: self.sourceBufferLineString(),
+                    loadLabel: self.currentIncludeLoadLabel,
+                    message: message,
+                    enclosingFileId: enclosing.fileId,
+                    enclosingLine: enclosing.line
+                )
+            }
         } else {
             self.tell(message + "\n")
         }

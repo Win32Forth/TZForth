@@ -258,6 +258,30 @@ fload \(fnInnerLate.lastPathComponent)
         self.logicalCurrentDirectory = savedLog2b
         _ = fm.changeCurrentDirectoryPath(savedCwd2b)
 
+        // === Test 2b-faultline: nested FLOAD faults cite inner file/line ===
+        resetTest()
+        let fnFaultChild = tmp.appendingPathComponent("ansval_fault_child_\(suffix).fth")
+        let fnFaultParent = tmp.appendingPathComponent("ansval_fault_parent_\(suffix).fth")
+        do {
+            try "notaword\n".write(to: fnFaultChild, atomically: true, encoding: String.Encoding.utf8)
+            try "1 2 + .  fload \(fnFaultChild.lastPathComponent)\n"
+                .write(to: fnFaultParent, atomically: true, encoding: String.Encoding.utf8)
+        } catch {
+            results += "TEST2b-faultline write fail: \(error)\n"
+        }
+        collected = ""
+        _ = fm.changeCurrentDirectoryPath(tmp.path)
+        self.logicalCurrentDirectory = tmp.path
+        self.loadFile(fnFaultParent)
+        let childName = fnFaultChild.lastPathComponent
+        let parentName = fnFaultParent.lastPathComponent
+        let citesChild = collected.contains("\(childName) line 1")
+        let citesParentContext = collected.contains("while interpreting \(parentName) line 1")
+        let avoidsParentFault = !collected.contains("\(parentName) line 1: ? notaword")
+        results += "TEST2b-faultline: child=\(citesChild) context=\(citesParentContext) notParent=\(avoidsParentFault) (expect true true true) out=\(collected.trimmingCharacters(in: .whitespacesAndNewlines))\n"
+        self.logicalCurrentDirectory = savedLog2b
+        _ = fm.changeCurrentDirectoryPath(savedCwd2b)
+
         // === Test 2c: DEBUG-ON/OFF in file ===
         resetTest()
         self.feedLine("FILE-ECHO OFF")

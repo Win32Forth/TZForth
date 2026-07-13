@@ -11,13 +11,19 @@ TEST2b post-slash exec: saw123=true out=123 OK
 TEST2b-include: echopre=true echopost=false sawEcho=true
 TEST2b-repl: prebatch=true postbatch=false (expect true false)
 TEST2b-err: shouldnot=false line1=true (expect false true) out=true verbose !
-? ansval_errstop_BC485013.fth line 1: ? verbose
+? ansval_errstop_0B4CC726.fth line 1: ? verbose
     true verbose !
-? FLOAD of ansval_errstop_BC485013.fth aborted at line 1
+? FLOAD of ansval_errstop_0B4CC726.fth aborted at line 1
 TEST2b-err-catch: caught=true out=OK
 -13  ? THROW 27 OK
 TEST2b-nested: before=true inner=true neverinner=false after=true neverouter=false (expect true true false true false)
 TEST2b-nested-outer: inner=false neverouter2=false (expect false false)
+TEST2b-faultline: child=true context=true notParent=true (expect true true true) out=1 2 + .  fload ansval_fault_child_0B4CC726.fth
+3 notaword
+? ansval_fault_child_0B4CC726.fth line 1: ? notaword
+    notaword
+    (while interpreting ansval_fault_parent_0B4CC726.fth line 1)
+? FLOAD of ansval_fault_child_0B4CC726.fth aborted at line 1
 TEST2c debug: dbg1=true dbg2=true dbg3=true
 TEST2c debug output: saw any [DEBUG]=true
 TEST2c post-debug repl: sawDbgInRepl=false out=3 OK

@@ -307,6 +307,28 @@ fload \(fnInnerLate.lastPathComponent)
     let hasNeverOuter2 = forth.debugFind("NEVEROUTER2")
     print("TEST2b-nested-outer: inner=\(hasInnerLate) neverouter2=\(hasNeverOuter2) (expect false false)")
 
+    // === Test 2b-faultline: nested FLOAD faults cite inner file/line ===
+    resetTest()
+    let fnFaultChild = tmp.appendingPathComponent("ansval_fault_child_\(suffix).fth")
+    let fnFaultParent = tmp.appendingPathComponent("ansval_fault_parent_\(suffix).fth")
+    do {
+        try "notaword\n".write(to: fnFaultChild, atomically: true, encoding: String.Encoding.utf8)
+        try "1 2 + .  fload \(fnFaultChild.lastPathComponent)\n"
+            .write(to: fnFaultParent, atomically: true, encoding: String.Encoding.utf8)
+    } catch {
+        print("TEST2b-faultline write fail: \(error)")
+    }
+    collected = ""
+    _ = fm.changeCurrentDirectoryPath(tmp.path)
+    forth.logicalCurrentDirectory = tmp.path
+    forth.loadFile(fnFaultParent)
+    let childName = fnFaultChild.lastPathComponent
+    let parentName = fnFaultParent.lastPathComponent
+    let citesChild = collected.contains("\(childName) line 1")
+    let citesParentContext = collected.contains("while interpreting \(parentName) line 1")
+    let avoidsParentFault = !collected.contains("\(parentName) line 1: ? notaword")
+    print("TEST2b-faultline: child=\(citesChild) context=\(citesParentContext) notParent=\(avoidsParentFault) (expect true true true)")
+
     // === Test 2c: DEBUG-ON / DEBUG-OFF inside a loaded file should take effect immediately
     // for subsequent lines in *that* file (live flag change during the shared load loop).
     // We expect [DEBUG] dumps only for lines between DEBUG-ON and DEBUG-OFF.

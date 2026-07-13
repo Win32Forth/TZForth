@@ -101,7 +101,7 @@ public final class TZForth {
     // System variables live at the bottom of memory (classic layout)
     internal var LATEST:  Int { 0 }  // internal so TZForthTests.swift (and combined.swift for FTEST) can access for runANSValidation snapshots
     internal var DP_ADDR: Int { 8 }   // address of the DP variable (the cell holding the current dictionary pointer value); internal for test harness in TZForthTests.swift
-    private var STATE:   Int { 16 }
+    internal var STATE:   Int { 16 }   // internal for TZForthXChar.swift extension
     private var BASE:    Int { 24 }
     private var SP:      Int { 32 }   // address for future "SP @" compatibility (the live pointer is in the Swift var below)
     private var RSP:     Int { 40 }
@@ -535,7 +535,7 @@ public final class TZForth {
     private var lastKernelThrowMessage: String = ""
 
     /// ANS §9.3.1 standard throw codes used by kernelThrow.
-    private enum StdThrow {
+    enum StdThrow {
         static let stackUnderflow: Cell = -3
         static let stackOverflow: Cell = -4
         static let returnStackUnderflow: Cell = -5
@@ -2656,7 +2656,7 @@ public final class TZForth {
         writeCell(DP_ADDR, h + 8)
     }
 
-    private func writeByteHere(_ value: UInt8) {
+    internal func writeByteHere(_ value: UInt8) {
         let h = readCell(DP_ADDR)
         writeByte(h, value)
         writeCell(DP_ADDR, h + 1)
@@ -2690,7 +2690,7 @@ public final class TZForth {
 
     // These three are the public "," "C," and cell version that *do* use the data stack,
     // so user-level Forth code like "42 ," will work correctly.
-    private func comma() {
+    internal func comma() {
         let value = pop()
         writeCellHere(value)
     }

@@ -167,12 +167,6 @@ extension TZForth {
             self.blockLoadRange(from: u1, to: u2)
         }
 
-        _ = register("\\", immediate: true) {
-            self.writeCell(self.IN, Cell(self.currentSourceLen))
-            self.inputQueue.removeAll(keepingCapacity: true)
-            self.inputQueue.append(10)
-        }
-
         _ = register("CREATE-BLOCK-FILE") {
             let nBlocks = Int(self.pop())
             let u = Int(self.pop())

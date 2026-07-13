@@ -4985,11 +4985,16 @@ public final class TZForth {
 
         // \ comment to end of line — essential for loading typical .fth source files that use
         // line comments. Immediate so it works while compiling too.
+        // Always pin >IN to end-of-line after draining the queue so syncInputQueueFromSource
+        // cannot resurrect commented tokens (block lines lack LF; registerBlockWords used to
+        // redefine \ and break this).
         _ = register("\\", immediate: true) {
             while !self.inputQueue.isEmpty {
                 let c = self.consumeInput() ?? 0
                 if c == 10 || c == 13 { break }
             }
+            self.writeCell(self.IN, Cell(self.currentSourceLen))
+            self.inputQueue.removeAll(keepingCapacity: true)
         }
 
         // \\  (two backslashes) starts a block comment area, skipped until a '{' is seen.

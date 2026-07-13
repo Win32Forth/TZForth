@@ -1020,6 +1020,7 @@ public final class TZForth {
         ("XKEY",    "( -- xchar )",        "read one xchar from terminal (blocking UTF-8)"),
         ("XKEY?",   "( -- flag )",         "true when XKEY can complete without blocking"),
         ("EKEY>XCHAR", "( x -- xchar true | x false )", "decode EKEY char event to xchar"),
+        ("XHOLD",   "( xchar -- )",         "prepend UTF-8 xchar into pictured numeric output"),
 
         // New for FLOAD / EDIT / file helpers (cwd + dialog driven by host for sandbox friendliness)
         ("\\",      "( -- )",             "comment to end of line (immediate)"),
@@ -1417,6 +1418,16 @@ public final class TZForth {
         pnoPtr -= 1
         let ch: UInt8 = (digit < 10) ? UInt8(48 + digit) : UInt8(55 + digit)  // 0-9, A-Z
         writeByte(pnoPtr, ch)
+    }
+
+    /// Prepend a byte sequence into pictured numeric output (ANS HOLDS / XHOLD).
+    internal func picturedHoldsBytes(_ bytes: [UInt8]) {
+        for b in bytes.reversed() {
+            if self.pnoPtr > self.pnoBufferAddr {
+                self.pnoPtr -= 1
+                self.writeByte(self.pnoPtr, b)
+            }
+        }
     }
 
     // MARK: - Output

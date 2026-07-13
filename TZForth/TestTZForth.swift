@@ -1181,6 +1181,10 @@ fload \(fnInnerLate.lastPathComponent)
     resetTest()
     forth.feedLine("DECIMAL")
 
+    print("=== TZForth Extended-Character (ANS 18.6.2 pictured — XHOLD) ===")
+    ansTest("XHOLD ascii", "123 S>D <# #S CHAR m XHOLD #> S\" m123\" COMPARE 0= .", "-1")
+    ansTest("XHOLD utf8", "123 S>D <# #S DECIMAL $E9 XHOLD #> S\" é123\" COMPARE 0= .", "-1")
+
     print("=== TZForth Block subsystem (ANS Block + TZ ext .blk words; TZ ext = non-ANS) ===")
     ansTest("TZ ext CREATE-BLOCK-FILE", "S\" \(blkVol)\" 8 CREATE-BLOCK-FILE SWAP . .", "0")
     ansTest("TZ ext OPEN-BLOCK-FILE", "S\" \(blkVol)\" OPEN-BLOCK-FILE . .", "0")

@@ -441,6 +441,16 @@ extension TZForth {
                 self.push(0)
             }
         }
+
+        // Pictured numeric (18.6.2 — ANS reference: XC!+ then HOLDS)
+        _ = register("XHOLD") {
+            let cp = self.xcharCodePointFromStack(self.pop())
+            if let bytes = try? self.xcEncode(cp) {
+                self.picturedHoldsBytes(bytes)
+            } else {
+                self.throwMalformedXchar()
+            }
+        }
     }
 }
 

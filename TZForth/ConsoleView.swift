@@ -1354,6 +1354,47 @@ private final class FacilityConsoleTextView: NSTextView {
         }
         super.keyDown(with: event)
     }
+
+    /// TextKit maps keyboard navigation to the extra end-of-document line fragment, but mouse
+    /// clicks in that row often land on the previous line. Snap clicks on the caret row to EOF.
+    override func mouseDown(with event: NSEvent) {
+        let point = convert(event.locationInWindow, from: nil)
+        let end = (string as NSString).length
+        var caretRect = firstRect(forCharacterRange: NSRange(location: end, length: 0), actualRange: nil)
+        if caretRect.width == 0, caretRect.height == 0,
+           let layoutManager, let textContainer {
+            layoutManager.ensureLayout(for: textContainer)
+            let extraRect = layoutManager.extraLineFragmentRect
+            if extraRect.height > 0,
+               layoutManager.extraLineFragmentTextContainer === textContainer {
+                let origin = textContainerOrigin
+                let inset = textContainerInset
+                caretRect = NSRect(
+                    x: extraRect.minX + origin.x + inset.width,
+                    y: extraRect.minY + origin.y + inset.height,
+                    width: max(extraRect.width, 1),
+                    height: extraRect.height
+                )
+            }
+        }
+        if caretRect.height > 0 {
+            let lineHeight = layoutManager?.defaultLineHeight(for: font ?? NSFont.systemFont(ofSize: 16)) ?? 16
+            let bandHeight = max(caretRect.height, lineHeight)
+            let lineBand = NSRect(
+                x: bounds.minX,
+                y: caretRect.minY - 1,
+                width: bounds.width,
+                height: bandHeight + 2
+            )
+            if lineBand.contains(point) {
+                setSelectedRange(NSRange(location: end, length: 0))
+                scrollRangeToVisible(NSRange(location: end, length: 0))
+                window?.makeFirstResponder(self)
+                return
+            }
+        }
+        super.mouseDown(with: event)
+    }
 }
 
 /// AppKit-backed console editor. SwiftUI TextEditor does not reliably scroll to the
@@ -1499,14 +1540,15 @@ private struct ConsoleTextView: NSViewRepresentable {
 
         layoutManager.ensureLayout(for: textContainer)
 
-        var contentHeight = layoutManager.usedRect(for: textContainer).height
+        let usedRect = layoutManager.usedRect(for: textContainer)
+        var contentBottom = usedRect.maxY
         let extraRect = layoutManager.extraLineFragmentRect
         if extraRect.height > 0, layoutManager.extraLineFragmentTextContainer === textContainer {
-            contentHeight = max(contentHeight, extraRect.maxY)
+            contentBottom = max(contentBottom, extraRect.maxY)
         }
 
         let inset = textView.textContainerInset
-        let targetHeight = max(contentHeight + inset.height * 2, textView.enclosingScrollView?.contentSize.height ?? 0)
+        let targetHeight = max(contentBottom + inset.height * 2, textView.enclosingScrollView?.contentSize.height ?? 0)
         if abs(textView.frame.height - targetHeight) > 0.5 {
             var frame = textView.frame
             frame.size.height = targetHeight

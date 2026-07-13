@@ -2,7 +2,7 @@
 
 This document tracks implementation status of the 2012 ANS Forth Standard word sets in TZForth (Swift port of the lbForth model). Generated from codebase inspection (`TZForth/TZForth.swift`, `TestTZForth.swift`, `TZForthTests.swift`).
 
-Last update: Hayes forth2012-test-suite **0 errors** (Block included); Facility + Block complete on TZForth host; FTEST / `ANS-VALIDATE` **317/317**.
+Last update: Hayes forth2012-test-suite **0 errors** (Block included); Facility + Block + Extended-Character complete on TZForth host; FTEST / `ANS-VALIDATE` **356/356**.
 
 ## Summary
 
@@ -20,9 +20,10 @@ Last update: Hayes forth2012-test-suite **0 errors** (Block included); Facility 
 | **Locals (13)** | Complete — `(LOCAL)`, `LOCALS|`, `{:`; `TO` for locals; max 32 (`#LOCALS`) |
 | **Facility (10)** | Complete (TZForth host) — structures, `PAGE`/`AT-XY`, `MS`, `TIME&DATE`, `EKEY*`, `EMIT?`, `K-*`; Hayes `facilitytest.fth` 0 errors |
 | **Block (10)** | Complete — file-backed `.blk`, LRU buffer cache; Hayes `blocktest.fth` 0 errors; FTEST Block + TZ extension spot-checks |
-| **Other optional sets** | Mostly absent — Float, Extended-Character, etc. |
+| **Extended-Character (18)** | Complete — UTF-8 codec; shadow `CHAR`/`[CHAR]`/`PARSE`; `XEMIT`/`XKEY`/`XKEY?`/`EKEY>XCHAR`; `XHOLD`; `XC-WIDTH`/`X-WIDTH`; ENVIRONMENT? queries |
+| **Other optional sets** | Mostly absent — Float, etc. |
 
-FTEST harness: run with `FTEST=1 swift /tmp/combined.swift` (concatenate `TZForth.swift`, `TZForthSettings.swift`, `TZForthBlock.swift`, `TZForthTests.swift`, `TestTZForth.swift`). Current count: **317/317** TEST6 spot-checks plus block-comment / FLOAD / INCLUDE load tests. In-app **`ANS-VALIDATE`** runs the same suite and overwrites **`TZForth/ANS-VALIDATE.txt`** (tracked baseline in the Xcode project; excluded from the app bundle so it stays writable). Validation restores dictionary bytes and interpret-session state (`evaluateNesting`, input-source stack, block subsystem) so the REPL still prints **`OK`** after `ANS-VALIDATE` or Hayes `fload test`. During validation, `onMsDelayRequested` is cleared so **`MS`** uses the engine `Thread.sleep` fallback (synchronous `feedLine` / `ansTest` output checks).
+FTEST harness: run with `FTEST=1 swift /tmp/combined.swift` (concatenate `TZForth.swift`, `TZForthSettings.swift`, `TZForthBlock.swift`, `TZForthXChar.swift`, `TZForthTests.swift`, `TestTZForth.swift`). Current count: **356/356** TEST6 spot-checks plus block-comment / FLOAD / INCLUDE load tests. In-app **`ANS-VALIDATE`** runs the same suite and overwrites **`TZForth/ANS-VALIDATE.txt`** (tracked baseline in the Xcode project; excluded from the app bundle so it stays writable). Validation restores dictionary bytes and interpret-session state (`evaluateNesting`, input-source stack, block subsystem) so the REPL still prints **`OK`** after `ANS-VALIDATE` or Hayes `fload test`. During validation, `onMsDelayRequested` is cleared so **`MS`** uses the engine `Thread.sleep` fallback (synchronous `feedLine` / `ansTest` output checks).
 
 ## Core (6.1) — Complete
 
@@ -34,7 +35,7 @@ All Core words required for conformance are implemented. Notable details:
 - **PARSE** / **PARSE-NAME** return slices of **SOURCE**, not `STRING_BUFFER` or `PAD`.
 - Pictured numeric (`<#` … `#>`) uses a separate high-memory buffer, not `PAD`.
 - **POSTPONE** / **[COMPILE]** use captured `executeID` + emit `LIT`/`EXECUTE` for immediate words.
-- **ENVIRONMENT?** returns values for `CORE`, `CORE-EXT`, `/COUNTED-STRING` (255), `ADDRESS-UNIT-BITS`, `MAX-CHAR`, `SEARCH-ORDER`, `WORDLISTS` (8), `FILE`, `FILE-ACCESS`, `FILE-EXT`, `EXCEPTION`, `STRING`, `MEMORY-ALLOCATION`, `DOUBLE`, `LOCALS`, `#LOCALS` (32). **`.ENVIRONMENT`** lists all supported queries.
+- **ENVIRONMENT?** returns values for `CORE`, `CORE-EXT`, `/COUNTED-STRING` (255), `ADDRESS-UNIT-BITS`, `MAX-CHAR`, `SEARCH-ORDER`, `WORDLISTS` (8), `FILE`, `FILE-ACCESS`, `FILE-EXT`, `EXCEPTION`, `STRING`, `MEMORY-ALLOCATION`, `DOUBLE`, `LOCALS`, `#LOCALS` (32), `EXTENDED-CHARACTER`, `XCHAR-ENCODING` (`"UTF-8"`), `MAX-XCHAR` (`$10FFFF`), `XCHAR-MAXMEM` (4). **`.ENVIRONMENT`** lists all supported queries.
 - Memory: **1 MB** default linear region (growable via **`GROWMEMORYMB`**); low fixed layout `SOURCE` (1024) → `STRING_BUFFER` (4096) → `PAD` (1024) → data/return stacks; **UNUSED** / **.FREE** report free dictionary bytes up to the PNO buffer anchor.
 
 ### Low-memory map (implementation-defined)
@@ -359,17 +360,46 @@ During an active structure, **`ALIGNED`** aligns the structure offset (for `ALIG
 | `EMIT?` | Always true (`-1`) in console host |
 | `K-*` | `K-LEFT`…`K-F12`, `K-PRIOR`/`K-NEXT`, `K-INSERT`/`K-DELETE`, shift/ctrl/alt masks |
 
+## Extended-Character (18) — Complete
+
+ANS word set 18.6.1 and 18.6.2 with UTF-8 as the xchar encoding (`TZForthXChar.swift`). Malformed UTF-8 or invalid code points throw **-77**.
+
+### Memory and string (18.6.1)
+
+| Word | Stack / notes |
+|------|----------------|
+| `XC-SIZE` | `( xchar -- u )` — encoded byte count |
+| `X-SIZE` | `( xc-addr u -- u' )` — size from leading byte |
+| `XC@+` / `XC!+` / `XC!+?` / `XC,` | fetch/store/append encoded xchars |
+| `XCHAR+` / `XCHAR-` | advance/retreat within UTF-8 buffer |
+| `+X/STRING` / `X\STRING-` | skip/include xchars in bounded string |
+| `-TRAILING-GARBAGE` | trim incomplete trailing UTF-8 sequence |
+
+### Parsing and I/O (18.6.2)
+
+Shadow Core **`CHAR`**, **`[CHAR]`**, **`PARSE`** — first xchar / delimiter parsing in UTF-8. **`XEMIT`**, **`XKEY`**, **`XKEY?`**, **`EKEY>XCHAR`** — terminal I/O. **`XHOLD`** — pictured numeric (UTF-8 bytes via `picturedHoldsBytes`). **`XC-WIDTH`** / **`X-WIDTH`** — display columns (ANS wc-table).
+
+### Environmental queries (18.3.2)
+
+| Query | Returns |
+|-------|---------|
+| `EXTENDED-CHARACTER` | `-1` (word set present) |
+| `XCHAR-ENCODING` | `c-addr u` → `"UTF-8"` |
+| `MAX-XCHAR` | `u` → `$10FFFF` |
+| `XCHAR-MAXMEM` | `u` → `4` |
+
+FTEST / `ANS-VALIDATE` cover codec, memory/string words, shadow parsing, I/O, pictured `XHOLD`, display width, and all four ENVIRONMENT? queries.
+
 ## Missing optional / future word sets
 
 Not implemented (no current plan unless requested):
 
 - **Float**
-- **Extended-Character**
 - Remaining **Programming-Tools** (`NEEDS`, Gforth-style source `LOCATE`, …)
 
 ## Recommendations
 
-- TZForth is highly functional for classic Forth sources, REPL, sandboxed `FLOAD`/`EDIT`/`CHDIR`, Hayes forth2012 validation (**0 errors**, Block included), FTEST / `ANS-VALIDATE` (**317/317**), file-backed Block (`.blk`), and ANS File-Access file I/O / `INCLUDED`.
-- Next logical steps (if desired): Float, Extended-Character, or remaining Programming-Tools (`NEEDS`, Gforth-style source `LOCATE`, …).
+- TZForth is highly functional for classic Forth sources, REPL, sandboxed `FLOAD`/`EDIT`/`CHDIR`, Hayes forth2012 validation (**0 errors**, Block included), FTEST / `ANS-VALIDATE` (**356/356**), file-backed Block (`.blk`), UTF-8 Extended-Character, and ANS File-Access file I/O / `INCLUDED`.
+- Next logical steps (if desired): Float or remaining Programming-Tools (`NEEDS`, Gforth-style source `LOCATE`, …).
 
 For full standard details, see the official 2012 ANS Forth document (sections 6.1, 6.2, and optional word sets in chapters 7–18).

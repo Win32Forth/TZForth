@@ -184,6 +184,8 @@ public final class TZForth {
     internal var waitingForXKey = false
     /// Bytes collected so far for an in-progress XKEY (UTF-8).
     internal var xkeyAssembly: [UInt8] = []
+    /// Stable c-addr of ANS `XCHAR-ENCODING` answer (`"UTF-8"`).
+    internal var xcharEncodingAddr: Int = 0
 
     /// Host schedules MS delays without blocking the UI thread. Invoked with milliseconds and a
     /// completion handler that must call resumeAfterMs() on the engine (done automatically if
@@ -3123,6 +3125,10 @@ public final class TZForth {
         "BLOCK",
         "/BLOCK",
         "BLOCK-EXT",
+        "EXTENDED-CHARACTER",
+        "XCHAR-ENCODING",
+        "MAX-XCHAR",
+        "XCHAR-MAXMEM",
     ]
 
     /// ANS ENVIRONMENT? values for a query string, or nil if unsupported.
@@ -3138,8 +3144,17 @@ public final class TZForth {
             return [255, -1]
         case "WORDLISTS":
             return [Cell(MAX_VOCABS), -1]
-        case "FILE", "FILE-ACCESS", "FILE-EXT", "EXCEPTION", "STRING", "MEMORY-ALLOCATION", "DOUBLE", "LOCALS", "PROGRAMMING-TOOLS", "FACILITY", "BLOCK", "BLOCK-EXT":
+        case "FILE", "FILE-ACCESS", "FILE-EXT", "EXCEPTION", "STRING", "MEMORY-ALLOCATION", "DOUBLE", "LOCALS", "PROGRAMMING-TOOLS", "FACILITY", "BLOCK", "BLOCK-EXT", "EXTENDED-CHARACTER":
             return [-1]
+        case "XCHAR-ENCODING":
+            if self.xcharEncodingAddr != 0 {
+                return [Cell(self.xcharEncodingAddr), 5, -1]
+            }
+            return nil
+        case "MAX-XCHAR":
+            return [Cell(Self.maxXchar), -1]
+        case "XCHAR-MAXMEM":
+            return [4, -1]
         case "/BLOCK":
             if self.blockSizeVarAddr != 0 {
                 return [self.readCell(self.blockSizeVarAddr), -1]

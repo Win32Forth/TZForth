@@ -1,4 +1,4 @@
-=== ANS-VALIDATE: 2012 ANS Forth validation (Core, Core Ext, File-Access, String, Facility, Exception, Memory, Double, Locals, Programming-Tools, Block subsystem; from TestTZForth FTEST) ===
+=== ANS-VALIDATE: 2012 ANS Forth validation (Core, Core Ext, File-Access, String, Facility, Exception, Memory, Double, Locals, Programming-Tools, Extended-Character, Block subsystem; from TestTZForth FTEST) ===
 
 TEST1 block: load1=true noskip1=false after1=true load2=true
 TEST1 exec load1: saw11=true out=11 OK
@@ -11,9 +11,9 @@ TEST2b post-slash exec: saw123=true out=123 OK
 TEST2b-include: echopre=true echopost=false sawEcho=true
 TEST2b-repl: prebatch=true postbatch=false (expect true false)
 TEST2b-err: shouldnot=false line1=true (expect false true) out=true verbose !
-? ansval_errstop_6398EC32.fth line 1: ? verbose
+? ansval_errstop_0C8AEAD1.fth line 1: ? verbose
     true verbose !
-? FLOAD of ansval_errstop_6398EC32.fth aborted at line 1
+? FLOAD of ansval_errstop_0C8AEAD1.fth aborted at line 1
 TEST2b-err-catch: caught=true out=OK
 -13  ? THROW 27 OK
 TEST2b-nested: before=true inner=true neverinner=false after=true neverouter=false (expect true true false true false)
@@ -233,6 +233,7 @@ TEST6 EKEY? queued: pass
 TEST6 EKEY char: pass
 TEST6 MS brief: pass
 TEST6 GROWMEMORYMB grow: pass
+TEST6 GROWMEMORYMB at-cap UNUSED: pass
 TEST6 ALLOCATE: pass
 TEST6 ALLOCATE ior: pass
 TEST6 FREE: pass
@@ -338,6 +339,51 @@ TEST6 CATCH INCLUDE-FILE mid-file: pass
 TEST6 .ERROR closed file: pass
 TEST6 .ERROR file I/O: pass
 TEST6 .ERROR not found: pass
+=== TZForth Extended-Character (ANS 18.6 UTF-8 memory + string words) ===
+TEST6 XC-SIZE 0: pass
+TEST6 XC-SIZE 7F: pass
+TEST6 XC-SIZE 80: pass
+TEST6 XC-SIZE 7FF: pass
+TEST6 XC-SIZE 800: pass
+TEST6 XC-SIZE FFFF: pass
+TEST6 XC-SIZE 10000: pass
+TEST6 XC!+ XC@+: pass
+TEST6 XC, encode size: pass
+TEST6 XC!+?: pass
+TEST6 XCHAR+/-: pass
+TEST6 +X/STRING: pass
+TEST6 X\STRING-: pass
+TEST6 -TRAILING-GARBAGE ok: pass
+TEST6 -TRAILING-GARBAGE trim: pass
+=== TZForth Extended-Character (ANS 18.6.2 parsing — shadow CHAR, [CHAR], PARSE) ===
+TEST6 CHAR ascii: pass
+TEST6 CHAR utf8: pass
+TEST6 [CHAR] utf8: pass
+TEST6 PARSE utf8 delim: pass
+=== TZForth Extended-Character (ANS 18.6.1 I/O — XEMIT, XKEY, XKEY?, EKEY>XCHAR) ===
+TEST6 XEMIT ascii: pass
+TEST6 XEMIT utf8: pass
+TEST6 EKEY>XCHAR a: pass
+TEST6 EKEY>XCHAR euro: pass
+TEST6 EKEY>XCHAR fkey: pass
+TEST6 XKEY? idle: pass
+TEST6 XKEY ascii: pass
+TEST6 XKEY utf8: pass
+TEST6 XKEY? ready: pass
+=== TZForth Extended-Character (ANS 18.6.2 pictured — XHOLD) ===
+TEST6 XHOLD ascii: pass
+TEST6 XHOLD utf8: pass
+=== TZForth Extended-Character (ANS 18.6.2 display width — XC-WIDTH, X-WIDTH) ===
+TEST6 XC-WIDTH ascii: pass
+TEST6 XC-WIDTH CJK: pass
+TEST6 XC-WIDTH zero: pass
+TEST6 X-WIDTH mixed: pass
+=== TZForth Extended-Character (ANS 18.3.2 ENVIRONMENT?) ===
+TEST6 ENVIRONMENT? EXTENDED-CHARACTER: pass
+TEST6 ENVIRONMENT? XCHAR-ENCODING len: pass
+TEST6 ENVIRONMENT? XCHAR-ENCODING text: pass
+TEST6 ENVIRONMENT? MAX-XCHAR: pass
+TEST6 ENVIRONMENT? XCHAR-MAXMEM: pass
 === TZForth Block subsystem (ANS Block + TZ ext .blk words; TZ ext = non-ANS) ===
 TEST6 TZ ext CREATE-BLOCK-FILE: pass
 TEST6 TZ ext OPEN-BLOCK-FILE: pass
@@ -357,6 +403,6 @@ TEST6 Block LIST/SCR: pass
 TEST6 Block LOAD: pass
 TEST6 Block THRU: pass
 TEST6 Block BLK: pass
-TEST6 ANS core summary: 317/317 passed
+TEST6 ANS core summary: 357/357 passed
 
 === ANS-VALIDATE complete ===

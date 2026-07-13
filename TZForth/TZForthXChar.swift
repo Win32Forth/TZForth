@@ -536,6 +536,16 @@ extension TZForth {
                 self.throwMalformedXchar()
             }
         }
+
+        self.installXcharEncodingLiteral()
+    }
+
+    /// Install immutable `"UTF-8"` bytes for ANS `XCHAR-ENCODING` (18.3.2).
+    private func installXcharEncodingLiteral() {
+        self.xcharEncodingAddr = Int(self.readCell(self.DP_ADDR))
+        for b in Array("UTF-8".utf8) {
+            self.writeByteHere(b)
+        }
     }
 }
 

@@ -9276,10 +9276,23 @@ public final class TZForth {
         self.sourceLoadStop = false
         self.replBatchStop = false
         self.loadNesting = 0
+        self.evaluateNesting = 0
+        self.evaluateSourceAddr = 0
+        self.evaluateSourceLen = 0
+        self.interpreterInputFileId = -1
+        self.inputSourceStack.removeAll(keepingCapacity: true)
+        self.inputSnapshots.removeAll(keepingCapacity: true)
+        self.floadRestoreInputContinuation = false
+        self.floadExtraLinesConsumed = 0
+        self.floadLinesToSkip = 0
+        self.countFloadInterpreterRefills = false
+        self.blockInterpretActive = false
+        self.blockLoadDepth = 0
         self.midFileLoadAborted = false
         // pictured state
         self.pnoPtr = self.pnoBufferAddr + self.PNO_BUFFER_SIZE
         writeCell(IN, 0)
+        self.currentSourceId = -1
         searchOrder = [LATEST]
         writeCell(CURRENT, LATEST)
         self.currentSourceLen = 0

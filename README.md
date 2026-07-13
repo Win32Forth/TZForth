@@ -18,7 +18,10 @@ This project aims to bring the powerful, traditional Forth kernel sources into a
 ## Structure
 
 - `TZForth.xcodeproj/` — Xcode project
-- `TZForth/` — SwiftUI sources + TZForth engine (the main implementation; internally based on Leif Bruder's lbForth)
+- `TZForth/` — SwiftUI sources + TZForth engine (internally based on Leif Bruder's lbForth):
+  - `TZForth.swift` — core kernel and interpreter
+  - `TZForthBlock.swift`, `TZForthXChar.swift`, `TZForthAssembler.swift`, `TZForthFloat.swift` — optional word-set extensions
+  - `TZForthTests.swift`, `TestTZForth.swift` — `ANS-VALIDATE` / FTEST harness
 
 ## Status
 
@@ -32,7 +35,7 @@ The REPL console is fully working (see TZForth/ConsoleView.swift + TZForth.swift
 - Classic load semantics (shared by `FLOAD`, `INCLUDE`, `INCLUDE-FILE`): `FILE-ECHO ON` at top of a file takes effect for that load; `\S` aborts remainder of *that* file only; compile errors mid-load abort the rest of the file and leave REPL clean/interpreting; no per-line OK spam during loads.
 - **Exception handling:** kernel faults are **CATCH-able** (standard ANS throw codes). **`.ERROR`** prints a spaced message for a code on the stack. Named **`fload`** completes synchronously so you can write `: safe-fload  ['] fload catch ?dup if  ." load failed:" .error  else  drop  then ;` — see **`THROW_CODES.md`** for the full code map.
 
-Automated tests (`FTEST=1`; see `TestTZForth.swift` header) cover load/comment harnesses plus **360** ANS spot-checks (Core, Core Ext, File-Access, String, **Facility** (structures, terminal, `EKEY*`/`MS`/`TIME&DATE`), Exception, Memory, Double, Locals, Programming-Tools (**CODE**/`;CODE`/`RET`), **Extended-Character** (UTF-8), **Block** + TZ `.blk` extensions, etc.). In-app: **`ANS-VALIDATE`** (same suite; overwrites `TZForth/ANS-VALIDATE.txt`, a tracked baseline in the Xcode project — regenerate anytime). After `ANS-VALIDATE` or `fload test`, the REPL restores dictionary and interpret-session state so normal commands still print **`OK`**. Hayes **forth2012-test-suite** (Block **included**): **0 errors** across all word sets — see `Tests/forth2012-test-suite/src/HAYES-RESULTS.txt`. Details: **`ANS_COMPLIANCE.md`**.
+Automated tests (`FTEST=1`; see `TestTZForth.swift` header) cover load/comment harnesses plus **381** ANS spot-checks (Core, Core Ext, File-Access, String, **Facility** (structures, terminal, `EKEY*`/`MS`/`TIME&DATE`), Exception, Memory, Double, Locals, Programming-Tools (**CODE**/`;CODE`/`RET`), **Extended-Character** (UTF-8), **Float Tier A** (IEEE 64-bit separate F stack, `.FS`), **Block** + TZ `.blk` extensions, etc.). In-app: **`ANS-VALIDATE`** (same suite; overwrites `TZForth/ANS-VALIDATE.txt`, a tracked baseline in the Xcode project — regenerate anytime). After `ANS-VALIDATE` or `fload test`, the REPL restores dictionary and interpret-session state so normal commands still print **`OK`**. Hayes **forth2012-test-suite** (Block **included**; Float `fp/` suite not run): **0 errors** on executed word sets — see `Tests/forth2012-test-suite/src/HAYES-RESULTS.txt`. Details: **`ANS_COMPLIANCE.md`**.
 
 ## Sandbox and FLOAD (important for loading your own Forthing.fth etc.)
 

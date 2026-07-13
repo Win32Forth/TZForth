@@ -21,7 +21,7 @@ Last update: Hayes forth2012-test-suite **0 errors** (Block included); Facility 
 | **Facility (10)** | Complete (TZForth host) — structures, `PAGE`/`AT-XY`, `MS`, `TIME&DATE`, `EKEY*`, `EMIT?`, `K-*`; Hayes `facilitytest.fth` 0 errors |
 | **Block (10)** | Complete — file-backed `.blk`, LRU buffer cache; Hayes `blocktest.fth` 0 errors; FTEST Block + TZ extension spot-checks |
 | **Extended-Character (18)** | Complete — UTF-8 codec; shadow `CHAR`/`[CHAR]`/`PARSE`; `XEMIT`/`XKEY`/`XKEY?`/`EKEY>XCHAR`; `XHOLD`; `XC-WIDTH`/`X-WIDTH`; ENVIRONMENT? queries |
-| **Float (12)** | Tier A — IEEE 64-bit, separate 16-deep F stack; ~22 core words; decimal/scientific literals |
+| **Float (12)** | Tier A — IEEE 64-bit, separate 16-deep F stack; ~23 words; decimal/scientific literals; `.FS` |
 
 FTEST harness: run with `FTEST=1 swift /tmp/combined.swift` (concatenate `TZForth.swift`, `TZForthSettings.swift`, `TZForthBlock.swift`, `TZForthXChar.swift`, `TZForthAssembler.swift`, `TZForthFloat.swift`, `TZForthTests.swift`, `TestTZForth.swift`). Current count: **381/381** TEST6 spot-checks plus block-comment / FLOAD / INCLUDE load tests. In-app **`ANS-VALIDATE`** runs the same suite and overwrites **`TZForth/ANS-VALIDATE.txt`** (tracked baseline in the Xcode project; excluded from the app bundle so it stays writable). Validation restores dictionary bytes and interpret-session state (`evaluateNesting`, input-source stack, block subsystem) so the REPL still prints **`OK`** after `ANS-VALIDATE` or Hayes `fload test`. During validation, `onMsDelayRequested` is cleared so **`MS`** uses the engine `Thread.sleep` fallback (synchronous `feedLine` / `ansTest` output checks).
 
@@ -180,7 +180,7 @@ Unhandled `THROW` with no active `CATCH`: `-1` → print `Aborted!`, reset stack
 
 FTEST / `ANS-VALIDATE` cover `ABORT`/`ABORT"` with and without `CATCH`, standard kernel codes, compile `STATE` preservation, file faults, nested `CATCH`, `['] fload catch` (safe-fload), mid-file `INCLUDE-FILE`, user **-40**, and `.ERROR` for file codes. Colon definitions that compile `CATCH` then `>R` (Hayes `exceptiontest` `C6`) resume correctly after `EXIT` and nested `deliverThrow`.
 
-John Hayes **forth2012-test-suite** (Block included): **0 errors** across all word sets (Block SAVE-INPUT/RESTORE/REFILL, EMPTY-BUFFERS, pictured-string `TCSIRIR2`/`TCSIRIR4`, and REFILL spill all pass). Run with `HAYES=1 swift /tmp/combined.swift` (concatenate `TZForth.swift`, `TZForthSettings.swift`, `TZForthBlock.swift`, `TZForthTests.swift`, `TestTZForth.swift`) from the repo root, or `fload runtests-tzforth.fth` from `Tests/forth2012-test-suite/src/`. Results: **`HAYES-RESULTS.txt`**.
+John Hayes **forth2012-test-suite** (Block included; Float `fp/` suite not run): **0 errors** on executed word sets (Block SAVE-INPUT/RESTORE/REFILL, EMPTY-BUFFERS, pictured-string `TCSIRIR2`/`TCSIRIR4`, and REFILL spill all pass). Run with `HAYES=1 swift /tmp/combined.swift` (concatenate `TZForth.swift`, `TZForthSettings.swift`, `TZForthBlock.swift`, `TZForthXChar.swift`, `TZForthAssembler.swift`, `TZForthFloat.swift`, `TZForthTests.swift`, `TestTZForth.swift`) from the repo root, or `fload runtests-tzforth.fth` from `Tests/forth2012-test-suite/src/`. Results: **`HAYES-RESULTS.txt`**.
 
 ## Block (10) — Implemented (file-backed `.blk`)
 
@@ -375,7 +375,7 @@ FTEST / `ANS-VALIDATE` cover codec, memory/string words, shadow parsing, I/O, pi
 
 ## Float (12) — Tier A (partial)
 
-IEEE **64-bit double** on a **separate 16-deep floating-point stack** (low memory, after return stack). Decimal/scientific literals when `BASE` is 10 (ANS 12.3.7). Full Float Ext (trig, `F~`, `FVARIABLE`, etc.) not implemented.
+Implemented in **`TZForthFloat.swift`**. IEEE **64-bit double** on a **separate 16-deep floating-point stack** fixed in low memory (after return stack, before dictionary `DP`). Decimal/scientific literals when `BASE` is 10 (ANS 12.3.7); tokens ending in `.` alone (e.g. `42.`) remain double-cell literals. Full Float Ext (trig, `F~`, `FVARIABLE`, etc.) not implemented.
 
 | Category | Words |
 |----------|-------|
@@ -387,6 +387,8 @@ IEEE **64-bit double** on a **separate 16-deep floating-point stack** (low memor
 | I/O | `F.`, `.FS` |
 | Defining | `FCONSTANT`, `FLITERAL` (+ threaded `FLIT`) |
 | ENVIRONMENT? | `FLOATING`, `FLOATING-STACK` (16), `MAX-FLOAT` |
+
+FTEST / `ANS-VALIDATE` cover stack/math/compare/convert words, `F@`/`F!`, `FCONSTANT`/`FLITERAL`, decimal and scientific literals, `.FS`, and all three ENVIRONMENT? queries.
 
 ## Missing optional / future word sets
 

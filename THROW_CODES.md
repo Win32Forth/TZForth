@@ -106,7 +106,7 @@ Same pattern for other **parsing** words: `['] included catch`, `['] include-fil
 | Code | Reason |
 |------|--------|
 | -8, -11, -12 | No double-literal / alignment faults on those paths yet |
-| -60…-65 | Float word set not implemented |
+| -60…-65 | ANS Float-specific codes not mapped; Tier A F stack uses **-3** / **-4** (underflow / overflow) |
 | -66, -69…-73, -75 | File-access via `ior`; kernel paths use -67/-68/-70/-74 |
 | -40…-59 | User `THROW` range (first code -40) |
 
@@ -282,7 +282,7 @@ t-under .            → -3
 
 - [x] All §9.3.1 codes -3…-17 mapped or explicitly exempted (see **Codes not mapped**); file-access -68/-74 for kernel paths
 - [x] `grep errorFlag = true` only `handleUnhandledThrow` + `recoverFromError` (2 sites in `TZForth.swift`)
-- [x] FTEST / `ANS-VALIDATE` **357/357** (incl. Extended-Character + Block subsystem + TZ `.blk` extensions); unified FLOAD/INCLUDE load loop; colon `CATCH`+`>R`; Hayes forth2012 suite **0 errors** (Block included)
+- [x] FTEST / `ANS-VALIDATE` **381/381** (incl. Extended-Character + Float Tier A + Block subsystem + TZ `.blk` extensions); unified FLOAD/INCLUDE load loop; colon `CATCH`+`>R`; Hayes forth2012 suite **0 errors** on executed word sets (Block included; Float `fp/` not run)
 - [x] `ANS-VALIDATE` exception suite (mirrors FTEST CATCH/THROW; nested CATCH, safe-fload, mid-include, `.ERROR` file codes)
 
 ---
@@ -294,6 +294,7 @@ t-under .            → -3
 | `TZForth/TZForth.swift` | `StdThrow`, `kernelThrow`, `pop`/`push`/…, `innerThread`, fault sites |
 | `TZForth/TestTZForth.swift` | New CATCH tests |
 | `TZForth/TZForthTests.swift` | Mirror tests |
+| `TZForth/TZForthFloat.swift` | Float Tier A; FP stack faults use -3/-4 |
 | `ANS_COMPLIANCE.md` | Phase status, CATCH on standard codes |
 | `THROW_CODES.md` | This plan (living doc) |
 
@@ -310,4 +311,4 @@ t-under .            → -3
 | 5 | Done | User -40; closed file -67; catchable mid-FLOAD (-13); -70 |
 | 5b | Done | Nested CATCH; safe-fload; mid-INCLUDE-FILE; `.ERROR` file codes |
 
-**FTEST:** `FTEST=1 swift /tmp/combined.swift` (concatenate `TZForth.swift`, `TZForthSettings.swift`, `TZForthBlock.swift`, `TZForthTests.swift`, `TestTZForth.swift`).
+**FTEST:** `FTEST=1 swift /tmp/combined.swift` (concatenate `TZForth.swift`, `TZForthSettings.swift`, `TZForthBlock.swift`, `TZForthXChar.swift`, `TZForthAssembler.swift`, `TZForthFloat.swift`, `TZForthTests.swift`, `TestTZForth.swift`; see `TestTZForth.swift` header).

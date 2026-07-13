@@ -103,7 +103,7 @@ public final class TZForth {
     internal var LATEST:  Int { 0 }  // internal so TZForthTests.swift (and combined.swift for FTEST) can access for runANSValidation snapshots
     internal var DP_ADDR: Int { 8 }   // address of the DP variable (the cell holding the current dictionary pointer value); internal for test harness in TZForthTests.swift
     internal var STATE:   Int { 16 }   // internal for TZForthXChar.swift extension
-    private var BASE:    Int { 24 }
+    internal var BASE:   Int { 24 }   // TZForthFloat.swift
     private var SP:      Int { 32 }   // address for future "SP @" compatibility (the live pointer is in the Swift var below)
     private var RSP:     Int { 40 }
     internal var IN:       Int { 48 }   // >IN ( -- addr )  current offset in input source; internal for tests
@@ -121,10 +121,10 @@ public final class TZForth {
     // This is the key robustness fix for the recurring "SP cell trashed → constant underflows" problem.
     private var dataStackPointer: Cell = 1
     private var returnStackPointer: Cell = 1
-    private var floatingStackPointer: Cell = 1
+    internal var floatingStackPointer: Cell = 1  // TZForthFloat.swift
 
     // Current IP for the threaded interpreter
-    private var ip: Int = 0
+    internal var ip: Int = 0  // TZForthFloat.swift (FLIT)
     private var commandAddress: Int = 0
 
     var errorFlag = false   // internal (module-visible) so host can check after named load for bookmark decisions
@@ -1383,7 +1383,7 @@ public final class TZForth {
         self.push(hi)
     }
 
-    private func assembleSignedDouble(lo: Cell, hi: Cell) -> Int128 {
+    internal func assembleSignedDouble(lo: Cell, hi: Cell) -> Int128 {  // TZForthFloat.swift (D>F)
         let bits = UInt128(self.unsignedCell(lo)) | (UInt128(self.unsignedCell(hi)) << 64)
         return Int128(bitPattern: bits)
     }
@@ -8801,7 +8801,7 @@ public final class TZForth {
         kernelThrow(StdThrow.uncompletedControl, message: message)
     }
 
-    private func throwInvalidAddress(_ message: String) {
+    internal func throwInvalidAddress(_ message: String) {  // TZForthFloat.swift
         kernelThrow(StdThrow.invalidAddress, message: message)
     }
 

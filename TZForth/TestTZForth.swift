@@ -276,6 +276,32 @@ fload \(fInnerBack.lastPathComponent)
     let saw999 = collected.contains("999")
     print("TEST2b-nested-back: inside=\(sawInside) after=\(sawAfterInner) never=\(sawNever) 999=\(saw999) innernever=\(hasInnerNever) (expect true true false true false)")
 
+    // === Test 2b-slash-after-throw: \\S still stops outer file after inner load errors ===
+    resetTest()
+    _ = fm.changeCurrentDirectoryPath(tmp.path)
+    forth.logicalCurrentDirectory = tmp.path
+    let fInnerErr = tmp.appendingPathComponent("tz-inner-err_\(suffix).fth")
+    let fOuterErr = tmp.appendingPathComponent("tz-outer-err_\(suffix).fth")
+    try! """
+: badword 1 ;
+badword-not-a-real-word-xyz
+""".write(to: fInnerErr, atomically: true, encoding: String.Encoding.utf8)
+    try! """
+.( pre= ) 11 .
+fload \(fInnerErr.lastPathComponent)
+.( mid= ) 22 .
+\\s
+.( post= ) 33 .
+: SHOULDNOT 99 ;
+""".write(to: fOuterErr, atomically: true, encoding: String.Encoding.utf8)
+    collected = ""
+    forth.feedLine("fload \(fOuterErr.lastPathComponent)")
+    let hasShouldnot = forth.debugFind("SHOULDNOT")
+    let sawPre = collected.contains("pre=")
+    let sawMid = collected.contains("mid=")
+    let sawPost = collected.contains("post=")
+    print("TEST2b-slash-after-throw: pre=\(sawPre) mid=\(sawMid) post=\(sawPost) shouldnot=\(hasShouldnot) (expect true true false false)")
+
     // === Test 2b-slash-space: `\ s` on its own line stops FLOAD like \S ===
     resetTest()
     let fSlashSpace = tmp.appendingPathComponent("testslash-space_\(suffix).fth")

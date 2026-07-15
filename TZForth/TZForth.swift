@@ -2483,6 +2483,10 @@ public final class TZForth {
         self.fileInterpretLineNumberStack.append(self.fileInterpretLineNumber)
         self.fileInterpretLineNumber = 0
         while refillFromFile(fileId) {
+            // Recover stack depth after in-file THROW (resetRuntimeState may have cleared it).
+            while self.fileInterpretStopStack.count < self.loadNesting {
+                self.fileInterpretStopStack.append(false)
+            }
             if self.floadLinesToSkip > 0 {
                 self.floadLinesToSkip -= 1
                 continue
@@ -8645,9 +8649,13 @@ public final class TZForth {
         }
         self.writeCell(self.IN, Cell(self.currentSourceLen))
         self.inputQueue.removeAll(keepingCapacity: true)
-        if self.loadNesting > 0, !self.fileInterpretStopStack.isEmpty {
+        if self.loadNesting > 0 {
             self.seekActiveInterpreterFileToEnd()
-            self.fileInterpretStopStack[self.fileInterpretStopStack.count - 1] = true
+            if self.fileInterpretStopStack.isEmpty {
+                self.fileInterpretStopStack.append(true)
+            } else {
+                self.fileInterpretStopStack[self.fileInterpretStopStack.count - 1] = true
+            }
         } else {
             self.replBatchStop = true
         }
@@ -9336,11 +9344,13 @@ public final class TZForth {
         let savedLoadNesting = self.loadNesting
         let savedInterpreterInputFileId = self.interpreterInputFileId
         let savedCurrentSourceId = self.currentSourceId
+        let savedFileInterpretStopStack = self.fileInterpretStopStack
         self.resetRuntimeState()
         if savedLoadNesting > 0 {
             self.loadNesting = savedLoadNesting
             self.interpreterInputFileId = savedInterpreterInputFileId
             self.currentSourceId = savedCurrentSourceId
+            self.fileInterpretStopStack = savedFileInterpretStopStack
         }
         self.errorFlag = true
         self.throwActive = true

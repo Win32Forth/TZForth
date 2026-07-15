@@ -882,7 +882,7 @@ fload \(fnInnerLate.lastPathComponent)
     // Dictionary / introspection (current words)
     ansTest(">HEADER >NFA ID.", "VARIABLE t6v ' t6v >NFA COUNT TYPE", "t6v")
     ansTest("' CFA >HEADER", "' DUP >HEADER 0<> .", "-1")
-    ansTest(">XID DUP", "' DUP >XID .", "9")
+    ansTest(">XID DUP", "' DUP >XID .", "10")
     ansTest("['] CFA", ": t6xt ['] DUP ; ' DUP t6xt = .", "-1")
     ansTest("ID.", "' t6v ID.", "t6v")
     ansTest("HERE (value) DP", "HERE DP @ = .", "-1")  // they should match per current impl

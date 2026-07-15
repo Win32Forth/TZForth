@@ -377,6 +377,8 @@ public final class TZForth {
 
     /// True while compiling a :NONAME definition (; leaves xt on stack).
     private var nonameCompile = false
+    /// Previous top-level REPL line ended mid-: / :NONAME (resume STATE on next feedLine).
+    private var replCompilationContinues = false
 
     /// Nesting depth of nested EVALUATE (for SOURCE-ID and SAVE-INPUT tagging).
     private var evaluateNesting = 0
@@ -1691,7 +1693,11 @@ public final class TZForth {
             self.conditionalSkipStopAtElse = false
             self.conditionalSkipFlatIf = false
             self.conditionalSkipDiscardThroughQuote = false
-            self.writeCell(self.STATE, 0)
+            if self.replCompilationContinues {
+                self.writeCell(self.STATE, 1)
+            } else {
+                self.writeCell(self.STATE, 0)
+            }
             self.ip = 0
         }
 
@@ -1741,6 +1747,10 @@ public final class TZForth {
         // return frame for the *next* command line's colon executions.
         if readCell(STATE) == 0 && !self.isBlockingOnHost {
             ip = 0
+        }
+        if self.loadNesting == 0 && self.evaluateNesting == 0 {
+            self.replCompilationContinues = self.readCell(self.STATE) != 0
+                && (self.nonameCompile || self.hasOpenNamedColonDefinition())
         }
         self.flushTerminalRefreshIfNeeded()
     }
@@ -3173,6 +3183,15 @@ public final class TZForth {
         return stubCfa
     }
 
+    /// True while a named : definition is still hidden (compilation not closed with ;).
+    private func hasOpenNamedColonDefinition() -> Bool {
+        let latest = self.readCell(self.readCell(self.CURRENT))
+        if latest == 0 { return false }
+        let fl = self.readByte(Int(latest) + 8)
+        if (fl & self.FLAG_HIDDEN) == 0 { return false }
+        return Int(fl & self.MASK_NAMELENGTH) > 0
+    }
+
     /// True when compiling a definition, including immediate colon bodies while an open : is hidden.
     private func isActiveCompilation() -> Bool {
         if self.readCell(self.STATE) != 0 { return true }
@@ -3180,13 +3199,8 @@ public final class TZForth {
         if !self.controlFlowStack.isEmpty { return true }
         if !self.whileRepeatStack.isEmpty { return true }
         if !self.caseBranchStack.isEmpty { return true }
-        // Immediate colon bodies (e.g. [c+]) temporarily set STATE=0 while : tcm is still open.
-        // Completed :NONAME stays hidden but STATE=0 — must not keep "compiling" (fatan2-test.fs).
-        let latest = self.readCell(self.readCell(self.CURRENT))
-        if latest != 0 {
-            let fl = self.readByte(Int(latest) + 8)
-            if (fl & self.FLAG_HIDDEN) != 0 && self.readCell(self.STATE) != 0 { return true }
-        }
+        if self.nonameCompile { return true }
+        if self.hasOpenNamedColonDefinition() { return true }
         return false
     }
 
@@ -8587,12 +8601,6 @@ public final class TZForth {
                         self.push(d.lo)
                         self.push(d.hi)
                     }
-                } else if let f = self.parseTextFloat(name) {
-                    if self.readCell(self.STATE) != 0 {
-                        self.compileFloatLiteral(f)
-                    } else {
-                        self.fpush(f)
-                    }
                 } else if let num = self.parseTextNumber(name, base: b) {
                     if readCell(STATE) != 0 {
                         let nextWord = self.peekNextParsedWord()
@@ -8604,6 +8612,12 @@ public final class TZForth {
                         }
                     } else {
                         push(num)
+                    }
+                } else if let f = self.parseTextFloat(name) {
+                    if self.readCell(self.STATE) != 0 {
+                        self.compileFloatLiteral(f)
+                    } else {
+                        self.fpush(f)
                     }
                 } else {
                     let msg = readCell(STATE) != 0 ? "? \(name) ?  (while compiling)" : "? \(name)"
@@ -10095,6 +10109,7 @@ public final class TZForth {
         errorFlag = false
         exitReq = false
         writeCell(STATE, 0)
+        self.replCompilationContinues = false
         inputQueue.removeAll(keepingCapacity: true)
         debugEnabled = false   // return to clean default
         clearScreenRequested = false

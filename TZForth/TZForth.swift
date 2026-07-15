@@ -311,7 +311,7 @@ public final class TZForth {
     private var inParenComment = false
     internal var sourceLoadStop = false  // TZForthBlock.swift (legacy; block LOAD uses fileInterpretStopStack)
     /// Per active includeFileInterpret: \\S sets only the innermost entry true (nested FLOAD safe).
-    private var fileInterpretStopStack: [Bool] = []
+    internal var fileInterpretStopStack: [Bool] = []  // TZForthBlock.swift
     private var replBatchStop = false
     internal var loadNesting = 0  // TZForthBlock.swift
     /// Current 1-based source line number while includeFileInterpret is running.

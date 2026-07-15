@@ -3148,7 +3148,7 @@ public final class TZForth {
     private func patchOpenControlFlowPlaceholders(branchTo here: Cell) {
         while !self.controlFlowStack.isEmpty {
             let placeholder = self.controlFlowStack.removeLast()
-            // BEGIN pushes loop-entry addresses onto this stack; only patch offset cells (still 0).
+            // Only patch forward-branch placeholder cells (still 0); skip patched slots.
             if self.readCell(Int(placeholder)) != 0 { continue }
             let forwardOffset = here - (placeholder + 8)
             self.writeCell(Int(placeholder), forwardOffset)
@@ -4604,7 +4604,9 @@ public final class TZForth {
             }
             let here = self.readCell(self.DP_ADDR)
             self.whileRepeatStack.append(here)
-            self.controlFlowStack.append(here)
+            // Do not push loop-entry addresses onto controlFlowStack — only IF/ELSE/AHEAD/WHILE
+            // placeholders belong there. BEGIN entries confused patchOpenControlFlowPlaceholders
+            // at `;` and could corrupt branch offsets in large defs (paranoia part2).
         }
 
         _ = register("AGAIN", immediate: true) {

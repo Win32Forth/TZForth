@@ -31,7 +31,7 @@ zap-fpstack
 
 \ paranoia needs engine F= (IEEE equality); ak-fp-test.fth redefines F= as bitwise F~.
 : try-paranoia  s" paranoia.4th" ['] included catch dup
-  if  cr .( paranoia skipped, throw code ) . cr  else drop then ;
+  if  cr .( paranoia skipped, throw code ) . .error cr  else drop then ;
 try-paranoia
 
 zap-fpstack

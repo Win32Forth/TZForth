@@ -446,7 +446,7 @@ struct ConsoleView: View {
                     forth.feedLine(lineToSend)
                     markProtectedThroughEndOfText()
                     handlePostFeedActions()
-                    if forth.replBatchStopRequested || forth.sourceLoadStopRequested {
+                    if forth.replBatchStopRequested {
                         break
                     }
                 }

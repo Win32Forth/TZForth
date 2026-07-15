@@ -2533,7 +2533,7 @@ public final class TZForth {
             if Int(self.readCell(self.IN)) >= self.currentSourceLen {
                 self.inputQueue.removeAll(keepingCapacity: true)
             }
-            if sourceLoadStop || (replBatchStop && self.loadNesting <= 1) {
+            if sourceLoadStop {
                 // Intentional \\S stop — silent (not an error; REPL prints OK when the load returns).
                 break
             }
@@ -6443,7 +6443,16 @@ public final class TZForth {
             self.resolveAndLoadFile(spec: spec)
             guard let url = self.pendingLoadURL else { return }
             self.pendingLoadURL = nil
+            // Snapshot console-line tail (`FLOAD file.fth HERE .`) before nested loads can
+            // disturb inputSourceStack (long Hayes suites with SAVE-INPUT / CATCH).
+            let replFload = self.loadNesting == 0
+            let resumeIn = self.readCell(self.IN)
+            let resumeTail = replFload ? self.unparsedInputTailBytes(from: Int(resumeIn)) : []
             self.performNamedFload(url: url, spec: spec)
+            self.sourceLoadStop = false
+            if replFload, !resumeTail.isEmpty {
+                self.restoreUnparsedInputTail(in: resumeIn, tail: resumeTail)
+            }
             if self.throwActive { return }
             if self.loadNesting == 0 {
                 self.namedFloadOnCurrentReplLine = true
@@ -8267,7 +8276,7 @@ public final class TZForth {
         errorFlag = false
 
         while ((!inputQueue.isEmpty || self.conditionalSkipDiscardThroughQuote || self.pendingRestoredFloadRefill())
-               && !errorFlag && !exitReq && !throwActive && !self.sourceLoadStop) {
+               && !errorFlag && !exitReq && !throwActive && !self.sourceLoadStopAppliesToCurrentInterpreter()) {
             if self.inputQueue.isEmpty && self.pendingRestoredFloadRefill() {
                 if !self.tryRefillInterpreterFileInput() { break }
             }
@@ -8591,6 +8600,31 @@ public final class TZForth {
         return true
     }
 
+    /// Bytes from >IN through end of current SOURCE (unparsed tail of this line).
+    private func unparsedInputTailBytes(from pos: Int) -> [UInt8] {
+        guard pos < self.currentSourceLen else { return [] }
+        var bytes: [UInt8] = []
+        for i in pos..<self.currentSourceLen {
+            bytes.append(self.readByte(self.SOURCE_BUFFER + i))
+        }
+        return bytes
+    }
+
+    /// Re-offer an unparsed tail after a synchronous REPL FLOAD returns.
+    private func restoreUnparsedInputTail(in: Cell, tail: [UInt8]) {
+        self.writeCell(self.IN, `in`)
+        self.inputQueue.removeAll(keepingCapacity: true)
+        for b in tail { self.inputQueue.append(b) }
+        if self.inputQueue.last != 10 && self.inputQueue.last != 13 {
+            self.inputQueue.append(10)
+        }
+    }
+
+    /// True when \\S requested a stop for the active loaded-file line interpreter (not the console).
+    private func sourceLoadStopAppliesToCurrentInterpreter() -> Bool {
+        self.sourceLoadStop && !self.fileLoadEnclosingStack.isEmpty
+    }
+
     /// Shared \\S / `\ s` stop: end current source line and stop file load or REPL submit batch.
     private func applySlashSStop() {
         while !self.inputQueue.isEmpty {
@@ -8600,11 +8634,8 @@ public final class TZForth {
         self.writeCell(self.IN, Cell(self.currentSourceLen))
         self.inputQueue.removeAll(keepingCapacity: true)
         if self.isInsideFileLoadInterpret() {
+            // Stop only this FLOAD/INCLUDE file; never the console line or outer loads.
             self.sourceLoadStop = true
-            // Outermost FLOAD: also stop any further lines in a multi-line console paste.
-            if self.loadNesting <= 1 {
-                self.replBatchStop = true
-            }
         } else {
             self.replBatchStop = true
         }
@@ -8660,7 +8691,7 @@ public final class TZForth {
     /// from SOURCE. Needed for parsing words (FLOAD, EDIT, …) invoked via EXECUTE/CATCH
     /// while the outer line still has unparsed tokens (e.g. `safe-fload myfile.fth`).
     private func syncInputQueueFromSourceIfNeeded() {
-        guard !self.sourceLoadStop else { return }
+        guard !self.sourceLoadStopAppliesToCurrentInterpreter() else { return }
         guard self.inputQueue.isEmpty else { return }
         let pos = Int(self.readCell(self.IN))
         if pos >= self.currentSourceLen {

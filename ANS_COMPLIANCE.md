@@ -180,7 +180,7 @@ Unhandled `THROW` with no active `CATCH`: `-1` → print `Aborted!`, reset stack
 
 FTEST / `ANS-VALIDATE` cover `ABORT`/`ABORT"` with and without `CATCH`, standard kernel codes, compile `STATE` preservation, file faults, nested `CATCH`, `['] fload catch` (safe-fload), mid-file `INCLUDE-FILE`, user **-40**, and `.ERROR` for file codes. Colon definitions that compile `CATCH` then `>R` (Hayes `exceptiontest` `C6`) resume correctly after `EXIT` and nested `deliverThrow`.
 
-John Hayes **forth2012-test-suite** (Block included; Float `fp/` suite not run): **0 errors** on executed word sets (Block SAVE-INPUT/RESTORE/REFILL, EMPTY-BUFFERS, pictured-string `TCSIRIR2`/`TCSIRIR4`, and REFILL spill all pass). Run with `HAYES=1 swift /tmp/combined.swift` (concatenate `TZForth.swift`, `TZForthSettings.swift`, `TZForthBlock.swift`, `TZForthXChar.swift`, `TZForthAssembler.swift`, `TZForthFloat.swift`, `TZForthTests.swift`, `TestTZForth.swift`) from the repo root, or `fload runtests-tzforth.fth` from `Tests/forth2012-test-suite/src/`. Results: **`HAYES-RESULTS.txt`**.
+John Hayes **forth2012-test-suite** (Block + Float `fp/` included): **0 errors** on all executed word sets (Block SAVE-INPUT/RESTORE/REFILL, EMPTY-BUFFERS, pictured-string `TCSIRIR2`/`TCSIRIR4`, REFILL spill, FP paranoia **END OF TEST** all pass). **Canonical run:** TZForth app → `CHDIR Tests/forth2012-test-suite/src` → **`FLOAD test`** (`test.fth` driver). CLI `HAYES=1 swift /tmp/combined.swift` runs a smaller non-FP subset only. Results: **`HAYES-RESULTS.txt`**.
 
 ## Block (10) — Implemented (file-backed `.blk`)
 
@@ -390,7 +390,7 @@ Implemented in **`TZForthFloat.swift`**. IEEE **64-bit double** on a **separate 
 | Defining | `FCONSTANT`, `FVARIABLE`, `FVALUE` (+ `TO`), `FLITERAL` (+ threaded `FLIT`) |
 | ENVIRONMENT? | `FLOATING`, `FLOAT-EXT`, `FLOATING-STACK` (16), `MAX-FLOAT` |
 
-FTEST / `ANS-VALIDATE` cover Tier A words plus Tier B spot-checks (`0e`, `FVARIABLE`, `FVALUE`/`TO`, `F~`, `F>D`, `FABS`, `FROT`, `FSIN`, `FATAN2`, `SF@`/`SF!`, `FSQRT`, `ENVIRONMENT? FLOAT-EXT`). Hayes `fp/` suite (`ttester.fs`, `ak-fp-test.fth`, etc.) should load past prior `FVARIABLE` / `0e` / `f>d` blockers; full FP Hayes pass not yet validated.
+FTEST / `ANS-VALIDATE` cover Tier A words plus Tier B spot-checks (`0e`, `FVARIABLE`, `FVALUE`/`TO`, `F~`, `F>D`, `FABS`, `FROT`, `FSIN`, `FATAN2`, `SF@`/`SF!`, `FSQRT`, `ENVIRONMENT? FLOAT-EXT`). Hayes `fp/` suite (`ttester.fs`, `paranoia.4th`, `ak-fp-test.fth`, etc.) passes via `test.fth` / `fp/runfptests.fth` — see **`HAYES-RESULTS.txt`**.
 
 ## Missing optional / future word sets
 

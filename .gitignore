@@ -73,10 +73,10 @@ fastlane/test_output
 # Regenerate anytime with the ANS-VALIDATE word or FTEST=1 (see TestTZForth.swift).
 
 # Hayes / Block test runtime artifacts (created by FLOAD, HAYES=1, or local debug)
+# test.fth is tracked — canonical in-app driver (full suite + fp/); see its header.
 Tests/forth2012-test-suite/src/blocks.blk
 Tests/forth2012-test-suite/src/debug-*.fth
 Tests/forth2012-test-suite/src/ANS-VALIDATE.txt
 Tests/forth2012-test-suite/src/testing.fth
 Tests/forth2012-test-suite/src/testing.txt
-Tests/forth2012-test-suite/src/test.fth
 

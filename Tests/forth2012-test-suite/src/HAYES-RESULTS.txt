@@ -1,6 +1,8 @@
 
  Running ANS Forth tests for TZForth 
-( Hayes forth2012 + FP suite — TZForth 2e9c1dd — 2026-07-15 — 0 T{ errors; paranoia END OF TEST )
+( Hayes forth2012 + FP suite — TZForth 3508bd4 — 2026-07-15 — 0 T{ errors; paranoia END OF TEST )
+( Reproduce: TZForth app → CHDIR Tests/forth2012-test-suite/src → FLOAD test )
+( Pass: all per-suite #ERRORS @ = 0; summary FPERRORS/#ERRORS = 0; ends File-echo on, \s, OK )
 OK
 FILE-ECHO OFF
  debug-bootstrap: loading Hayes harness... 

@@ -247,6 +247,35 @@ hello
     let saw123Tail = collected.contains("123")
     print("TEST2b-fload-tail: before=\(hasBeforeStop) never=\(hasNeverStop) saw123=\(saw123Tail) (expect true false true)")
 
+    // === Test 2b-nested-back: outer file continues after inner \\S; console tail runs ===
+    resetTest()
+    _ = fm.changeCurrentDirectoryPath(tmp.path)
+    forth.logicalCurrentDirectory = tmp.path
+    let fInnerBack = tmp.appendingPathComponent("tz-inner-back_\(suffix).fth")
+    let fOuterBack = tmp.appendingPathComponent("tz-outer-back_\(suffix).fth")
+    try! """
+: innermark 77 ;
+\\s
+: innernever 88 ;
+""".write(to: fInnerBack, atomically: true, encoding: String.Encoding.utf8)
+    try! """
+FILE-ECHO ON
+.( inside= ) 111 .
+fload \(fInnerBack.lastPathComponent)
+.( after-inner= ) 222 .
+\\s
+.( never= ) 333 .
+""".write(to: fOuterBack, atomically: true, encoding: String.Encoding.utf8)
+    collected = ""
+    forth.feedLine("fload \(fOuterBack.lastPathComponent) 999 .")
+    let hasInnerNever = forth.debugFind("INNERNEVER")
+    let hasOuterNever = forth.debugFind("OUTERNEVER")
+    let sawInside = collected.contains("inside=")
+    let sawAfterInner = collected.contains("after-inner=")
+    let sawNever = collected.contains("never=")
+    let saw999 = collected.contains("999")
+    print("TEST2b-nested-back: inside=\(sawInside) after=\(sawAfterInner) never=\(sawNever) 999=\(saw999) innernever=\(hasInnerNever) (expect true true false true false)")
+
     // === Test 2b-slash-space: `\ s` on its own line stops FLOAD like \S ===
     resetTest()
     let fSlashSpace = tmp.appendingPathComponent("testslash-space_\(suffix).fth")

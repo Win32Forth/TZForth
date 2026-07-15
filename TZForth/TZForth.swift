@@ -309,7 +309,9 @@ public final class TZForth {
     private var inSlashSlashComment = false
     /// `( ... )` comment spanning FLOAD/REPL lines when `)` is not on the same line as `(`.
     private var inParenComment = false
-    internal var sourceLoadStop = false  // TZForthBlock.swift
+    internal var sourceLoadStop = false  // TZForthBlock.swift (legacy; block LOAD uses fileInterpretStopStack)
+    /// Per active includeFileInterpret: \\S sets only the innermost entry true (nested FLOAD safe).
+    private var fileInterpretStopStack: [Bool] = []
     private var replBatchStop = false
     internal var loadNesting = 0  // TZForthBlock.swift
     /// Current 1-based source line number while includeFileInterpret is running.
@@ -363,8 +365,8 @@ public final class TZForth {
             || self.countFloadInterpreterRefills
     }
 
-    /// Set by \\S when a loaded source file should stop before EOF (FLOAD / INCLUDED / INCLUDE-FILE).
-    public var sourceLoadStopRequested: Bool { sourceLoadStop }
+    /// Set by \\S when the innermost loaded file should stop before EOF.
+    public var sourceLoadStopRequested: Bool { self.fileInterpretStopStack.last == true }
 
     /// Set by \\S from the console REPL; host should skip any further lines in the current submit batch.
     public var replBatchStopRequested: Bool { replBatchStop }
@@ -2435,6 +2437,7 @@ public final class TZForth {
         }
         self.sourceLoadedByRefill = false
         sourceLoadStop = false
+        self.fileInterpretStopStack.append(false)
         self.inSlashSlashComment = false
         self.inParenComment = false
         defer {
@@ -2460,6 +2463,9 @@ public final class TZForth {
                 _ = closeFileEntry(fileId, flush: false)
             }
             self.sourceLoadStop = false
+            if !self.fileInterpretStopStack.isEmpty {
+                _ = self.fileInterpretStopStack.removeLast()
+            }
             self.inSlashSlashComment = false
             self.inParenComment = false
             // Orphaned [IF]/[ELSE] text-scan state must not leak into the REPL after a load
@@ -2472,13 +2478,6 @@ public final class TZForth {
             self.countFloadInterpreterRefills = false
             self.floadRestoreInputContinuation = false
             self.interpretIfTrueDepth = 0
-            if self.readCell(self.STATE) != 0 {
-                self.writeCell(self.STATE, 0)
-                self.controlFlowStack.removeAll()
-                self.whileRepeatStack.removeAll()
-                self.whileNestStack.removeAll()
-                self.bracketCompileDepth = 0
-            }
         }
         self.midFileLoadAborted = false
         self.fileInterpretLineNumberStack.append(self.fileInterpretLineNumber)
@@ -2516,6 +2515,7 @@ public final class TZForth {
                     self.fileLoadEnclosingStack.removeLast()
                 }
                 self.finishInterpretedLoadLine()
+                self.yieldToHostUIIfNeeded()
             }
             // Undo only forward over-reads from `(` REFILL during this line. RESTORE-INPUT
             // continuation (Hayes filetest SI2) leaves the file where runInterpreter ended.
@@ -2533,7 +2533,7 @@ public final class TZForth {
             if Int(self.readCell(self.IN)) >= self.currentSourceLen {
                 self.inputQueue.removeAll(keepingCapacity: true)
             }
-            if sourceLoadStop {
+            if self.fileInterpretStopStack.last == true {
                 // Intentional \\S stop — silent (not an error; REPL prints OK when the load returns).
                 break
             }
@@ -6449,7 +6449,6 @@ public final class TZForth {
             let resumeIn = self.readCell(self.IN)
             let resumeTail = replFload ? self.unparsedInputTailBytes(from: Int(resumeIn)) : []
             self.performNamedFload(url: url, spec: spec)
-            self.sourceLoadStop = false
             if replFload, !resumeTail.isEmpty {
                 self.restoreUnparsedInputTail(in: resumeIn, tail: resumeTail)
             }
@@ -8276,7 +8275,7 @@ public final class TZForth {
         errorFlag = false
 
         while ((!inputQueue.isEmpty || self.conditionalSkipDiscardThroughQuote || self.pendingRestoredFloadRefill())
-               && !errorFlag && !exitReq && !throwActive && !self.sourceLoadStopAppliesToCurrentInterpreter()) {
+               && !errorFlag && !exitReq && !throwActive) {
             if self.inputQueue.isEmpty && self.pendingRestoredFloadRefill() {
                 if !self.tryRefillInterpreterFileInput() { break }
             }
@@ -8620,12 +8619,13 @@ public final class TZForth {
         }
     }
 
-    /// True when \\S requested a stop for the active loaded-file line interpreter (not the console).
-    private func sourceLoadStopAppliesToCurrentInterpreter() -> Bool {
-        self.sourceLoadStop && !self.fileLoadEnclosingStack.isEmpty
+    /// Let the host repaint during long nested FLOAD (same feedLine, main-thread interpret).
+    private func yieldToHostUIIfNeeded() {
+        guard self.onOutput != nil, Thread.isMainThread else { return }
+        RunLoop.current.run(mode: .default, before: Date(timeIntervalSinceNow: 0))
     }
 
-    /// Shared \\S / `\ s` stop: end current source line and stop file load or REPL submit batch.
+    /// Shared \\S / `\ s` stop (ANS): pin >IN at end-of-line; stop only the innermost file load.
     private func applySlashSStop() {
         while !self.inputQueue.isEmpty {
             let c = self.consumeInput() ?? 0
@@ -8633,9 +8633,8 @@ public final class TZForth {
         }
         self.writeCell(self.IN, Cell(self.currentSourceLen))
         self.inputQueue.removeAll(keepingCapacity: true)
-        if self.isInsideFileLoadInterpret() {
-            // Stop only this FLOAD/INCLUDE file; never the console line or outer loads.
-            self.sourceLoadStop = true
+        if self.loadNesting > 0, !self.fileInterpretStopStack.isEmpty {
+            self.fileInterpretStopStack[self.fileInterpretStopStack.count - 1] = true
         } else {
             self.replBatchStop = true
         }
@@ -8691,7 +8690,6 @@ public final class TZForth {
     /// from SOURCE. Needed for parsing words (FLOAD, EDIT, …) invoked via EXECUTE/CATCH
     /// while the outer line still has unparsed tokens (e.g. `safe-fload myfile.fth`).
     private func syncInputQueueFromSourceIfNeeded() {
-        guard !self.sourceLoadStopAppliesToCurrentInterpreter() else { return }
         guard self.inputQueue.isEmpty else { return }
         let pos = Int(self.readCell(self.IN))
         if pos >= self.currentSourceLen {
@@ -9907,6 +9905,7 @@ public final class TZForth {
         self.inSlashSlashComment = false
         self.inParenComment = false
         self.sourceLoadStop = false
+        self.fileInterpretStopStack.removeAll(keepingCapacity: true)
         self.replBatchStop = false
         self.loadNesting = 0
         self.evaluateNesting = 0

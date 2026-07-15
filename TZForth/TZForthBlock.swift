@@ -626,6 +626,7 @@ extension TZForth {
         self.loadNesting += 1
         self.blockLoadDepth += 1
         self.sourceLoadStop = false
+        self.fileInterpretStopStack.append(false)
         defer {
             self.blockInterpretActive = false
             self.blockRestoreResumeTail = []
@@ -635,6 +636,9 @@ extension TZForth {
             if self.loadNesting > 0 { self.loadNesting -= 1 }
             self.popInputSourceFrame()
             self.sourceLoadStop = false
+            if !self.fileInterpretStopStack.isEmpty {
+                _ = self.fileInterpretStopStack.removeLast()
+            }
             if self.blkVarAddr != 0 {
                 self.writeCell(self.blkVarAddr, savedBlk)
             }
@@ -642,7 +646,7 @@ extension TZForth {
         while self.refillFromBlockSource() {
             self.validateAndRepairSystemState()
             self.runInterpreter()
-            if self.errorFlag || self.throwActive || self.sourceLoadStop { break }
+            if self.errorFlag || self.throwActive || self.fileInterpretStopStack.last == true { break }
         }
     }
 

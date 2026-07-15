@@ -153,6 +153,84 @@ extension TZForth {
         return nil
     }
 
+    /// ANS 12.6.1.0558 >FLOAT: broader syntax; blanks-only string is zero.
+    internal func parseGreaterFloatString(_ text: String) -> Double? {
+        guard !text.isEmpty else { return 0 }
+        if text.allSatisfy({ $0.isWhitespace }) { return 0 }
+        if text.contains(where: { $0.isWhitespace }) { return nil }
+
+        let chars = Array(text)
+        var i = 0
+
+        var sign: Double = 1
+        if i < chars.count, chars[i] == "+" || chars[i] == "-" {
+            if chars[i] == "-" { sign = -1 }
+            i += 1
+        }
+        guard i < chars.count else { return nil }
+
+        var intPart: Double = 0
+        var fracPart: Double = 0
+        var fracDivisor: Double = 1
+        var hasInt = false
+        var hasFrac = false
+
+        if chars[i].isNumber {
+            hasInt = true
+            while i < chars.count, chars[i].isNumber {
+                intPart = intPart * 10 + Double(chars[i].wholeNumberValue ?? 0)
+                i += 1
+            }
+        }
+
+        if i < chars.count, chars[i] == "." {
+            i += 1
+            while i < chars.count, chars[i].isNumber {
+                hasFrac = true
+                fracPart = fracPart * 10 + Double(chars[i].wholeNumberValue ?? 0)
+                fracDivisor *= 10
+                i += 1
+            }
+        }
+
+        guard hasInt || hasFrac else { return nil }
+
+        var value = sign * (intPart + fracPart / fracDivisor)
+
+        if i < chars.count {
+            let marker = chars[i]
+            if marker == "e" || marker == "E" || marker == "d" || marker == "D" {
+                i += 1
+                var expSign = 1
+                if i < chars.count, chars[i] == "+" || chars[i] == "-" {
+                    if chars[i] == "-" { expSign = -1 }
+                    i += 1
+                }
+                var expValue = 0
+                while i < chars.count, chars[i].isNumber {
+                    expValue = expValue * 10 + (chars[i].wholeNumberValue ?? 0)
+                    i += 1
+                }
+                value *= pow(10.0, Double(expSign * expValue))
+            } else if marker == "+" || marker == "-" {
+                let expSign = marker == "-" ? -1 : 1
+                i += 1
+                guard i < chars.count, chars[i].isNumber else { return nil }
+                var expValue = 0
+                while i < chars.count, chars[i].isNumber {
+                    expValue = expValue * 10 + (chars[i].wholeNumberValue ?? 0)
+                    i += 1
+                }
+                value *= pow(10.0, Double(expSign * expValue))
+            } else {
+                return nil
+            }
+        }
+
+        guard i == chars.count else { return nil }
+        return value
+    }
+
     internal func compileFloatLiteral(_ value: Double) {
         self.push(self.flitID); self.comma()
         self.push(self.floatToCell(value)); self.comma()
@@ -167,34 +245,208 @@ extension TZForth {
         return String(value)
     }
 
+    private func roundLeadingDigits(_ digits: String, keep: Int) -> String {
+        guard keep > 0 else { return "" }
+        let chars = Array(digits)
+        guard !chars.isEmpty else { return "" }
+        var lead = Array(chars.prefix(keep))
+        if chars.count > keep, chars[keep] >= Character("5") {
+            for i in (0..<lead.count).reversed() {
+                if lead[i] == Character("9") {
+                    lead[i] = Character("0")
+                } else if let v = lead[i].asciiValue {
+                    lead[i] = Character(UnicodeScalar(v + 1))
+                    return String(lead)
+                }
+            }
+            return "1" + String(repeating: "0", count: keep)
+        }
+        return String(lead)
+    }
+
+    private func forthFmMod(_ d: Int, _ divisor: Int) -> (remainder: Int, quotient: Int) {
+        guard divisor != 0 else { return (0, 0) }
+        var quotient = d / divisor
+        var remainder = d % divisor
+        if (d ^ divisor) < 0 && remainder != 0 {
+            quotient -= 1
+            remainder += divisor
+        }
+        return (remainder, quotient)
+    }
+
+    /// ANS REPRESENT significand: u digits, implied decimal left of first digit; returns k (decimal exponent).
+    private func floatRepresentSignificand(
+        _ value: Double,
+        u: Int,
+        writeTo buffer: Int?,
+        scratch: inout [UInt8]
+    ) -> (k: Int, charFlag: Int, exact: Bool) {
+        let width = max(1, u)
+        scratch = Array(repeating: UInt8(ascii: "0"), count: width)
+        if let buffer {
+            for i in 0..<width where buffer + i < self.memory.count {
+                self.memory[buffer + i] = UInt8(ascii: "0")
+            }
+        }
+
+        if value.isNaN || value.isInfinite {
+            return (0, 0, false)
+        }
+        if value == 0 {
+            scratch[0] = UInt8(ascii: "0")
+            if let buffer, buffer < self.memory.count {
+                self.memory[buffer] = UInt8(ascii: "0")
+            }
+            return (0, 0, true)
+        }
+
+        let absValue = abs(value)
+        var k = Int(floor(log10(absValue))) + 1
+        let scale = pow(10.0, Double(width - k))
+        var significand = (absValue * scale).rounded(.toNearestOrAwayFromZero)
+        let upper = pow(10.0, Double(width))
+        if significand >= upper {
+            significand /= 10
+            k += 1
+        }
+
+        let digits = String(format: "%0\(width).0f", significand)
+        let chars = Array(digits.utf8.prefix(width))
+        for (i, b) in chars.enumerated() {
+            scratch[i] = b
+            if let buffer, buffer + i < self.memory.count {
+                self.memory[buffer + i] = b
+            }
+        }
+
+        let charFlag = value < 0 ? -1 : 0
+        return (k, charFlag, true)
+    }
+
+    private func floatRepresentScratch(_ value: Double) -> (k: Int, charFlag: Int, exact: Bool, digits: [UInt8]) {
+        let prec = max(1, self.floatSetPrecision)
+        var scratch = [UInt8]()
+        let result = self.floatRepresentSignificand(value, u: prec, writeTo: nil, scratch: &scratch)
+        return (result.k, result.charFlag, result.exact, scratch)
+    }
+
     private func formatFloatOutput(_ value: Double) -> String {
         if value.isNaN { return "NaN " }
         if value.isInfinite {
             return value.sign == .minus ? "-Infinity " : "Infinity "
         }
-        var s = String(value)
-        if !s.contains(".") && !s.uppercased().contains("E") {
-            s += "."
+        let rep = self.floatRepresentScratch(value)
+        if !rep.exact {
+            let text = String(bytes: rep.digits, encoding: .ascii) ?? ""
+            let trimmed = text.replacingOccurrences(of: #"0+$"#, with: "", options: .regularExpression)
+            return (rep.charFlag != 0 ? "-" : "") + trimmed + " "
         }
-        return s + " "
+
+        let prec = max(1, self.floatSetPrecision)
+        let k = rep.k
+        let digits = String(bytes: rep.digits, encoding: .ascii) ?? ""
+        var out = rep.charFlag != 0 ? "-" : ""
+        if k <= 0 {
+            out += "0."
+            if k < 0 {
+                out += String(repeating: "0", count: -k)
+            }
+            let sigShow = max(0, prec + k)
+            if sigShow > 0 {
+                out += self.roundLeadingDigits(digits, keep: sigShow)
+            }
+        } else {
+            let lead = min(k, prec)
+            out += String(digits.prefix(lead))
+            out += "."
+            let fracStart = k
+            if fracStart < prec {
+                var frac = String(digits.dropFirst(fracStart))
+                while frac.last == "0" { frac.removeLast() }
+                out += frac
+            }
+        }
+        return out + " "
     }
 
     private func pushFloatCompareFlag(_ flag: Bool) {
         self.push(flag ? -1 : 0)
     }
 
+    private func floatIsNegativeZero(_ value: Double) -> Bool {
+        value.bitPattern == 0x8000_0000_0000_0000
+    }
+
+    private func floatIsPositiveZero(_ value: Double) -> Bool {
+        value == 0 && !self.floatIsNegativeZero(value)
+    }
+
+    /// Single UNIX / POSIX `atan2(y, x)` edge cases (fatan2-test.fs).
+    private func floatAtan2(y: Double, x: Double) -> Double {
+        if y.isNaN || x.isNaN { return .nan }
+
+        let pi = Double.pi
+        let halfPi = pi / 2
+        let threeQuarterPi = 3 * pi / 4
+        let quarterPi = pi / 4
+
+        let xNegInf = x.isInfinite && x.sign == .minus
+        let xPosInf = x.isInfinite && x.sign == .plus
+        let yPosInf = y.isInfinite && y.sign == .plus
+        let yNegInf = y.isInfinite && y.sign == .minus
+
+        if self.floatIsPositiveZero(y) {
+            if self.floatIsNegativeZero(x) || x < 0 { return pi }
+            if x > 0 || self.floatIsPositiveZero(x) { return 0 }
+        }
+        if self.floatIsNegativeZero(y) {
+            if self.floatIsNegativeZero(x) || x < 0 { return -pi }
+            if x > 0 || self.floatIsPositiveZero(x) { return -0.0 }
+        }
+
+        if y > 0 && (self.floatIsPositiveZero(x) || self.floatIsNegativeZero(x)) {
+            return halfPi
+        }
+        if y < 0 && (self.floatIsPositiveZero(x) || self.floatIsNegativeZero(x)) {
+            return -halfPi
+        }
+
+        if yPosInf {
+            if xNegInf { return threeQuarterPi }
+            if xPosInf { return quarterPi }
+            return halfPi
+        }
+        if yNegInf {
+            if xNegInf { return -threeQuarterPi }
+            if xPosInf { return -quarterPi }
+            return -halfPi
+        }
+
+        if xNegInf {
+            if y > 0 { return pi }
+            if y < 0 { return -pi }
+        }
+        if xPosInf {
+            if y > 0 { return 0 }
+            if y < 0 { return -0.0 }
+        }
+
+        return atan2(y, x)
+    }
+
     private func floatTilde(_ r1: Double, _ r2: Double, _ u: Double) -> Bool {
         if u == 0 {
-            return r1 == r2
+            return r1.bitPattern == r2.bitPattern
         }
         let diff = abs(r1 - r2)
-        if u < 0 {
-            return diff <= abs(u)
+        if diff.isNaN { return false }
+        if u > 0 {
+            return diff < u
         }
-        if r1 == 0 && r2 == 0 {
-            return true
-        }
-        return diff <= abs(r1) * u
+        let limit = abs(u) * (abs(r1) + abs(r2))
+        if limit.isNaN { return false }
+        return diff < limit
     }
 
     private func alignAddress(_ addr: Int, boundary: Int) -> Int {
@@ -202,81 +454,73 @@ extension TZForth {
     }
 
     private func formatFloatEngineering(_ value: Double) -> String {
-        let prec = max(1, self.floatSetPrecision)
         if value.isNaN { return "NaN " }
         if value.isInfinite {
             return (value.sign == .minus ? "-Infinity " : "Infinity ")
         }
-        if value == 0 {
-            let zeros = String(repeating: "0", count: max(0, prec - 1))
-            return "0.\(zeros)E0 "
+        let rep = self.floatRepresentScratch(value)
+        if !rep.exact {
+            let text = String(bytes: rep.digits, encoding: .ascii) ?? ""
+            let trimmed = text.replacingOccurrences(of: #"0+$"#, with: "", options: .regularExpression)
+            return (rep.charFlag != 0 ? "-" : "") + trimmed + " "
         }
-        let exp = Int(floor(log10(abs(value))))
-        let mantissa = value / pow(10.0, Double(exp))
-        let fracDigits = max(0, prec - 1)
-        let fmt = String(format: "%%.%dE", fracDigits)
-        var s = String(format: fmt, mantissa).uppercased()
-        if !s.contains(".") {
-            if let eRange = s.range(of: "E") {
-                s.insert(contentsOf: ".", at: eRange.lowerBound)
+
+        let prec = max(1, self.floatSetPrecision)
+        let digits = String(bytes: rep.digits, encoding: .ascii) ?? ""
+        let exp = rep.k - 1
+        var out = rep.charFlag != 0 ? "-" : ""
+        if !digits.isEmpty {
+            out += String(digits.prefix(1))
+            out += "."
+            if digits.count > 1 {
+                out += String(digits.dropFirst())
             }
         }
-        if let eRange = s.range(of: "E") {
-            let tail = s[eRange.upperBound...]
-            if let n = Int(tail) {
-                s = String(s[..<eRange.upperBound]) + String(n)
-            }
-        }
-        return s + " "
+        out += "E\(exp)"
+        return out + " "
     }
 
     private func formatFloatFixed(_ value: Double) -> String {
-        let prec = max(1, self.floatSetPrecision)
         if value.isNaN { return "NaN " }
         if value.isInfinite {
             return (value.sign == .minus ? "-Infinity " : "Infinity ")
         }
-        let fmt = String(format: "%%.%dE", max(0, prec - 1))
-        var s = String(format: fmt, value).uppercased()
-        if let eRange = s.range(of: "E") {
-            s = String(s[..<eRange.lowerBound])
+        let rep = self.floatRepresentScratch(value)
+        if !rep.exact {
+            let text = String(bytes: rep.digits, encoding: .ascii) ?? ""
+            let trimmed = text.replacingOccurrences(of: #"0+$"#, with: "", options: .regularExpression)
+            return (rep.charFlag != 0 ? "-" : "") + trimmed + " "
         }
-        if !s.contains(".") { s += "." }
-        return s + " "
+
+        let prec = max(1, self.floatSetPrecision)
+        let k = rep.k
+        let n = k - 1
+        let (rem, quot) = self.forthFmMod(n, 3)
+        let engExp = quot * 3
+        let leadDigits = rem + 1
+        let digits = String(bytes: rep.digits, encoding: .ascii) ?? ""
+        var out = rep.charFlag != 0 ? "-" : ""
+        let typeCount = min(leadDigits, prec)
+        if leadDigits > 0 {
+            out += String(digits.prefix(typeCount))
+        } else {
+            out += "0"
+        }
+        if leadDigits > typeCount {
+            out += String(repeating: "0", count: leadDigits - typeCount)
+        }
+        out += "."
+        let fracStart = max(0, leadDigits)
+        if fracStart < prec {
+            out += String(digits.dropFirst(fracStart))
+        }
+        out += "E\(engExp)"
+        return out + " "
     }
 
     private func representFloat(_ value: Double, buffer: Int, u: Int) -> (k: Int, charFlag: Int, exact: Bool) {
-        let width = max(1, u)
-        for i in 0..<width {
-            if buffer + i < self.memory.count {
-                self.memory[buffer + i] = UInt8(ascii: "0")
-            }
-        }
-        if value.isNaN || value.isInfinite {
-            return (0, 0, false)
-        }
-        if value == 0 {
-            if width > 0, buffer < self.memory.count {
-                self.memory[buffer] = UInt8(ascii: "0")
-            }
-            return (0, 0, true)
-        }
-        var exp = Int(floor(log10(abs(value))))
-        var mantissa = value / pow(10.0, Double(exp - (width - 1)))
-        mantissa = (mantissa.rounded(.toNearestOrAwayFromZero))
-        if abs(mantissa) >= pow(10.0, Double(width)) {
-            mantissa /= 10
-            exp += 1
-        }
-        let digits = String(format: "%0\(width).0f", abs(mantissa))
-        let chars = Array(digits.utf8.prefix(width))
-        for (i, b) in chars.enumerated() where buffer + i < self.memory.count {
-            self.memory[buffer + i] = b
-        }
-        let charFlag = value < 0 ? 45 : 0
-        let reconstructed = (value < 0 ? -1.0 : 1.0) * mantissa * pow(10.0, Double(exp - (width - 1)))
-        let exact = reconstructed == value
-        return (exp, charFlag, exact)
+        var scratch = [UInt8]()
+        return self.floatRepresentSignificand(value, u: u, writeTo: buffer, scratch: &scratch)
     }
 
     // MARK: - Registration
@@ -339,15 +583,18 @@ extension TZForth {
         }
 
         _ = self.register("FLOATS") {
-            self.push(8)
+            let n = Int(self.pop())
+            self.push(Cell(n * 8))
         }
 
         _ = self.register("SFLOATS") {
-            self.push(4)
+            let n = Int(self.pop())
+            self.push(Cell(n * 4))
         }
 
         _ = self.register("DFLOATS") {
-            self.push(8)
+            let n = Int(self.pop())
+            self.push(Cell(n * 8))
         }
 
         _ = self.register("FLOAT+") {
@@ -544,7 +791,7 @@ extension TZForth {
         _ = self.register("FATAN2") {
             let x = self.fpop()
             let y = self.fpop()
-            self.fpush(atan2(y, x))
+            self.fpush(self.floatAtan2(y: y, x: x))
         }
 
         _ = self.register("FSINCOS") {
@@ -591,6 +838,24 @@ extension TZForth {
             self.pushFloatCompareFlag(r1 < r2)
         }
 
+        _ = self.register("F>") {
+            let r2 = self.fpop()
+            let r1 = self.fpop()
+            self.pushFloatCompareFlag(r1 > r2)
+        }
+
+        _ = self.register("F=") {
+            let r2 = self.fpop()
+            let r1 = self.fpop()
+            self.pushFloatCompareFlag(r1 == r2)
+        }
+
+        _ = self.register("F<>") {
+            let r2 = self.fpop()
+            let r1 = self.fpop()
+            self.pushFloatCompareFlag(r1 != r2)
+        }
+
         _ = self.register("F~") {
             let u = self.fpop()
             let r2 = self.fpop()
@@ -631,7 +896,7 @@ extension TZForth {
                 bytes.append(self.readByte(caddr + i))
             }
             guard let text = String(bytes: bytes, encoding: .utf8),
-                  let value = self.parseFloatString(text) else {
+                  let value = self.parseGreaterFloatString(text) else {
                 self.push(0)
                 return
             }

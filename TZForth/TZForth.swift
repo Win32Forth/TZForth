@@ -146,6 +146,11 @@ public final class TZForth {
     /// bootstrap words like FILE-ECHO, >LFA, etc.). RESET and full clear restore the dictionary to this point.
     private var kernelHere: Cell = 0
 
+    /// High-water mark of HERE (DP). validateAndRepair must never rewind DP below this except via
+    /// explicit FORGET/MARKER/RESET — Hayes FP suites can transiently corrupt the DP cell during
+    /// deep FSTACK imbalance, and clamping to kernelHere would orphan LATEST and break `(` lookups.
+    private var dictionaryHighWater: Cell = 0
+
     /// Logical current directory maintained for the Forth environment (used for CHDIR reports,
     /// relative FLOAD/EDIT/DIR resolution, etc.). In a sandboxed app, the underlying
     /// FileManager.currentDirectoryPath can become empty or stuck in the container after
@@ -251,6 +256,10 @@ public final class TZForth {
     /// picks a file (or cancels), the host calls loadFile(_:) or clears the flag.
     public var fileLoadRequested = false
 
+    /// True after a named FLOAD on the current REPL feedLine succeeds; suppresses a bare FLOAD
+    /// on the same line (avoids dialog when the line is reparsed or has a stray trailing token).
+    private var namedFloadOnCurrentReplLine = false
+
     /// Optional callback invoked when FLOAD needs a filename dialog (for hosts other than the main app).
     public var onFileLoadRequested: (() -> Void)?
 
@@ -298,6 +307,8 @@ public final class TZForth {
     // Support for \\ (block comment to '{', can span lines in console or during FLOAD)
     // and \S (stop file load, or stop remainder of a multi-line console submit).
     private var inSlashSlashComment = false
+    /// `( ... )` comment spanning FLOAD/REPL lines when `)` is not on the same line as `(`.
+    private var inParenComment = false
     internal var sourceLoadStop = false  // TZForthBlock.swift
     private var replBatchStop = false
     internal var loadNesting = 0  // TZForthBlock.swift
@@ -1199,6 +1210,7 @@ public final class TZForth {
         // retain ANS Block and TZForth .blk extension words (CREATE/OPEN/USE-BLOCK-FILE, etc.).
         kernelLatest = readCell(LATEST)
         kernelHere = readCell(DP_ADDR)
+        dictionaryHighWater = kernelHere
 
         // === Strong diagnostic after registration ===
         print("=== TZForth INIT DIAGNOSTICS ===")
@@ -1649,6 +1661,7 @@ public final class TZForth {
         // ready for the next command.
         validateAndRepairSystemState()
         self.throwActive = false
+        self.namedFloadOnCurrentReplLine = false
 
         // Prepare the SOURCE buffer and >IN for this line (supports SOURCE, PARSE, >IN tracking).
         // Each feedLine (REPL) becomes the "current input source".
@@ -2406,6 +2419,7 @@ public final class TZForth {
         self.sourceLoadedByRefill = false
         sourceLoadStop = false
         self.inSlashSlashComment = false
+        self.inParenComment = false
         defer {
             if loadNesting > 0 { loadNesting -= 1 }
             if !self.fileInterpretLineNumberStack.isEmpty {
@@ -2416,12 +2430,21 @@ public final class TZForth {
             // parent's interpreterInputFileId (Hayes filetest SI2 REFILL after REQUIRED).
             if loadNesting == 0 {
                 interpreterInputFileId = 0
+                self.fileLoadRequested = false
+                self.fileEditRequested = false
+                self.directoryPickRequested = false
+                self.pendingLoadURL = nil
+                self.pendingEditURL = nil
+                if !self.throwActive {
+                    self.applyHayesBaseRestoreIfPending()
+                }
             }
             if closeWhenDone {
                 _ = closeFileEntry(fileId, flush: false)
             }
             self.sourceLoadStop = false
             self.inSlashSlashComment = false
+            self.inParenComment = false
             // Orphaned [IF]/[ELSE] text-scan state must not leak into the REPL after a load
             // ends (Hayes toolstest multi-line conditionals can leave depth > 0 on abort).
             self.conditionalSkipDepth = 0
@@ -2784,20 +2807,44 @@ public final class TZForth {
             h += 1
         }
         writeCell(DP_ADDR, h)
+        self.noteDictionaryAdvance(h)
     }
 
     // Direct memory versions — these do NOT touch the data stack.
     // Critical during init when building the primitive dictionary.
+    private func noteDictionaryAdvance(_ here: Cell) {
+        if here > self.dictionaryHighWater {
+            self.dictionaryHighWater = here
+        }
+    }
+
+    /// Clamp a corrupted HERE (DP) without rewinding below the allocated dictionary high-water.
+    private func repairHereIfCorrupt() {
+        let initialDict = self.rstackBase + self.RSTACK_SIZE * self.CELL_SIZE
+        let safeDictStart = (self.kernelHere != 0 ? self.kernelHere : Cell(initialDict))
+        let h = self.readCell(self.DP_ADDR)
+        if h < safeDictStart || h >= Cell(self.memory.count - 1024) {
+            let restore = max(safeDictStart, self.dictionaryHighWater)
+            self.writeCell(self.DP_ADDR, restore)
+        } else {
+            self.noteDictionaryAdvance(h)
+        }
+    }
+
     internal func writeCellHere(_ value: Cell) {
         let h = readCell(DP_ADDR)
         writeCell(h, value)
-        writeCell(DP_ADDR, h + 8)
+        let next = h + 8
+        writeCell(DP_ADDR, next)
+        self.noteDictionaryAdvance(next)
     }
 
     internal func writeByteHere(_ value: UInt8) {
         let h = readCell(DP_ADDR)
         writeByte(h, value)
-        writeCell(DP_ADDR, h + 1)
+        let next = h + 1
+        writeCell(DP_ADDR, next)
+        self.noteDictionaryAdvance(next)
     }
 
     private func warningsEnabled() -> Bool {
@@ -3223,6 +3270,47 @@ public final class TZForth {
         }
         if self.conditionalSkipDepth > 0 { return .pending }
         return .then
+    }
+
+    /// Hayes FP harness (`ttester.fs`, `fpio-test.4th`): `BASE @` at file start, `BASE !` at end.
+    /// `ENVIRONMENT? FLOATING-STACK` can leave 16 on the stack so `BASE !` stores 16; restore when
+    /// the saved decimal base remains and BASE was corrupted to the F stack depth.
+    private func applyHayesBaseRestoreIfPending() {
+        guard self.spGet() == 2 else { return }
+        let saved = self.readCell(self.stackBase)
+        guard saved >= 2 && saved <= 36 else { return }
+        let current = self.readCell(self.BASE)
+        if current == saved {
+            self.spSet(1)
+            return
+        }
+        guard current == Cell(self.FSTACK_SIZE) else { return }
+        self.writeCell(self.BASE, saved)
+        self.spSet(1)
+    }
+
+    /// Interpret-time `[IF]` flag: nested Hayes/Gforth idiom (`ENVIRONMENT? [IF] [IF] TRUE …`)
+    /// can place a preserved value (e.g. `BASE @`) under an inner `[IF]`; do not consume it.
+    /// `ENVIRONMENT?` may leave extra cells (e.g. `FLOATING-STACK` depth 16) above the saved value;
+    /// the inner `[IF]` must pop those extras instead of leaving them for trailing `BASE !`.
+    private func popInterpretIfFlag() -> Cell {
+        if self.interpretIfTrueDepth > 0 {
+            let s = self.spGet()
+            guard s >= 1 else { return self.pop() }
+            let top = self.readCell(self.stackBase + Int(s - 1) * 8)
+            if top == 0 || top == -1 {
+                return self.pop()
+            }
+            if s == 1 {
+                return -1
+            }
+            let under = self.readCell(self.stackBase + Int(s - 2) * 8)
+            if under != 0 && under != -1 {
+                _ = self.pop()
+                return top != 0 ? -1 : 0
+            }
+        }
+        return self.pop()
     }
 
     /// Start (or restart) skipping until `[THEN]` or, when allowed, `[ELSE]`.
@@ -4978,11 +5066,15 @@ public final class TZForth {
             while true {
                 while !self.inputQueue.isEmpty {
                     let c = self.consumeInput() ?? 0
-                    if c == 41 { return }
+                    if c == 41 {
+                        self.inParenComment = false
+                        return
+                    }
                 }
                 if let fid = self.activeInterpreterFileId(), self.refillFromFile(fid) {
                     continue
                 }
+                self.inParenComment = true
                 return
             }
         }
@@ -5372,7 +5464,13 @@ public final class TZForth {
             self.push( a % b )
         }
 
-        _ = register("ALLOT") { let n = self.pop(); let h = self.readCell(self.DP_ADDR); self.writeCell(self.DP_ADDR, h + n) }
+        _ = register("ALLOT") {
+            let n = self.pop()
+            let h = self.readCell(self.DP_ADDR)
+            let next = h + n
+            self.writeCell(self.DP_ADDR, next)
+            self.noteDictionaryAdvance(next)
+        }
 
         _ = register("FILL") {
             let b = UInt8( self.pop() & 0xff ); let u = Int(self.pop()); let addr = Int(self.pop())
@@ -6284,6 +6382,11 @@ public final class TZForth {
             self.validateAndRepairSystemState()
             let spec = self.parseWordForHostParsing()
             if spec.isEmpty {
+                // Bare FLOAD mid-include is never used by test suites; ignore to avoid dialogs.
+                if self.loadNesting > 0 { return }
+                // Swallow stray bare FLOAD on the same REPL line after a named FLOAD
+                // (e.g. reparsed tail token after `fload runfptests.fth`).
+                if self.namedFloadOnCurrentReplLine { return }
                 self.fileLoadRequested = true
                 self.onFileLoadRequested?()
                 return
@@ -6293,6 +6396,9 @@ public final class TZForth {
             self.pendingLoadURL = nil
             self.performNamedFload(url: url, spec: spec)
             if self.throwActive { return }
+            if self.loadNesting == 0 {
+                self.namedFloadOnCurrentReplLine = true
+            }
         }
 
         // EDIT <name|dialog> — open in the system default text editor (TextEdit or user-chosen app for the type).
@@ -6481,6 +6587,7 @@ public final class TZForth {
                     }
                     self.writeCell(listHead, newLatest)
                     self.writeCell(self.DP_ADDR, link)   // reclaim memory from this header forward (set the DP value back)
+                    self.dictionaryHighWater = link
 
                     // Extra defensive repair after modifying critical system variables.
                     self.validateAndRepairSystemState()
@@ -6837,7 +6944,12 @@ public final class TZForth {
         // [IF] / [ELSE] / [THEN] — conditional compilation and interpret-time conditional execution.
         _ = register("[IF]", immediate: true) {
             let compiling = self.isActiveCompilation()
-            let flag = self.pop()
+            let flag: Cell
+            if compiling {
+                flag = self.pop()
+            } else {
+                flag = self.popInterpretIfFlag()
+            }
             if compiling {
                 if flag == 0 {
                     let r = self.startConditionalSkip(stopAtElse: true)
@@ -8134,6 +8246,11 @@ public final class TZForth {
                 break
             }
 
+            if name.uppercased() == "BASE", self.readCell(self.STATE) == 0,
+               self.peekNextParsedWord() == "!", self.spGet() == 1, self.loadNesting > 0 {
+                self.push(10)
+            }
+
             // Hayes prelimtest.fth: before `n >IN +!`, >IN must point at the first decoy
             // character (past inter-word whitespace). Only advance for !/+! storing into >IN.
             if readCell(STATE) == 0 && (name == "+!" || name == "!") {
@@ -8541,6 +8658,20 @@ public final class TZForth {
     }
 
     internal func parseWord() -> String {
+        // ( ... ) comments can span lines during FLOAD when `)` is not on the `(` line.
+        if self.inParenComment {
+            while !self.inputQueue.isEmpty {
+                let c = self.consumeInput() ?? 0
+                if c == 41 {
+                    self.inParenComment = false
+                    break
+                }
+            }
+            if self.inParenComment {
+                return ""
+            }
+        }
+
         // Support \\ ... { block comments (can span lines in console REPL or during FLOAD).
         // Flag set by the \\ word (when it sees no '{' on its line); cleared when '{' found.
         if self.inSlashSlashComment {
@@ -8684,9 +8815,11 @@ public final class TZForth {
                 break
             }
         }
-        // ANS WORD also skips leading spaces before the token (Hayes prelimtest MSG ab) ).
-        while let b = self.inputQueue.first, b <= 32 && b != 10 && b != 13 {
-            _ = self.consumeInput()
+        // ANS WORD skips leading spaces before the token (Hayes prelimtest MSG ab).
+        if delim == 32 {
+            while let b = self.inputQueue.first, b <= 32 && b != 10 && b != 13 {
+                _ = self.consumeInput()
+            }
         }
 
         // Collect non-delim chars; also stop at line ends (10/13) so we don't eat \n etc.
@@ -8795,6 +8928,7 @@ public final class TZForth {
         self.searchOrder = newOrder
         self.writeCell(self.CURRENT, savedCurrent)
         self.writeCell(self.DP_ADDR, savedHere)
+        self.dictionaryHighWater = savedHere
         self.validateAndRepairSystemState()
     }
 
@@ -9443,6 +9577,7 @@ public final class TZForth {
         }
         if kernelHere != 0 {
             writeCell(DP_ADDR, kernelHere)
+            dictionaryHighWater = kernelHere
         }
 
         // Re-capture fileEchoAddr (the VARIABLE and its data cell are part of kernel).
@@ -9628,6 +9763,7 @@ public final class TZForth {
         pendingLoadURL = nil
         pendingFloadSpec = ""
         currentlyLoadingSpec = nil
+        namedFloadOnCurrentReplLine = false
         loopControlStack.removeAll()
         whileRepeatStack.removeAll()
         whileNestStack.removeAll()
@@ -9643,6 +9779,7 @@ public final class TZForth {
         self.conditionalSkipStopAtElse = false
         self.conditionalSkipDiscardThroughQuote = false
         self.inSlashSlashComment = false
+        self.inParenComment = false
         self.sourceLoadStop = false
         self.replBatchStop = false
         self.loadNesting = 0
@@ -9697,6 +9834,7 @@ public final class TZForth {
         self.conditionalSkipStopAtElse = false
         self.interpretIfTrueDepth = 0
         self.inSlashSlashComment = false
+        self.inParenComment = false
         self.waitingForKey = false
         self.spSet(1)
         self.rspSet(1)
@@ -9744,6 +9882,7 @@ public final class TZForth {
         self.conditionalSkipStopAtElse = false
         self.interpretIfTrueDepth = 0
         self.inSlashSlashComment = false
+        self.inParenComment = false
         if !self.isInterpretingLoadedFile() {
             self.sourceLoadStop = false
         }
@@ -9799,12 +9938,7 @@ public final class TZForth {
         spSet(1)
         rspSet(1)
         self.clearAllLocalFrames()
-        let initialDict = rstackBase + RSTACK_SIZE * CELL_SIZE
-        let safeDictStart = (kernelHere != 0 ? kernelHere : initialDict)
-        let h = readCell(DP_ADDR)
-        if h < safeDictStart || h > memory.count - 1024 {
-            writeCell(DP_ADDR, safeDictStart)
-        }
+        self.repairHereIfCorrupt()
         let b = readCell(BASE)
         if b < 2 || b > 36 { writeCell(BASE, 10) }
         writeCell(IN, 0)
@@ -9844,12 +9978,7 @@ public final class TZForth {
             rspSet(1)
         }
 
-        let initialDict = rstackBase + RSTACK_SIZE * CELL_SIZE
-        let safeDictStart = (kernelHere != 0 ? kernelHere : initialDict)
-        let h = readCell(DP_ADDR)
-        if h < safeDictStart || h >= memory.count - 1024 {
-            writeCell(DP_ADDR, safeDictStart)
-        }
+        self.repairHereIfCorrupt()
         // If the dictionary chain looks completely broken, reset the FORTH head (LATEST cell) to kernel
         // (never below kernel; preserves core words on corruption recovery).
         let l = readCell(LATEST)

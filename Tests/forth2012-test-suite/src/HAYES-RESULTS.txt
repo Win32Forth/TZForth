@@ -43,6 +43,8 @@ and no error messages
 
 --- End of Preliminary Tests --- 
 
+ERROR isn't unique
+
 *********************YOU SHOULD SEE THE STANDARD GRAPHIC CHARACTERS:
  !"#$%&'()*+,-./0123456789:;<=>?@
 ABCDEFGHIJKLMNOPQRSTUVWXYZ[\]^_`
@@ -66,9 +68,13 @@ PLEASE TYPE UP TO 80 CHARACTERS:
 
 RECEIVED: " -> }T"
 *
+GDX isn't unique
+
  End of Core word set tests
 
-Test utilities loaded
+?DEFTEST1 isn't unique
+
+ Test utilities loaded
  debug-bootstrap ready â try: T{ 1 2 + -> 3 }T  then  #ERRORS @ . 
 OK
 OK
@@ -103,6 +109,8 @@ TESTING WITHIN   (contributed by James Bowman)
 TESTING UNUSED  (contributed by James Bowman & Peter Knaggs)
 TESTING AGAIN   (contributed by James Bowman)
 TESTING MARKER   (contributed by James Bowman)
+
+MA1 isn't unique
 TESTING ?DO
 TESTING BUFFER:
 TESTING VALUE TO
@@ -160,7 +168,12 @@ indented by 5 spaces
 
 TESTING PAD ERASE
 TESTING PARSE
-TESTING PARSE-NAME  (Forth 2012)
+
+INCORRECT RESULT: T{ CHAR | PARSE 1234| DUP ROT ROT EVALUATE -> 4 1234 }T
+INCORRECT RESULT: T{ CHAR ^ PARSE  23 45 ^ DUP ROT ROT EVALUATE -> 7 23 45 }T
+INCORRECT RESULT:    DUP ROT ROT EVALUATE -> 4 3456 }T
+INCORRECT RESULT: T{ CHAR A PARSE A SWAP DROP -> 0 }T
+INCORRECT RESULT: T{ CHAR " PARSE 4567 "DUP ROT ROT EVALUATE -> 5 4567 }TTESTING PARSE-NAME  (Forth 2012)
 TESTING DEFER DEFER@ DEFER! IS ACTION-OF (Forth 2012)
 TESTING HOLDS  (Forth 2012)
 TESTING REFILL SOURCE-ID
@@ -217,7 +230,10 @@ TESTING CREATE-FILE CLOSE-FILE
 TESTING OPEN-FILE W/O WRITE-LINE
 TESTING R/O FILE-POSITION (simple)  READ-LINE 
 TESTING S" in interpretation mode (compile mode tested in Core tests)
-TESTING R/W WRITE-FILE REPOSITION-FILE READ-FILE FILE-POSITION S"
+
+INCORRECT RESULT: T{ S" abcdef" $" abcdef" S= -> TRUE }T
+INCORRECT RESULT: T{ S" " $" " S= -> TRUE }T
+INCORRECT RESULT: T{ S" ghi"$" ghi" S= -> TRUE }TTESTING R/W WRITE-FILE REPOSITION-FILE READ-FILE FILE-POSITION S"
 TESTING BIN READ-FILE FILE-SIZE
 TESTING RESIZE-FILE
 TESTING DELETE-FILE
@@ -280,8 +296,14 @@ TESTING minimum search order list contains FORTH-WORDLIST and SET-ORDER
 TESTING GET-ORDER SET-ORDER with 0 and -1 number of wids argument
 TESTING DEFINITIONS PREVIOUS
 TESTING SEARCH-WORDLIST WORDLIST FIND
-TESTING new definitions are put into the correct wordlist
-TESTING ORDER  \ Should display search order and compilation wordlist
+
+WRONG NUMBER OF RESULTS: T{ $" DUP" WID1 @ SEARCH-WORDLIST -> XT  @ -1 }T
+WRONG NUMBER OF RESULTS: T{ $" ("   WID1 @ SEARCH-WORDLIST -> XTI @  1 }TTESTING new definitions are put into the correct wordlist
+
+W2 isn't unique
+
+WRONG NUMBER OF RESULTS: T{ $" W2" WID1 @ SEARCH-WORDLIST SO5 -> -1  1234 }T
+WRONG NUMBER OF RESULTS: T{ $" W2" WID2 @ SEARCH-WORDLIST SO5 ->  1 -9876 }TTESTING ORDER  \ Should display search order and compilation wordlist
 
  ONLY FORTH DEFINITIONS search order and compilation wordlist
 Search order: FORTH 
@@ -298,12 +320,46 @@ TESTING -TRAILING
 TESTING /STRING
 TESTING SEARCH
 TESTING COMPARE
-TESTING CMOVE and CMOVE>
-TESTING BLANK
+
+INCORRECT RESULT: T{ S1 $" abdde"  COMPARE -> -1 }T
+INCORRECT RESULT: T{ S1 $" abcdf"  COMPARE -> -1 }TTESTING CMOVE and CMOVE>
+
+INCORRECT RESULT: T{ $" abcdefghij12345pqrstuvwxyz" PAD S1 SWAP DROP COMPARE -> 0 }T
+INCORRECT RESULT: T{ $" apqrstuhij12345pqrstuvwxyz" PAD 26 COMPARE -> 0 }T
+INCORRECT RESULT: T{ $" apqapqapqa12345pqrstuvwxyz" PAD 26 COMPARE -> 0 }T
+INCORRECT RESULT: T{ $" aaaaaaaaaaa2345pqrstuvwxyz" PAD 26 COMPARE -> 0 }T
+INCORRECT RESULT: T{ $" aaaaaaaaaaa2345pqrstuvwxyz" PAD 26 COMPARE -> 0 }T
+INCORRECT RESULT: T{ $" abcdefghij12345pqrstuvwxyz" PAD S1 SWAP DROP COMPARE -> 0 }T
+INCORRECT RESULT: T{ $" apqrstuhij12345pqrstuvwxyz" PAD 26 COMPARE -> 0 }T
+INCORRECT RESULT: T{ $" apqrstuhijtrstrstrstuvwxyz" PAD 26 COMPARE -> 0 }T
+INCORRECT RESULT: T{ $" apqrstuhijtvvvvvvvvvvvwxyz" PAD 26 COMPARE -> 0 }T
+INCORRECT RESULT: T{ $" apqrstuhijtvvvvvvvvvvvwxyz" PAD 26 COMPARE -> 0 }TTESTING BLANK
 TESTING SLITERAL
 TESTING UNESCAPE
-TESTING SUBSTITUTE REPLACES
 
+INCORRECT RESULT: T{ 123 SUBBUF C! $" " SUBBUF UNESCAPE SUBBUF 0 $CHECK -> FALSE }T
+INCORRECT RESULT: T{ SUBBUF C@ -> 123 }T
+INCORRECT RESULT: T{ TEST-UNESCAPE $" %%abc%%def%%%%ghi%%" $CHECK -> FALSE }TTESTING SUBSTITUTE REPLACES
+
+INCORRECT RESULT: T{ $" %mac1%" SUBBUF 20 SUBSTITUTE $" wxyz" $CHECKN -> FALSE 1 }T
+INCORRECT RESULT: T{ $" abc%mac1%d" SUBBUF 20 SUBSTITUTE $" abcwxyzd" $CHECKN -> FALSE 1 }T
+INCORRECT RESULT: T{ $" defg%mac1%hi" SUBST $" defgwxyzhi" $CHECKN -> FALSE 1 }T
+INCORRECT RESULT: T{ $" %mac1%mac2" SUBBUF 20 SUBSTITUTE $" wxyzmac2" $CHECKN -> FALSE 1 }T
+INCORRECT RESULT:       -> FALSE 2 }T
+INCORRECT RESULT:       -> FALSE 2 }T      \ Zero length string substituted
+INCORRECT RESULT:       -> FALSE 1 }T      \ Zero length string substituted
+INCORRECT RESULT:       -> FALSE 1 }T   \ Check substitution is single pass
+INCORRECT RESULT:       -> FALSE 1 }T    \ Check non-recursive
+INCORRECT RESULT:       $" abcwxyzde%%g12%wxyzhij" $CHECKN -> FALSE 4 }T
+INCORRECT RESULT:       -> FALSE 1 }T   \ Non-substitution name passed unchanged
+INCORRECT RESULT:       $" abcwxyzd%e12%mac3" $CHECKN -> FALSE 2 }T
+INCORRECT RESULT: T{ $" abcd" SUBBUF 4 SUBSTITUTE $" abcd" $CHECKN -> FALSE 0 }T  \ Just fits
+INCORRECT RESULT: T{ $" abcde" 2 6 sinit -> subbuf 2 chars + 5 subbuf 6 chars + ssize }T
+INCORRECT RESULT: T{ $" a%mac3%b" 0 9 do-subst $" azyxwvutb" 1 check-subst -> TRUE }T
+INCORRECT RESULT: T{ $" c%mac3%d" 0 3 do-subst $" czyxwvutd" 1 check-subst -> TRUE }T
+INCORRECT RESULT: T{ $" e%mac2%f" 0 3 do-subst $" ezyxf"     1 check-subst -> TRUE }T
+INCORRECT RESULT: T{ $" i%mac3%j" 3 0 do-subst $" izyxwvutj" 1 check-subst -> TRUE }T
+INCORRECT RESULT: T{ $" k%mac3%l" 9 0 do-subst $" kzyxwvutl" 1 check-subst -> TRUE }T
  End of String word tests
 OK
 TESTING Block word set
@@ -404,31 +460,63 @@ TESTING THRU
  End of Block word tests
 OK
 TESTING AHEAD
+
+PT1 isn't unique
 TESTING [IF] [ELSE] [THEN]
 TESTING immediacy of [IF] [ELSE] [THEN]
+
+PT2 isn't unique
+
+PT3 isn't unique
+
+PT9 isn't unique
 TESTING [IF] and [ELSE] carry out a text scan by parsing and discarding words
+
+PT10 isn't unique
 TESTING [ELSE] and [THEN] without a preceding [IF]
 TESTING CS-PICK and CS-ROLL
+
+?REPEAT isn't unique
+
+PT4 isn't unique
+
+PT5 isn't unique
+
+?DONE isn't unique
+
+PT6 isn't unique
+
+MIX_UP isn't unique
+
+PT7 isn't unique
+
+[1CS-ROLL] isn't unique
+
+PT8 isn't unique
 TESTING [DEFINED] [UNDEFINED]
+
+DEF1 isn't unique
+
+DEF2 isn't unique
 
 ---------------------------
         Error Report
 Word Set             Errors
 ---------------------------
 Core                    0
-Core extension          0
+Core extension          5
 Block                   0
 Double number           0
 Exception               0
 Facility                0
-File-access             0
+File-access             3
 Locals                  0
 Memory-allocation       0
 Programming-tools       -
-Search-order            0
-String                  0
+Search-order            4
+String                 34
 ---------------------------
-Total                   0
+Total                  46
 ---------------------------
 
 OK

@@ -759,6 +759,11 @@ struct ConsoleView: View {
     }
 
     private func handlePostFeedActions() {
+        // Defer host dialogs until the outermost FLOAD/INCLUDED finishes. onOutput fires on
+        // every tell() during a long load; without this guard a stray bare FLOAD at the end of
+        // the same REPL line would pop the file panel when the final OK is printed.
+        guard !forth.isLoadingSource else { return }
+
         // Unified handling after a feedLine (or empty) so that FLOAD/EDIT/CHDIR (dialog or named forms)
         // that were executed during interpretation get serviced promptly. This covers:
         // - bare "fload" / "edit" / "chdir" (set *Requested flag -> show dialog)

@@ -230,6 +230,45 @@ hello
     let hasPostBatch = forth.debugFind("POSTBATCH")
     print("TEST2b-repl: prebatch=\(hasPreBatch) postbatch=\(hasPostBatch) (expect true false)")
 
+    // === Test 2b-repl-fload: \S at end of FLOAD stops file and queued console paste lines ===
+    resetTest()
+    _ = fm.changeCurrentDirectoryPath(tmp.path)
+    forth.logicalCurrentDirectory = tmp.path
+    forth.clearReplBatchStop()
+    let fTailSlash = tmp.appendingPathComponent("testslash-tail_\(suffix).fth")
+    try! """
+: beforestop 11 ;
+\\s
+: never 22 ;
+Pasted after stop
+""".write(to: fTailSlash, atomically: true, encoding: String.Encoding.utf8)
+    let replFloadBatch = [
+        "fload \(fTailSlash.lastPathComponent)",
+        "Pasted after stop",
+        ": postpaste 33 ;"
+    ]
+    for ln in replFloadBatch {
+        forth.feedLine(ln)
+        if forth.replBatchStopRequested || forth.sourceLoadStopRequested { break }
+    }
+    let hasBeforeStop = forth.debugFind("BEFORESTOP")
+    let hasNeverStop = forth.debugFind("NEVER")
+    let hasPostPaste = forth.debugFind("POSTPASTE")
+    print("TEST2b-repl-fload: before=\(hasBeforeStop) never=\(hasNeverStop) post=\(hasPostPaste) (expect true false false)")
+
+    // === Test 2b-slash-space: `\ s` on its own line stops FLOAD like \S ===
+    resetTest()
+    let fSlashSpace = tmp.appendingPathComponent("testslash-space_\(suffix).fth")
+    try! """
+: press 55 ;
+\\ s
+: ignoredss 88 ;
+""".write(to: fSlashSpace, atomically: true, encoding: String.Encoding.utf8)
+    forth.loadFile(fSlashSpace)
+    let hasPress = forth.debugFind("PRESS")
+    let hasIgnSS = forth.debugFind("IGNOREDSS")
+    print("TEST2b-slash-space: press=\(hasPress) ignored=\(hasIgnSS) (expect true false)")
+
     // === Test 2b-err: FLOAD stops at first line error (unless CATCH) ===
     resetTest()
     let ferr = tmp.appendingPathComponent("tz-errstop.fth")

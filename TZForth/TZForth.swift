@@ -352,8 +352,19 @@ public final class TZForth {
 
     /// File-load interpret active (survives resetRuntimeState during in-file THROW recovery).
     private func isInterpretingLoadedFile() -> Bool {
-        self.loadNesting > 0 || self.interpreterInputFileId >= 2
+        self.isInsideFileLoadInterpret()
     }
+
+    /// Broader than loadNesting alone: active during each includeFileInterpret runInterpreter pass.
+    private func isInsideFileLoadInterpret() -> Bool {
+        self.loadNesting > 0
+            || self.interpreterInputFileId >= 2
+            || !self.fileLoadEnclosingStack.isEmpty
+            || self.countFloadInterpreterRefills
+    }
+
+    /// Set by \\S when a loaded source file should stop before EOF (FLOAD / INCLUDED / INCLUDE-FILE).
+    public var sourceLoadStopRequested: Bool { sourceLoadStop }
 
     /// Set by \\S from the console REPL; host should skip any further lines in the current submit batch.
     public var replBatchStopRequested: Bool { replBatchStop }
@@ -2522,7 +2533,7 @@ public final class TZForth {
             if Int(self.readCell(self.IN)) >= self.currentSourceLen {
                 self.inputQueue.removeAll(keepingCapacity: true)
             }
-            if sourceLoadStop {
+            if sourceLoadStop || (replBatchStop && self.loadNesting <= 1) {
                 // Intentional \\S stop — silent (not an error; REPL prints OK when the load returns).
                 break
             }
@@ -5107,6 +5118,11 @@ public final class TZForth {
         // cannot resurrect commented tokens (block lines lack LF; registerBlockWords used to
         // redefine \ and break this).
         _ = register("\\", immediate: true) {
+            // `\ s` / `\ S` must stop FLOAD like \S, not comment-out the S (Hayes test.fth guard).
+            if self.inputQueueLooksLikeSlashSAfterBackslash() {
+                self.applySlashSStop()
+                return
+            }
             while !self.inputQueue.isEmpty {
                 let c = self.consumeInput() ?? 0
                 if c == 10 || c == 13 { break }
@@ -5139,24 +5155,7 @@ public final class TZForth {
         // Drains rest of current line (so anything after \S on the line is ignored).
         // Immediate so it takes effect as soon as seen on a line during load.
         _ = register("\\S", immediate: true) {
-            // Drain rest of line so anything after \S on the source line is ignored.
-            while !self.inputQueue.isEmpty {
-                let c = self.consumeInput() ?? 0
-                if c == 10 || c == 13 { break }
-            }
-            if self.isInterpretingLoadedFile() {
-                // Pin >IN at end-of-line so syncInputQueueFromSourceIfNeeded cannot
-                // resurrect the rest of this line after the queue drain (FLOAD merger path
-                // uses runInterpreter directly instead of per-line feedLine).
-                self.writeCell(self.IN, Cell(self.currentSourceLen))
-                self.inputQueue.removeAll(keepingCapacity: true)
-                self.sourceLoadStop = true
-            } else {
-                // Console REPL: host (ConsoleView) skips remaining lines in this submit batch.
-                self.writeCell(self.IN, Cell(self.currentSourceLen))
-                self.inputQueue.removeAll(keepingCapacity: true)
-                self.replBatchStop = true
-            }
+            self.applySlashSStop()
         }
 
         // Basic comparison words users expect immediately
@@ -8567,6 +8566,47 @@ public final class TZForth {
         }
         if self.inputQueue.last != 10 {
             self.inputQueue.append(10)
+        }
+    }
+
+    /// True when `\` was just parsed and the rest of this line is only `S`/`s` (Hayes `\S` stop).
+    private func inputQueueLooksLikeSlashSAfterBackslash() -> Bool {
+        var idx = 0
+        while idx < self.inputQueue.count {
+            let b = self.inputQueue[idx]
+            if b == 10 || b == 13 { break }
+            if b > 32 { break }
+            idx += 1
+        }
+        guard idx < self.inputQueue.count else { return false }
+        let b = self.inputQueue[idx]
+        guard b == 83 || b == 115 else { return false } // S or s
+        idx += 1
+        while idx < self.inputQueue.count {
+            let c = self.inputQueue[idx]
+            if c == 10 || c == 13 { return true }
+            if c > 32 { return false }
+            idx += 1
+        }
+        return true
+    }
+
+    /// Shared \\S / `\ s` stop: end current source line and stop file load or REPL submit batch.
+    private func applySlashSStop() {
+        while !self.inputQueue.isEmpty {
+            let c = self.consumeInput() ?? 0
+            if c == 10 || c == 13 { break }
+        }
+        self.writeCell(self.IN, Cell(self.currentSourceLen))
+        self.inputQueue.removeAll(keepingCapacity: true)
+        if self.isInsideFileLoadInterpret() {
+            self.sourceLoadStop = true
+            // Outermost FLOAD: also stop any further lines in a multi-line console paste.
+            if self.loadNesting <= 1 {
+                self.replBatchStop = true
+            }
+        } else {
+            self.replBatchStop = true
         }
     }
 

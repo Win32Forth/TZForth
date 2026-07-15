@@ -1952,7 +1952,10 @@ public final class TZForth {
                 self.nameJoinSpec(target.lastPathComponent)
             }
             if target.lastPathComponent == "utilities.fth" {
+                // Redefine ($") and $" — $" was compiled against the PARSE-based ($") and must be recompiled.
                 self.feedLine(": ($\") ( caddr -- caddr' u ) (hayes-quote-parse) ;")
+                self.feedLine(": $\" SBUF1 ($\") ;")
+                self.feedLine(": $2\" SBUF2 ($\") ;")
             }
             self.pendingFloadSpec = ""
             return true

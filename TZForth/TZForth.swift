@@ -8625,7 +8625,19 @@ public final class TZForth {
         RunLoop.current.run(mode: .default, before: Date(timeIntervalSinceNow: 0))
     }
 
-    /// Shared \\S / `\ s` stop (ANS): pin >IN at end-of-line; stop only the innermost file load.
+    /// Move the active interpreter file to EOF (F-PC \\S: seqhandle endfile).
+    private func seekActiveInterpreterFileToEnd() {
+        guard let fid = self.activeInterpreterFileId(),
+              var entry = self.openFiles[fid], entry.isOpen else { return }
+        entry.position = entry.data.count
+        self.openFiles[fid] = entry
+    }
+
+    /// Shared \\S / `\ s` stop (ANS / F-PC model):
+    /// - IBRESET / ignore rest of line: pin >IN at #TIB end, drain input queue
+    /// - endfile: seek active load file to EOF (no further REFILL lines)
+    /// - loadline off: fileInterpretStopStack marks innermost includeFileInterpret done
+    /// Does not alter STATE (compile/interpret preserved across nested FLOAD).
     private func applySlashSStop() {
         while !self.inputQueue.isEmpty {
             let c = self.consumeInput() ?? 0
@@ -8634,6 +8646,7 @@ public final class TZForth {
         self.writeCell(self.IN, Cell(self.currentSourceLen))
         self.inputQueue.removeAll(keepingCapacity: true)
         if self.loadNesting > 0, !self.fileInterpretStopStack.isEmpty {
+            self.seekActiveInterpreterFileToEnd()
             self.fileInterpretStopStack[self.fileInterpretStopStack.count - 1] = true
         } else {
             self.replBatchStop = true

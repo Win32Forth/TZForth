@@ -14,7 +14,8 @@ pad find nip 0=
    ; immediate
 [then]
 
-[undefined] T{ [if]
+\ Hayes tester.fr defines T{ but not ERROR-XT / ERROR1 (fp tests need ttester.fs).
+[undefined] ERROR-XT [if]
 s" ttester.fs"         included
 [then]
 

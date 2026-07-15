@@ -127,9 +127,8 @@ extension TZForth {
         return false
     }
 
-    /// ANS 12.3.7: decimal float literal when BASE is 10.
+    /// ANS 12.3.7: float literal syntax; BASE is ignored when parsing (see ttester.fs note).
     internal func parseTextFloat(_ name: String) -> Double? {
-        guard self.readCell(self.BASE) == 10 else { return nil }
         guard self.looksLikeFloatToken(name) else { return nil }
         return self.parseFloatString(name)
     }

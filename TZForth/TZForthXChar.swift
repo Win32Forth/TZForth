@@ -196,6 +196,11 @@ extension TZForth {
             self.throwMalformedXchar()
             return nil
         }
+        self.realignInputQueueFromSource()
+        // Hayes/coreext: skip one inter-word blank after PARSE (shadow PARSE redefines core).
+        if let b = self.inputQueue.first, b <= 32 && b != 10 && b != 13 {
+            _ = self.consumeInput()
+        }
         let startPos = Int(self.readCell(self.IN))
         var len = 0
         while !self.inputQueue.isEmpty {

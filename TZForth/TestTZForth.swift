@@ -247,6 +247,70 @@ hello
     let saw123Tail = collected.contains("123")
     print("TEST2b-fload-tail: before=\(hasBeforeStop) never=\(hasNeverStop) saw123=\(saw123Tail) (expect true false true)")
 
+    // === Test 2b-testfth-guard: Hayes test.fth tail — FILE-ECHO ON then \\s stops echo + interpret ===
+    resetTest()
+    _ = fm.changeCurrentDirectoryPath(tmp.path)
+    forth.logicalCurrentDirectory = tmp.path
+    let fTestfthGuard = tmp.appendingPathComponent("testfth-guard_\(suffix).fth")
+    try! """
+.( done-loading )
+File-echo on
+
+\\s
+
+Continue TZForth must not appear in FILE-ECHO output
+FORK Instructions must not appear either
+: neverdefined 99 ;
+""".write(to: fTestfthGuard, atomically: true, encoding: String.Encoding.utf8)
+    collected = ""
+    forth.feedLine("fload \(fTestfthGuard.lastPathComponent)")
+    let sawDone = collected.contains("done-loading")
+    let sawGuardEcho = collected.contains("File-echo on") || collected.contains("FILE-ECHO ON")
+    let sawSlashS = collected.contains("\\s")
+    let sawContinue = collected.contains("Continue TZForth")
+    let sawFork = collected.contains("FORK Instructions")
+    let hasNeverDefined = forth.debugFind("NEVERDEFINED")
+    print("TEST2b-testfth-guard: done=\(sawDone) echo=\(sawGuardEcho) slashecho=\(sawSlashS) continue=\(sawContinue) fork=\(sawFork) never=\(hasNeverDefined) (expect true true true false false false)")
+
+    // === Test 2f-fp-noname: :NONAME then [UNDEFINED] \\ must not swallow following [IF] bodies (fatan2-test.fs) ===
+    resetTest()
+    _ = fm.changeCurrentDirectoryPath(tmp.path)
+    forth.logicalCurrentDirectory = tmp.path
+    let fFpNoname = tmp.appendingPathComponent("tz-fp-noname_\(suffix).fth")
+    try! """
+:noname drop ;
+[UNDEFINED] \\\\ [IF]
+  : \\\\  ( -- )  -1 parse 2drop BEGIN refill 0= UNTIL ; [THEN]
+[UNDEFINED] pi [IF]
+ 0.3141592653589793238463E1 fconstant pi
+[THEN]
+false [IF] [ELSE] pi 4e f/ fconstant pi/4 [THEN]
+""".write(to: fFpNoname, atomically: true, encoding: String.Encoding.utf8)
+    collected = ""
+    forth.feedLine("decimal")
+    forth.feedLine("fload \(fFpNoname.lastPathComponent)")
+    let hasPi = forth.debugFind("PI")
+    let hasPi4 = forth.debugFind("PI/4")
+    print("TEST2f-fp-noname: pi=\(hasPi) pi/4=\(hasPi4) (expect true true)")
+
+    // === Test 2g-fp-line16: fload runfptests then .( on same line (Hayes test.fth line 16) ===
+    resetTest()
+    let hayesSrc = URL(fileURLWithPath: fm.currentDirectoryPath)
+        .appendingPathComponent("Tests/forth2012-test-suite/src").path
+    if FileManager.default.fileExists(atPath: "\(hayesSrc)/fp/runfptests.fth") {
+        _ = fm.changeCurrentDirectoryPath(hayesSrc)
+        forth.logicalCurrentDirectory = hayesSrc
+        collected = ""
+        forth.feedLine("fload debug-bootstrap.fth")
+        forth.feedLine("chdir fp")
+        forth.feedLine("VARIABLE fperrors  0 #ERRORS ! fload runfptests.fth .( #ERRORS @ = ) #ERRORS @  fperrors !")
+        let okAfter = forth.debugFind("+") && !collected.contains("? .(")
+        let sawErrEq = collected.contains("#ERRORS @ =")
+        print("TEST2g-fp-line16: find+=\(forth.debugFind("+")) no-dot-paren-err=\(!collected.contains("? .(")) errEq=\(sawErrEq) (expect true true true)")
+    } else {
+        print("TEST2g-fp-line16: SKIP (Hayes src not at \(hayesSrc))")
+    }
+
     // === Test 2b-nested-back: outer file continues after inner \\S; console tail runs ===
     resetTest()
     _ = fm.changeCurrentDirectoryPath(tmp.path)
@@ -540,6 +604,55 @@ fload \(fnInnerLate.lastPathComponent)
     forth.feedLine("STATE @ . CR")
     let def3StateZero = collected.split(whereSeparator: { $0.isWhitespace || $0.isNewline }).contains("0")
     print("TEST2f undefined-skip: state0=\(def3StateZero) (expect true)")
+
+    // Nested interpret [IF] (Hayes toolstest lines 78–80).
+    resetTest()
+    forth.feedLine("fload debug-bootstrap.fth")
+    collected = ""
+    forth.feedLine("T{ FALSE [IF] 1 TRUE  [IF] 2 [ELSE] 3 [THEN] [ELSE] 4 [THEN] -> 4 }T")
+    let nestedIfOk = !collected.contains("INCORRECT") && !collected.contains("WRONG")
+    print("TEST2f nested-if: ok=\(nestedIfOk) (expect true)")
+
+    // N>R / NR> restores count n on the data stack (Hayes toolstest NTR).
+    resetTest()
+    forth.feedLine("fload debug-bootstrap.fth")
+    forth.feedLine(": NTR  N>R -1 NR> ;")
+    collected = ""
+    forth.feedLine("T{ 1 2 3 4 5 6 7 4 NTR -> 1 2 3 -1 4 5 6 7 4 }T")
+    let ntrOk = !collected.contains("INCORRECT") && !collected.contains("WRONG")
+    print("TEST2f ntr: ok=\(ntrOk) (expect true)")
+
+    // NAME>COMPILE compile stub + TRAVERSE-WORDLIST with trailing 2DROP (Hayes toolstest).
+    resetTest()
+    forth.feedLine("fload debug-bootstrap.fth")
+    forth.feedLine("GET-CURRENT CONSTANT CURR-WL")
+    forth.feedLine("WORDLIST CONSTANT TRAV-WL")
+    forth.feedLine("TRAV-WL SET-CURRENT")
+    forth.feedLine(": TRAV2 2 ;")
+    forth.feedLine("CURR-WL SET-CURRENT")
+    forth.feedLine(": NAME? ( caddr u nt -- caddr u f ) NAME>STRING 2OVER S= ;")
+    forth.feedLine(": GET-NT ( caddr u 0 nt -- caddr u nt false | caddr u 0 nt ) 2>R R@ NAME? IF R> R> ELSE 2R> THEN ;")
+    forth.feedLine(": GET-NAME-TOKEN ( caddr u wid -- nt | 0 ) 0 ['] GET-NT ROT TRAVERSE-WORDLIST >R 2DROP R> ;")
+    forth.feedLine(": N>C ( caddr u -- ) TRAV-WL GET-NAME-TOKEN NAME>COMPILE EXECUTE ; IMMEDIATE")
+    forth.feedLine(": N>C1 ( -- n ) [ $\" TRAV2\" ] N>C ;")
+    collected = ""
+    forth.feedLine("T{ N>C1 -> 2 }T")
+    let nc1Ok = !collected.contains("INCORRECT") && !collected.contains("WRONG")
+    print("TEST2f nc1: ok=\(nc1Ok) (expect true)")
+    resetTest()
+    forth.feedLine("fload debug-bootstrap.fth")
+    forth.feedLine("GET-CURRENT CONSTANT CURR-WL")
+    forth.feedLine("WORDLIST CONSTANT TRAV-WL")
+    forth.feedLine("TRAV-WL SET-CURRENT")
+    forth.feedLine(": TRAV3 3333 ; : TRAV3 333 ;")
+    forth.feedLine("CURR-WL SET-CURRENT")
+    forth.feedLine(": (GET-ALL) ( caddr u nt -- [n] caddr u true ) DUP >R NAME? IF R@ NAME>INTERPRET EXECUTE ROT ROT THEN R> DROP TRUE ;")
+    forth.feedLine(": NAME? ( caddr u nt -- caddr u f ) NAME>STRING 2OVER S= ;")
+    forth.feedLine(": GET-ALL ( caddr u -- i*x ) ['] (GET-ALL) TRAV-WL TRAVERSE-WORDLIST 2DROP ;")
+    collected = ""
+    forth.feedLine("T{ $\" TRAV3\" GET-ALL -> 3333 333 }T")
+    let getAllOk = !collected.contains("INCORRECT") && !collected.contains("WRONG")
+    print("TEST2f get-all: ok=\(getAllOk) (expect true)")
     // Also, the interpreted 42 should be on stack after the def line (before ; closed it)
     // In the previous debug it showed stack with 42.
 
@@ -781,13 +894,13 @@ fload \(fnInnerLate.lastPathComponent)
     ansTest("?", "42 t6mem ! t6mem ?", "42")
     ansTest("NAME>STRING", "' DUP >HEADER DUP NAME>STRING TYPE", "DUP")
     ansTest("NAME>INTERPRET", "' DUP >HEADER DUP NAME>INTERPRET ' DUP = .", "-1")
-    ansTest("TRAVERSE-WORDLIST", "VARIABLE t6tr : t6tw DROP 1 t6tr ! ; 0 t6tr ! ' t6tw GET-CURRENT TRAVERSE-WORDLIST t6tr @ .", "1")
+    ansTest("TRAVERSE-WORDLIST", "VARIABLE t6tr : t6tw DROP 1 t6tr ! TRUE ; 0 t6tr ! ' t6tw GET-CURRENT TRAVERSE-WORDLIST t6tr @ .", "1")
     ansTest("SYNONYM", "SYNONYM T6DUP DUP : t6syn 5 T6DUP 1+ ; t6syn .", "6")
     forth.feedLine(": tloc 99 ;")
     ansTest("LOCATE", "LOCATE tloc", "LIT 99")
     ansTest("[DEFINED]", ": t6def [DEFINED] DUP DUP [THEN] ; 5 t6def . .", "5 5")
     ansTest("[UNDEFINED]", ": t6undef [UNDEFINED] NOPE 99 [THEN] ; t6undef .", "99")
-    ansTest("N>R NR>", "10 20 2 N>R NR> . .", "20 10")
+    ansTest("N>R NR>", "10 20 2 N>R NR> . . .", "2 20 10")
     ansTest("AHEAD", ": t6ah AHEAD 111 THEN 222 ; t6ah .", "222")
     ansTest("NAME>COMPILE xt", "' DUP >HEADER DUP NAME>COMPILE ' DUP >HEADER DUP NAME>INTERPRET = .", "0")
 
@@ -1312,7 +1425,7 @@ fload \(fnInnerLate.lastPathComponent)
     ansTest("CHAR ascii", "DECIMAL CHAR Z .", "90")
     ansTest("CHAR utf8", "DECIMAL CHAR é .", "233")
     ansTest("[CHAR] utf8", ": xc [CHAR] é ; xc .", "233")
-    ansTest("PARSE utf8 delim", "DECIMAL $20AC PARSE abc€ NIP 4 = .", "-1")
+    ansTest("PARSE utf8 delim", "DECIMAL $20AC PARSE abc€ NIP 3 = .", "-1")
     print("=== TZForth Extended-Character (ANS 18.6.1 I/O — XEMIT, XKEY, XKEY?, EKEY>XCHAR) ===")
     ansTest("XEMIT ascii", "65 XEMIT", "A")
     ansTest("XEMIT utf8", "DECIMAL 8364 XEMIT", "€")

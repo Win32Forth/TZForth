@@ -1142,7 +1142,7 @@ fload \(fnInnerLate.lastPathComponent)
         ansTest("CHAR ascii", "DECIMAL CHAR Z .", "90")
         ansTest("CHAR utf8", "DECIMAL CHAR é .", "233")
         ansTest("[CHAR] utf8", ": xc [CHAR] é ; xc .", "233")
-        ansTest("PARSE utf8 delim", "DECIMAL $20AC PARSE abc€ NIP 4 = .", "-1")
+        ansTest("PARSE utf8 delim", "DECIMAL $20AC PARSE abc€ NIP 3 = .", "-1")
         results += "=== TZForth Extended-Character (ANS 18.6.1 I/O — XEMIT, XKEY, XKEY?, EKEY>XCHAR) ===\n"
         ansTest("XEMIT ascii", "65 XEMIT", "A")
         ansTest("XEMIT utf8", "DECIMAL 8364 XEMIT", "€")

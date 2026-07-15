@@ -5790,7 +5790,7 @@ public final class TZForth {
         // This is the general parser needed for strings, names, etc. (e.g. to implement .", S", etc.).
         _ = register("WORD") {
             let delim = UInt8(self.pop() & 0xff)
-            let addr = self.parseToWordBuffer(using: delim)
+            let addr = self.parseToWordBuffer(using: delim, ansWord: true)
             self.push(addr)
         }
 
@@ -8808,7 +8808,7 @@ public final class TZForth {
     // Skips leading exact delims, collects until delim or line-end, builds counted string
     // (len byte + chars + trailing NUL) in the next STRING_BUFFER slot. Returns c-addr.
     // The trailing delim (if any) is left in queue. Transient — ring may reuse slots.
-    internal func parseToWordBuffer(using delim: UInt8) -> Cell {
+    internal func parseToWordBuffer(using delim: UInt8, ansWord: Bool = false) -> Cell {
         var collected: [UInt8] = []
 
         // Skip leading delimiters (exact ascii or smart-double for ")
@@ -8817,17 +8817,22 @@ public final class TZForth {
                 break
             }
         }
-        // ANS WORD skips leading spaces before the token (Hayes prelimtest MSG ab).
-        if delim == 32 {
+        if ansWord || delim == 32 {
+            // ANS WORD: skip leading spaces before the token (Hayes prelimtest MSG ab).
             while let b = self.inputQueue.first, b <= 32 && b != 10 && b != 13 {
                 _ = self.consumeInput()
             }
         }
 
-        // Collect non-delim chars; also stop at line ends (10/13) so we don't eat \n etc.
+        // Collect chars until delimiter or line end. ANS WORD (ansWord) skips leading
+        // spaces above but still collects interior spaces until the delimiter (Hayes
+        // prelimtest .MSG( Pass #11: ... .MSG) and MSG ab) ).
         while !self.inputQueue.isEmpty {
             let b = self.inputQueue.first!
             if self.peekIsDelim(delim) || b == delim || b == 10 || b == 13 {
+                break
+            }
+            if !ansWord && delim == 32 && b <= 32 {
                 break
             }
             collected.append(self.consumeInput()!)

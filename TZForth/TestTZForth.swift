@@ -691,6 +691,7 @@ fload \(fnInnerLate.lastPathComponent)
 
     // TYPE COUNT WORD (more coverage)
     ansTest("COUNT TYPE via WORD", "32 WORD HELLO COUNT TYPE", "HELLO")
+    ansTest("WORD ) Hayes MSG", ": t6msg 41 WORD COUNT ; t6msg ab) DUP . TYPE", "2 ab")
 
     // 2@ 2! (use safe non-HERE to avoid prior side effects on DP)
     forth.feedLine("VARIABLE t2a")

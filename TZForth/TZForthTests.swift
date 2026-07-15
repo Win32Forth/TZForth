@@ -634,6 +634,7 @@ fload \(fnInnerLate.lastPathComponent)
 
         // TYPE COUNT WORD (more coverage)
         ansTest("COUNT TYPE via WORD", "32 WORD HELLO COUNT TYPE", "HELLO")
+        ansTest("WORD ) Hayes MSG", ": t6msg 41 WORD COUNT ; t6msg ab) DUP . TYPE", "2 ab")
 
         // New batch: >IN >NUMBER ABORT ABORT" ACCEPT ENVIRONMENT? EVALUATE FIND
         ansTest(">IN", ": t6in 0 >IN ! >IN @ ; t6in .", "0")

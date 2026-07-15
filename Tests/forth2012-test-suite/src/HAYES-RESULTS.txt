@@ -1,5 +1,6 @@
 
  Running ANS Forth tests for TZForth 
+( Hayes forth2012 + FP suite — TZForth commit 656a461 — 2026-07-15 — 0 T{ errors )
 OK
 FILE-ECHO OFF
  debug-bootstrap: loading Hayes harness... 
@@ -297,13 +298,11 @@ TESTING GET-ORDER SET-ORDER with 0 and -1 number of wids argument
 TESTING DEFINITIONS PREVIOUS
 TESTING SEARCH-WORDLIST WORDLIST FIND
 
-WRONG NUMBER OF RESULTS: T{ $" DUP" WID1 @ SEARCH-WORDLIST -> XT  @ -1 }T
-WRONG NUMBER OF RESULTS: T{ $" ("   WID1 @ SEARCH-WORDLIST -> XTI @  1 }TTESTING new definitions are put into the correct wordlist
+TESTING new definitions are put into the correct wordlist
 
 W2 isn't unique
 
-WRONG NUMBER OF RESULTS: T{ $" W2" WID1 @ SEARCH-WORDLIST SO5 -> -1  1234 }T
-WRONG NUMBER OF RESULTS: T{ $" W2" WID2 @ SEARCH-WORDLIST SO5 ->  1 -9876 }TTESTING ORDER  \ Should display search order and compilation wordlist
+TESTING ORDER  \ Should display search order and compilation wordlist
 
  ONLY FORTH DEFINITIONS search order and compilation wordlist
 Search order: FORTH 
@@ -504,19 +503,34 @@ DEF2 isn't unique
 Word Set             Errors
 ---------------------------
 Core                    0
-Core extension          5
+Core extension          0
 Block                   0
 Double number           0
 Exception               0
 Facility                0
-File-access             3
+File-access             0
 Locals                  0
 Memory-allocation       0
-Programming-tools       -
-Search-order            4
-String                 34
+Programming-tools       0
+Search-order            0
+String                  0
+Floating-point          0
 ---------------------------
-Total                  46
+Total                   0
 ---------------------------
 
+ Running FP Tests
+ Running paranoia.4th
+ Searching for Radix and Precision.
+ Radix = 2. .
+ End of paranoia.fth
+ Running ak-fp-test.fth
+ End of ak-fp-test.fth
+
+ FP tests finished
+
+ #ERRORS @ =  CPERRORS @ = 0  CERRORS @ = 0  DERRORS @ = 0  EERRORS @ = 0  FERRORS @ = 0  LERRORS @ = 0  MERRORS @ = 0  TERRORS @ = 0  SOERRORS @ = 0  SERRORS @ = 0  FAERRORS @ = 0  BERRORS @ = 0  FPERRORS @ = 0  #ERRORS @ = 0
+ File-echo on
+ 
+\s
 OK

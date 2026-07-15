@@ -1,6 +1,6 @@
 
  Running ANS Forth tests for TZForth 
-( Hayes forth2012 + FP suite — TZForth commit 656a461 — 2026-07-15 — 0 T{ errors )
+( Hayes forth2012 + FP suite — TZForth 2e9c1dd — 2026-07-15 — 0 T{ errors; paranoia END OF TEST )
 OK
 FILE-ECHO OFF
  debug-bootstrap: loading Hayes harness... 
@@ -520,17 +520,26 @@ Total                   0
 ---------------------------
 
  Running FP Tests
+
+ Running fatan2-test.fs ... #ERRORS: 0 ... End of fatan2-test.fs
+ Running ieee-arith-test.fs ... #ERRORS: 0 ... End of ieee-arith-test.fs
+ Running ieee-fprox-test.fs ... #ERRORS: 0 ... End of ieee-fprox-test.fs
+ Running fpzero-test.4th ... #ERRORS: 0 ... End of fpzero-test.4th
+ Running fpio-test.4th ... End of fpio-test.4th
+ Running to-float-test.4th ... #ERRORS: 0 ... End of to-float-test.4th
  Running paranoia.4th
  Searching for Radix and Precision.
  Radix = 2. .
+ ... milestones 30, 40, 90, 160, 190, 220 ...
+ No failures, defects nor flaws have been discovered.
+ The arithmetic diagnosed appears to be Excellent!
+ END OF TEST.
  End of paranoia.fth
- Running ak-fp-test.fth
- End of ak-fp-test.fth
+ Running ak-fp-test.fth ... End of ak-fp-test.fth
 
  FP tests finished
 
- #ERRORS @ =  CPERRORS @ = 0  CERRORS @ = 0  DERRORS @ = 0  EERRORS @ = 0  FERRORS @ = 0  LERRORS @ = 0  MERRORS @ = 0  TERRORS @ = 0  SOERRORS @ = 0  SERRORS @ = 0  FAERRORS @ = 0  BERRORS @ = 0  FPERRORS @ = 0  #ERRORS @ = 0
- File-echo on
+ #ERRORS @ =  CPERRORS @ = 0  CERRORS @ = 0  DERRORS @ = 0  EERRORS @ = 0  FERRORS @ = 0  LERRORS @ = 0  MERRORS @ = 0  TERRORS @ = 0  SOERRORS @ = 0  SERRORS @ = 0  FAERRORS @ = 0  BERRORS @ = 0  FPERRORS @ = 0  #ERRORS @ = 0 File-echo on
  
 \s
 OK

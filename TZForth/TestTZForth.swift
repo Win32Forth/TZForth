@@ -9,7 +9,7 @@
 //      cat TZForth/TZForth.swift TZForth/TZForthSettings.swift TZForth/TZForthBlock.swift TZForth/TZForthXChar.swift TZForth/TZForthAssembler.swift TZForth/TZForthFloat.swift TZForth/TZForthTests.swift TZForth/TestTZForth.swift > /tmp/combined.swift
 //      swift /tmp/combined.swift
 //
-//      # For automated tests (\\ block comments, \S, FLOAD behavior + 381 ANS spot-checks):
+//      # For automated tests (\\ block comments, \S, FLOAD behavior + 398 ANS spot-checks):
 //      FTEST=1 swift /tmp/combined.swift
 //
 //      # For John Hayes / forth2012-test-suite (incl. Block; 0 T{ failures target):
@@ -1290,6 +1290,20 @@ fload \(fnInnerLate.lastPathComponent)
     print("=== TZForth Float Tier A (ANS 12.3.2 ENVIRONMENT?) ===")
     ansTest("ENVIRONMENT? FLOATING", "S\" FLOATING\" ENVIRONMENT? .", "-1")
     ansTest("ENVIRONMENT? FLOATING-STACK", "S\" FLOATING-STACK\" ENVIRONMENT? DROP .", "16")
+
+    print("=== TZForth Float Tier B (ANS 12.6.2 Float Ext) ===")
+    ansTest("0e literal", "0e 0e FSWAP F- F0= .", "-1")
+    ansTest("F>D", "1e0 F>D 1. D= .", "-1")
+    ansTest("FVARIABLE", "FVARIABLE TFV 2e0 TFV F! TFV F@ 2e0 FSWAP F- F0= .", "-1")
+    ansTest("FVALUE TO", "3e0 FVALUE TFVAL TFVAL 4e0 TO TFVAL TFVAL 4e0 FSWAP F- F0= .", "-1")
+    ansTest("F~ exact", "1e0 FDUP 0e F~ .", "-1")
+    ansTest("FABS", "-2e0 FABS 2e0 FSWAP F- F0= .", "-1")
+    ansTest("FROT", "1e0 2e0 3e0 FROT 1e0 FSWAP F- F0= .", "-1")
+    ansTest("FSIN zero", "0e FSIN 0e FSWAP F- F0= .", "-1")
+    ansTest("FATAN2", "0e 1e0 FATAN2 0e FSWAP F- F0= .", "-1")
+    ansTest("SF@ SF!", "PAD -2e0 SF! PAD SF@ -2e0 FSWAP F- F0= .", "-1")
+    ansTest("FSQRT", "4e0 FSQRT 2e0 FSWAP F- F0= .", "-1")
+    ansTest("ENVIRONMENT? FLOAT-EXT", "S\" FLOAT-EXT\" ENVIRONMENT? .", "-1")
 
     print("=== TZForth Programming-Tools assembler (CODE ;CODE RET noop) ===")
     ansTest("CODE noop", "CODE tnoop ;CODE 1 tnoop .", "1")

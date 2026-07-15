@@ -39,7 +39,7 @@ extension TZForth {
         let preValidationEnvironment = self.captureSessionEnvironment()
         let preValidationSettings = self.settings
 
-        var results = "=== ANS-VALIDATE: 2012 ANS Forth validation (Core, Core Ext, File-Access, String, Facility, Exception, Memory, Double, Locals, Programming-Tools, Extended-Character, Float Tier A, Block subsystem; from TestTZForth FTEST) ===\n\n"
+        var results = "=== ANS-VALIDATE: 2012 ANS Forth validation (Core, Core Ext, File-Access, String, Facility, Exception, Memory, Double, Locals, Programming-Tools, Extended-Character, Float Tier A/B, Block subsystem; from TestTZForth FTEST) ===\n\n"
         var collected = ""
 
         let originalOnOutput = self.onOutput
@@ -1232,6 +1232,20 @@ fload \(fnInnerLate.lastPathComponent)
         results += "=== TZForth Float Tier A (ANS 12.3.2 ENVIRONMENT?) ===\n"
         ansTest("ENVIRONMENT? FLOATING", "S\" FLOATING\" ENVIRONMENT? .", "-1")
         ansTest("ENVIRONMENT? FLOATING-STACK", "S\" FLOATING-STACK\" ENVIRONMENT? DROP .", "16")
+
+        results += "=== TZForth Float Tier B (ANS 12.6.2 Float Ext) ===\n"
+        ansTest("0e literal", "0e 0e FSWAP F- F0= .", "-1")
+        ansTest("F>D", "1e0 F>D 1. D= .", "-1")
+        ansTest("FVARIABLE", "FVARIABLE TFV 2e0 TFV F! TFV F@ 2e0 FSWAP F- F0= .", "-1")
+        ansTest("FVALUE TO", "3e0 FVALUE TFVAL TFVAL 4e0 TO TFVAL TFVAL 4e0 FSWAP F- F0= .", "-1")
+        ansTest("F~ exact", "1e0 FDUP 0e F~ .", "-1")
+        ansTest("FABS", "-2e0 FABS 2e0 FSWAP F- F0= .", "-1")
+        ansTest("FROT", "1e0 2e0 3e0 FROT 1e0 FSWAP F- F0= .", "-1")
+        ansTest("FSIN zero", "0e FSIN 0e FSWAP F- F0= .", "-1")
+        ansTest("FATAN2", "0e 1e0 FATAN2 0e FSWAP F- F0= .", "-1")
+        ansTest("SF@ SF!", "PAD -2e0 SF! PAD SF@ -2e0 FSWAP F- F0= .", "-1")
+        ansTest("FSQRT", "4e0 FSQRT 2e0 FSWAP F- F0= .", "-1")
+        ansTest("ENVIRONMENT? FLOAT-EXT", "S\" FLOAT-EXT\" ENVIRONMENT? .", "-1")
 
         results += "=== TZForth Programming-Tools assembler (CODE ;CODE RET noop) ===\n"
         ansTest("CODE noop", "CODE tnoop ;CODE 1 tnoop .", "1")

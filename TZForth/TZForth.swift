@@ -489,6 +489,9 @@ public final class TZForth {
     internal var assemblerSearchPushed = false
     internal var litID: Cell = 0  // TZForthBlock.swift
     internal var flitID: Cell = 0  // TZForthFloat.swift
+    internal var fvalueFetchID: Cell = 0  // TZForthFloat.swift (FVALUE body / TO target)
+    internal var fvalueStoreID: Cell = 0  // TZForthFloat.swift (TO compile for FVALUE)
+    internal var floatSetPrecision: Int = 6  // TZForthFloat.swift (SET-PRECISION / FS. / FE.)
     private var emitID: Cell = 0
     private var dotQuoteID: Cell = 0   // runtime ID for (." ) used by . " to embed compact string literals
     private var cQuoteID: Cell = 0     // runtime for (C") used by C" to embed counted string literals
@@ -1419,7 +1422,7 @@ public final class TZForth {
         (UInt128(self.unsignedCell(hi)) << 64) | UInt128(self.unsignedCell(lo))
     }
 
-    private func disassembleSignedDouble(_ d: Int128) -> (lo: Cell, hi: Cell) {
+    internal func disassembleSignedDouble(_ d: Int128) -> (lo: Cell, hi: Cell) {  // TZForthFloat.swift (F>D)
         let bits = UInt128(bitPattern: d)
         let lo = UInt64(truncatingIfNeeded: bits)
         let hi = UInt64(truncatingIfNeeded: bits >> 64)
@@ -3282,6 +3285,7 @@ public final class TZForth {
         "MAX-XCHAR",
         "XCHAR-MAXMEM",
         "FLOATING",
+        "FLOAT-EXT",
         "FLOATING-STACK",
         "MAX-FLOAT",
     ]
@@ -3299,7 +3303,7 @@ public final class TZForth {
             return [255, -1]
         case "WORDLISTS":
             return [Cell(MAX_VOCABS), -1]
-        case "FILE", "FILE-ACCESS", "FILE-EXT", "EXCEPTION", "STRING", "MEMORY-ALLOCATION", "DOUBLE", "LOCALS", "PROGRAMMING-TOOLS", "FACILITY", "BLOCK", "BLOCK-EXT", "EXTENDED-CHARACTER", "FLOATING":
+        case "FILE", "FILE-ACCESS", "FILE-EXT", "EXCEPTION", "STRING", "MEMORY-ALLOCATION", "DOUBLE", "LOCALS", "PROGRAMMING-TOOLS", "FACILITY", "BLOCK", "BLOCK-EXT", "EXTENDED-CHARACTER", "FLOATING", "FLOAT-EXT":
             return [-1]
         case "FLOATING-STACK":
             return [Cell(self.FSTACK_SIZE), -1]
@@ -7318,7 +7322,7 @@ public final class TZForth {
             }
             let second = self.readCell(Int(cfa) + 8)
             guard second == self.litID else {
-                self.throwIllegalArgument("? TO target does not look like a VALUE"); return
+                self.throwIllegalArgument("? TO target does not look like a VALUE or FVALUE"); return
             }
             let storageAddr = Int(self.readCell(Int(cfa) + 16))
             let fourth = self.readCell(Int(cfa) + 24)
@@ -7326,6 +7330,8 @@ public final class TZForth {
                 self.push(self.litID); self.comma(); self.push(Cell(storageAddr)); self.comma()
                 if fourth == self.twoFetchID {
                     self.push(self.twoStoreID); self.comma()
+                } else if fourth == self.fvalueFetchID {
+                    self.push(self.fvalueStoreID); self.comma()
                 } else {
                     self.push(self.storeID); self.comma()
                 }
@@ -7334,6 +7340,8 @@ public final class TZForth {
                 let dlo = self.pop()
                 self.writeCell(storageAddr, dhi)
                 self.writeCell(storageAddr + 8, dlo)
+            } else if fourth == self.fvalueFetchID {
+                self.writeFloat(storageAddr, self.fpop())
             } else {
                 let n = self.pop()
                 self.writeCell(storageAddr, n)

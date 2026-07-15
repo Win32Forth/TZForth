@@ -523,6 +523,23 @@ fload \(fnInnerLate.lastPathComponent)
     let sawFinalInterp = collected.contains("state=interpreting")
     let sawStuckCompile = collected.contains("state=compiling")
     print("TEST2f after ; for [ test: sawFinalInterp=\(sawFinalInterp) sawStuckCompile=\(sawStuckCompile) (expect interp true, stuck false)")
+
+    // Interpret-mode [ … ] must not leave STATE compiling (Hayes toolstest PT2 idiom).
+    resetTest()
+    forth.feedLine("DEBUG-ON")
+    collected = ""
+    forth.feedLine("[ 0 ] state @ .")
+    let sawInterpBracket = collected.contains("state=interpreting")
+    let sawZeroState = collected.contains(" 0 ")
+    print("TEST2f interpret bracket: interp=\(sawInterpBracket) zero=\(sawZeroState) (expect true true)")
+
+    // [UNDEFINED] with an existing name must finish ; with STATE=0 (Hayes toolstest DEF3).
+    resetTest()
+    forth.feedLine("CREATE TZ-DEF3MARKER")
+    forth.feedLine(": TZ-DEF3 [UNDEFINED] TZ-DEF3MARKER [IF] 3 [ELSE] 4 [THEN] ;")
+    forth.feedLine("STATE @ . CR")
+    let def3StateZero = collected.split(whereSeparator: { $0.isWhitespace || $0.isNewline }).contains("0")
+    print("TEST2f undefined-skip: state0=\(def3StateZero) (expect true)")
     // Also, the interpreted 42 should be on stack after the def line (before ; closed it)
     // In the previous debug it showed stack with 42.
 

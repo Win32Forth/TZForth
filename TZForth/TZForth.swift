@@ -623,6 +623,8 @@ public final class TZForth {
     }
     /// Depth of `[` … `]` compile-time interpret brackets (for SLITERAL et al.).
     private var bracketCompileDepth: Int = 0
+    /// STATE to restore when the outermost `[` … `]` closes (Hayes toolstest `[ 0 ] [IF]` idiom).
+    private var bracketCompileResumeState: Cell = 0
     /// Interpret-state `[IF]` true-branch nesting (skip `[ELSE]` … `[THEN]` when > 0).
     private var interpretIfTrueDepth: Int = 0
     /// Multi-line interpret/conditional-compilation skip (`[IF]`/`[ELSE]` text scan).
@@ -2478,6 +2480,8 @@ public final class TZForth {
             self.countFloadInterpreterRefills = false
             self.floadRestoreInputContinuation = false
             self.interpretIfTrueDepth = 0
+            self.bracketCompileDepth = 0
+            self.bracketCompileResumeState = 0
         }
         self.midFileLoadAborted = false
         self.fileInterpretLineNumberStack.append(self.fileInterpretLineNumber)
@@ -3235,12 +3239,15 @@ public final class TZForth {
             let word = self.parseWord()
             if word.isEmpty { return nil }
             let w = word.uppercased()
+            let flatDefinedSkip = self.conditionalSkipStopAtElse
             if w == "[IF]" {
-                self.conditionalSkipDepth += 1
+                if !flatDefinedSkip { self.conditionalSkipDepth += 1 }
             } else if w == "[THEN]" {
-                self.conditionalSkipDepth -= 1
-                if self.conditionalSkipDepth == 0 {
-                    return self.finishConditionalSkipInStringTail(.then)
+                if !flatDefinedSkip {
+                    self.conditionalSkipDepth -= 1
+                    if self.conditionalSkipDepth == 0 {
+                        return self.finishConditionalSkipInStringTail(.then)
+                    }
                 }
             } else if w == "[ELSE]" && self.conditionalSkipDepth == 1 && self.conditionalSkipStopAtElse {
                 self.conditionalSkipDepth = 0
@@ -3273,15 +3280,18 @@ public final class TZForth {
             }
             self.discardParsedWordDuringConditionalSkip(word)
             let w = word.uppercased()
+            let flatDefinedSkip = self.conditionalSkipStopAtElse
             if w == "[IF]" {
-                self.conditionalSkipDepth += 1
+                if !flatDefinedSkip { self.conditionalSkipDepth += 1 }
             } else if w == "[THEN]" {
-                self.conditionalSkipDepth -= 1
-                if self.conditionalSkipDepth == 0 {
-                    if self.hasClosingQuoteAhead() {
-                        return self.finishConditionalSkipInStringTail(.then)
+                if !flatDefinedSkip {
+                    self.conditionalSkipDepth -= 1
+                    if self.conditionalSkipDepth == 0 {
+                        if self.hasClosingQuoteAhead() {
+                            return self.finishConditionalSkipInStringTail(.then)
+                        }
+                        return .then
                     }
-                    return .then
                 }
             } else if w == "[ELSE]" && self.conditionalSkipDepth == 1 && self.conditionalSkipStopAtElse {
                 self.conditionalSkipDepth = 0
@@ -4350,8 +4360,20 @@ public final class TZForth {
             }
         }
 
-        _ = register("]", immediate: false) { self.writeCell(self.STATE, 1) }
+        _ = register("]", immediate: false) {
+            if self.bracketCompileDepth > 0 {
+                self.bracketCompileDepth -= 1
+                if self.bracketCompileDepth == 0 {
+                    self.writeCell(self.STATE, self.bracketCompileResumeState)
+                }
+            } else {
+                self.writeCell(self.STATE, 1)
+            }
+        }
         _ = register("[", immediate: true)  {
+            if self.bracketCompileDepth == 0 {
+                self.bracketCompileResumeState = self.readCell(self.STATE)
+            }
             self.bracketCompileDepth += 1
             self.writeCell(self.STATE, 0)
         }
@@ -8325,10 +8347,6 @@ public final class TZForth {
                     }
                 }
             }
-            if name == "]" && self.bracketCompileDepth > 0 {
-                self.bracketCompileDepth -= 1
-            }
-
             if self.readCell(self.STATE) != 0 {
                 let upper = name.uppercased()
                 if upper == "LOCAL" || upper == "END-LOCALS" {
@@ -9921,6 +9939,7 @@ public final class TZForth {
         self.throwActive = false
         self.lastAbortQuoteText = ""
         self.bracketCompileDepth = 0
+        self.bracketCompileResumeState = 0
         self.interpretIfTrueDepth = 0
         self.conditionalSkipDepth = 0
         self.conditionalSkipStopAtElse = false

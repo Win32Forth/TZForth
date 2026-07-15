@@ -1951,6 +1951,9 @@ public final class TZForth {
             } else {
                 self.nameJoinSpec(target.lastPathComponent)
             }
+            if target.lastPathComponent == "utilities.fth" {
+                self.feedLine(": ($\") ( caddr -- caddr' u ) (hayes-quote-parse) ;")
+            }
             self.pendingFloadSpec = ""
             return true
         }
@@ -3148,6 +3151,8 @@ public final class TZForth {
     private func patchOpenControlFlowPlaceholders(branchTo here: Cell) {
         while !self.controlFlowStack.isEmpty {
             let placeholder = self.controlFlowStack.removeLast()
+            // BEGIN origins share controlFlowStack for CS-PICK but must not be patched as IF/AHEAD.
+            if self.whileRepeatStack.contains(placeholder) { continue }
             // Only patch forward-branch placeholder cells (still 0); skip patched slots.
             if self.readCell(Int(placeholder)) != 0 { continue }
             let forwardOffset = here - (placeholder + 8)
@@ -4214,8 +4219,20 @@ public final class TZForth {
             let wid = self.pop()
             let u = Int(self.pop())
             let caddr = Int(self.pop())
+            var start = 0
+            var end = u
+            while start < end {
+                let b = self.readByte(caddr + start)
+                if b > 32 { break }
+                start += 1
+            }
+            while end > start {
+                let b = self.readByte(caddr + end - 1)
+                if b > 32 { break }
+                end -= 1
+            }
             var nameBytes: [UInt8] = []
-            for i in 0..<u {
+            for i in start..<end {
                 nameBytes.append(self.readByte(caddr + i))
             }
             let name = String(bytes: nameBytes, encoding: .utf8) ?? ""
@@ -4604,9 +4621,9 @@ public final class TZForth {
             }
             let here = self.readCell(self.DP_ADDR)
             self.whileRepeatStack.append(here)
-            // Do not push loop-entry addresses onto controlFlowStack — only IF/ELSE/AHEAD/WHILE
-            // placeholders belong there. BEGIN entries confused patchOpenControlFlowPlaceholders
-            // at `;` and could corrupt branch offsets in large defs (paranoia part2).
+            // CS-PICK / CS-ROLL need BEGIN origins on the control-flow stack (Hayes toolstest ?REPEAT).
+            // patchOpenControlFlowPlaceholders skips whileRepeatStack entries so `;` does not patch them.
+            self.controlFlowStack.append(here)
         }
 
         _ = register("AGAIN", immediate: true) {
@@ -6138,6 +6155,34 @@ public final class TZForth {
             self.writeCell(self.IN, endPos)
             self.push( Cell(addr) )
             self.push( Cell(len) )
+        }
+
+        // Hayes utilities.fth ($") / $" — quote parse with leading-ws skip into a counted buffer.
+        _ = register("(hayes-quote-parse)") {
+            let dest = Int(self.pop())
+            self.realignInputQueueFromSource()
+            while let b = self.inputQueue.first, b <= 32 && b != 10 && b != 13 {
+                _ = self.consumeInput()
+            }
+            var collected: [UInt8] = []
+            while !self.inputQueue.isEmpty {
+                let b = self.inputQueue.first!
+                if self.peekIsDelim(34) || b == 34 || b == 10 || b == 13 { break }
+                collected.append(self.consumeInput()!)
+            }
+            if !self.inputQueue.isEmpty {
+                _ = self.consumeDelim(34)
+            }
+            while let first = collected.first, first <= 32 {
+                collected.removeFirst()
+            }
+            let capped = min(collected.count, 255)
+            self.writeByte(dest, UInt8(capped))
+            for i in 0..<capped {
+                self.writeByte(dest + 1 + i, collected[i])
+            }
+            self.push(Cell(dest + 1))
+            self.push(Cell(capped))
         }
 
         // PARSE-NAME ( -- c-addr u )  Core Ext

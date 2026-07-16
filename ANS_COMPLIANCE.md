@@ -2,7 +2,7 @@
 
 This document tracks implementation status of the 2012 ANS Forth Standard word sets in TZForth (Swift port of the lbForth model). Generated from codebase inspection (`TZForth/TZForth.swift`, `TestTZForth.swift`, `TZForthTests.swift`).
 
-Last update: Hayes forth2012-test-suite **0 errors** (Block included); Facility + Block + Extended-Character + Programming-Tools CODE + Float Tier A/B on TZForth host; FTEST / `ANS-VALIDATE` **398/398**.
+Last update: Hayes forth2012-test-suite **0 errors** (Block + Float `fp/` included); Facility + Block + Extended-Character + Programming-Tools CODE + Float Tier A/B/C on TZForth host; FTEST **430/430**; in-app `ANS-VALIDATE` **427/427** (baseline `TZForth/ANS-VALIDATE.txt`).
 
 ## Summary
 
@@ -21,9 +21,9 @@ Last update: Hayes forth2012-test-suite **0 errors** (Block included); Facility 
 | **Facility (10)** | Complete (TZForth host) — structures, `PAGE`/`AT-XY`, `MS`, `TIME&DATE`, `EKEY*`, `EMIT?`, `K-*`; Hayes `facilitytest.fth` 0 errors |
 | **Block (10)** | Complete — file-backed `.blk`, LRU buffer cache; Hayes `blocktest.fth` 0 errors; FTEST Block + TZ extension spot-checks |
 | **Extended-Character (18)** | Complete — UTF-8 codec; shadow `CHAR`/`[CHAR]`/`PARSE`; `XEMIT`/`XKEY`/`XKEY?`/`EKEY>XCHAR`; `XHOLD`; `XC-WIDTH`/`X-WIDTH`; ENVIRONMENT? queries |
-| **Float (12)** | Tier A + **Tier B (Float Ext)** — IEEE 64-bit, separate 16-deep F stack; literals incl. `0e`/`1E`; trig/exp/log; `F~`, `FVARIABLE`/`FVALUE`/`TO`, `F>D`/`F>S`, `SF@`/`DF@`, `REPRESENT`, `FS.`/`FE.` |
+| **Float (12)** | Tier A + **Tier B (Float Ext)** + **Tier C** (`REPRESENT`, `FS.`/`FE.`/`F.`) — IEEE 64-bit, separate 16-deep F stack; literals incl. `0e`/`1E`; trig/exp/log; `F~`, `FVARIABLE`/`FVALUE`/`TO`, `F>D`/`F>S`, `SF@`/`DF@` |
 
-FTEST harness: run with `FTEST=1 swift /tmp/combined.swift` (concatenate `TZForth.swift`, `TZForthSettings.swift`, `TZForthBlock.swift`, `TZForthXChar.swift`, `TZForthAssembler.swift`, `TZForthFloat.swift`, `TZForthTests.swift`, `TestTZForth.swift`). Current count: **398/398** TEST6 spot-checks plus block-comment / FLOAD / INCLUDE load tests. In-app **`ANS-VALIDATE`** runs the same suite and overwrites **`TZForth/ANS-VALIDATE.txt`** (tracked baseline in the Xcode project; excluded from the app bundle so it stays writable). Validation restores dictionary bytes and interpret-session state (`evaluateNesting`, input-source stack, block subsystem) so the REPL still prints **`OK`** after `ANS-VALIDATE` or Hayes `fload test`. During validation, `onMsDelayRequested` is cleared so **`MS`** uses the engine `Thread.sleep` fallback (synchronous `feedLine` / `ansTest` output checks).
+FTEST harness: run with `FTEST=1 swift /tmp/combined.swift` (concatenate `TZForth.swift`, `TZForthSettings.swift`, `TZForthBlock.swift`, `TZForthXChar.swift`, `TZForthAssembler.swift`, `TZForthFloat.swift`, `TZForthTests.swift`, `TestTZForth.swift`). Current count: **430/430** TEST6 spot-checks plus block-comment / FLOAD / INCLUDE load tests (three extra CLI-only checks vs in-app). In-app **`ANS-VALIDATE`** runs the same core suite (**427/427** in the tracked baseline) and writes **`ANS-VALIDATE.txt`** to the logical cwd (regenerate anytime; **`EDIT ans-validate.txt`** resolves the file from any directory). Tracked reference copy: **`TZForth/ANS-VALIDATE.txt`** (in the Xcode project; excluded from the app bundle so regeneration stays writable). Validation restores dictionary bytes and interpret-session state (`evaluateNesting`, input-source stack, block subsystem) so the REPL still prints **`OK`** after `ANS-VALIDATE` or Hayes `fload test`. During validation, `onMsDelayRequested` is cleared so **`MS`** uses the engine `Thread.sleep` fallback (synchronous `feedLine` / `ansTest` output checks).
 
 ## Core (6.1) — Complete
 
@@ -398,7 +398,7 @@ Not implemented (no current plan unless requested):
 
 ## Recommendations
 
-- TZForth is highly functional for classic Forth sources, REPL, sandboxed `FLOAD`/`EDIT`/`CHDIR`, Hayes forth2012 validation (**0 errors** on non-FP suites, Block included), FTEST / `ANS-VALIDATE` **398/398**, file-backed Block (`.blk`), UTF-8 Extended-Character, minimal threaded `CODE`, Float Tier A/B, and ANS File-Access file I/O / `INCLUDED`.
-- Next logical step (if desired): run and tune Hayes `fp/` suite (`paranoia.4th`, `FS.`/`FE.` formatting edge cases).
+- TZForth is ready for distribution packaging: classic Forth sources, REPL, sandboxed `FLOAD`/`EDIT`/`CHDIR`, Hayes forth2012 validation (**0 errors**, Block + Float `fp/` via `test.fth`), FTEST **430/430**, in-app `ANS-VALIDATE` **427/427**, file-backed Block (`.blk`), UTF-8 Extended-Character, minimal threaded `CODE`, Float Tier A/B/C, and ANS File-Access file I/O / `INCLUDED`.
+- Hayes reproduction: `CHDIR Tests/forth2012-test-suite/src` → **`FLOAD test`**; transcript baseline **`Tests/forth2012-test-suite/src/HAYES-RESULTS.txt`**.
 
 For full standard details, see the official 2012 ANS Forth document (sections 6.1, 6.2, and optional word sets in chapters 7–18).

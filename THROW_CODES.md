@@ -282,7 +282,7 @@ t-under .            → -3
 
 - [x] All §9.3.1 codes -3…-17 mapped or explicitly exempted (see **Codes not mapped**); file-access -68/-74 for kernel paths
 - [x] `grep errorFlag = true` only `handleUnhandledThrow` + `recoverFromError` (2 sites in `TZForth.swift`)
-- [x] FTEST / `ANS-VALIDATE` **381/381** (incl. Extended-Character + Float Tier A + Block subsystem + TZ `.blk` extensions); unified FLOAD/INCLUDE load loop; colon `CATCH`+`>R`; Hayes forth2012 suite **0 errors** on executed word sets (Block included; Float `fp/` not run)
+- [x] FTEST **430/430** / in-app `ANS-VALIDATE` **427/427** (incl. Extended-Character + Float Tier A/B/C + Block subsystem + TZ `.blk` extensions); unified FLOAD/INCLUDE load loop; colon `CATCH`+`>R`; Hayes forth2012 suite **0 errors** on all word sets (Block + Float `fp/` via `test.fth`)
 - [x] `ANS-VALIDATE` exception suite (mirrors FTEST CATCH/THROW; nested CATCH, safe-fload, mid-include, `.ERROR` file codes)
 
 ---

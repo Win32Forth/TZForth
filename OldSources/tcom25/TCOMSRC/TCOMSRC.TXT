@@ -1,8 +1,0 @@
-TCOMSRC.TXT             Info on TCOMSRC.ZIP             by Tom Zimmer
-
-This ZIP file contains all of the source file required to build TCOM
-from an already installed copy of F-PC 3.5. The Forth needs to be
-named F.EXE. Just type the batch file name MAKETCOM <enter> to build
-TCOM.EXE.
-
-

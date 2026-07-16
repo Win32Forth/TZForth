@@ -1,8 +1,8 @@
 # TZForth
 
-A SwiftUI-based host and development environment based on Leif Bruder's public-domain lbForth system.
+An ANS 2012 Standard Forth computer language development environment based on Leif Bruder's public-domain lbForth system.
 
-**GitHub:** https://github.com/Win32Forth/TZForth (previously named FPCForth in the repo)
+**GitHub:** https://github.com/Win32Forth/TZForth
 
 ## About
 
@@ -69,9 +69,9 @@ the public-domain lbForth model and techniques by Leif Bruder (2014).
 
 Also, I want to credit the Grok Build AI for doing most of the work.
 while I ( Tom Zimmer Win32Forth@mac.com ) did pay for the use of Grok Build,
-I could never have ompleted this project without the invaluble assisstance
-of Grok Build. Now, at an age of almost 76, my memory and skills are not what
-they once were, back in the 80s and 90s, when I was producing so many of the
+I could never have completed this project without the invaluble assistance
+of Grok Build. Now, at an age 76, my memory and skills are not what
+they once were back in the 80s and 90s, when I was producing so many of the
 Forth systems I am credited with creating. Those were good years, but they
 are behind me. Having the opportunity to participate in producing another
 complex Forth system in my retirement years has been very encouraging to me,

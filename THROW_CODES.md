@@ -140,7 +140,7 @@ Same pattern for other **parsing** words: `['] included catch`, `['] include-fil
 | `? Bad branch target (ip=…)` | -16 | `0BRANCH` / `BRANCH` / `?DO` / `LOOP` / `+LOOP` |
 | `? [IF] unresolved conditional compilation` | -15 | |
 | `? IF/DO/CASE/… only while compiling` (STATE=0) | -14 | All immediate control + `[DEFINED]` etc. |
-| `? Execution limit exceeded` | -17 | `innerThread` safety limit |
+| `? STEP-LIMIT exceeded` | -17 | `innerThread` step budget (`STEP-LIMIT @`; `0` = unlimited) |
 | `? SYNONYM chain too deep` | -17 | |
 | `? Invalid search order count` / full / empty | -20 | |
 

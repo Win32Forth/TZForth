@@ -148,6 +148,7 @@ ANS optional word set 11.6.1 (file operations) and key 11.6.2 extensions are imp
 - **`(`** — multi-line parenthesized comments span file lines (refills when `)` not found on current line).
 - **Shared load loop** — `INCLUDE-FILE`, `INCLUDED`, `INCLUDE`, and host **`FLOAD`** all use the same line-at-a-time interpret path (`includeFileInterpret`): `FILE-ECHO`, `\S`, mid-file abort, no per-line `OK`, `DEBUG-ON`/`OFF` per line, and `SOURCE-ID` = the open **fileid** (≥ 10 for newly opened files).
 - **`FLOAD`** — resolves path (`.fth` auto-append, cwd, host sandbox via `onPerformNamedLoad`), opens text with UTF-8/Latin-1 tolerance, then runs the shared include loop; registers spec in `INCLUDED-NAMES` on success.
+- **Nested relative path resolution (TZForth, not ANS-mandated)** — ANS File-Access does not require changing directory on include; how relative names resolve is implementation-defined. TZForth’s host load path temporarily sets the logical cwd to the **loaded file’s folder** for the duration of that load (then restores the prior cwd) so nested `INCLUDED` / `FLOAD` of sibling bare names work as expected (e.g. Hayes `test.fth` → `fp/runfptests.fth`, or `lib/pitest.fth` → `big-int.fth`). Nested specs should be relative to the **including file’s directory**, not necessarily the user’s original project root.
 - **`RESTORE-INPUT` during load** — nested `SAVE-INPUT` / `RESTORE-INPUT` inside a colon on an `FLOAD` line can repoint `SOURCE` mid-line; the interpreter continues through the remainder of that line and subsequent file lines (Hayes filetest `SI2`).
 - **`ENVIRONMENT?`** — returns true for `FILE`, `FILE-ACCESS`, `FILE-EXT`.
 
@@ -306,7 +307,20 @@ Example: `' DUP >HEADER 32 DUMP` · `' DUP H.` · `' DUP >XID .` → primitive d
 
 ## TZForth-specific extensions (non-ANS)
 
-`FLOAD` (synchronous named load, catchable `-74`), `EDIT`, `CHDIR`, `DIR`, `FILE-ECHO`, `DEBUG-ON`/`DEBUG-OFF`, `RESET`, `CLS`, `BYE`, `ANS-VALIDATE`, `.ENVIRONMENT`, `.ERROR` (spaced throw message), `.INCLUDED` (list `INCLUDED-NAMES` registry), `CATCH-EVALUATE`, `FORGET-WORD`, `>LFA`, `>HEADER`, `>NFA`, `>XID`, `ID.`, `H.` (unsigned hex print, ignores `BASE`), `\\` (block comment to `{`), `\\S`, `DP`, high-level `HERE` (`DP @`), `ERASE` (`0 FILL`), `GROWMEMORYMB`, etc.
+`FLOAD` (synchronous named load, catchable `-74`), `EDIT`, `CHDIR`, `DIR`, `FILE-ECHO`, `DEBUG-ON`/`DEBUG-OFF`, `RESET`, `CLS`, `BYE`, `ANS-VALIDATE`, `.ENVIRONMENT`, `.ERROR` (spaced throw message), `.INCLUDED` (list `INCLUDED-NAMES` registry), `CATCH-EVALUATE`, `FORGET-WORD`, `>LFA`, `>HEADER`, `>NFA`, `>XID`, `ID.`, `H.` (unsigned hex print, ignores `BASE`), `\\` (block comment to `{`), `\\S`, `DP`, high-level `HERE` (`DP @`), `ERASE` (`0 FILL`), `GROWMEMORYMB`, `STEP-LIMIT`, etc.
+
+### BIG-INTEGER multiprecision (not ANS)
+
+Optional teaching word set for multiprecision integers (base **10⁹** limbs, 64-bit cells). **Not** an ANS word set and **not** part of Hayes forth2012.
+
+| Component | Notes |
+|-----------|--------|
+| Vocabulary **`BIG-INTEGER`** | Kernel; host **`BI-MUL`**, **`BI-DIVMOD`**, **`BI-ISQRT`** (layout matches library) |
+| **`lib/big-int.fth`** | Alloc, add/sub, `BI*` → `BI-MUL`, print, `BI-POWER10`, … |
+| **`lib/pi-chudnovsky.fth`**, **`pitest.fth`** | Chudnovsky π demo (`fload lib/pitest`) |
+| **`STEP-LIMIT`** | Interpreter step budget; `0` disables (needed for large π runs) |
+
+Load pattern: `ONLY FORTH ALSO BIG-INTEGER DEFINITIONS` … library … `ONLY FORTH ALSO DEFINITIONS`. Use `ALSO BIG-INTEGER` (or execute the vocab) before using BI words. `WORDS` lists the **first** search-order wordlist only (`ONLY FORTH ALSO BIG-INTEGER WORDS` → BI set).
 
 ## Facility (10) — Complete (TZForth host)
 

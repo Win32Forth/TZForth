@@ -50,8 +50,29 @@ The app is sandboxed with "user selected files" read-write entitlement. This mea
 - `chdir` to a path before authorizing will still set the logical view and report it (so resolves use the right path), but open/list will fail until the grant; the note in output explains.
 - Full paths or ~ work for FLOAD/EDIT/CHDIR when they are under a granted tree.
 - EDIT after FLOAD in same dir works for write (NSWorkspace handoff uses the active scope + file bookmarks).
+- **Nested relative includes:** During a named `FLOAD` / `INCLUDED`, TZForth temporarily sets the logical cwd to the **loaded file’s directory** so nested bare names (e.g. `S" big-int.fth" INCLUDED` next to the parent) resolve correctly. The outer cwd is restored when that load finishes. This is **not** required by ANS Forth-2012 (path resolution is implementation-defined). Practical tip: put sibling includes next to the parent file; do not prefix paths that already assume the project root if the parent lives in a subfolder (e.g. from `lib/pitest.fth`, use `S" big-int.fth"` not `S" lib/big-int.fth"`).
 
 In short: it is *not* hopeless. One bare `fload` + pick in the folder containing Forthing.fth (or your sources) is enough to make the default "the right place" and keep named FLOAD working thereafter (even after quitting/relaunching the app).
+
+## BIG-INTEGER (multiprecision, not ANS)
+
+TZForth includes an optional **`BIG-INTEGER`** vocabulary for base-10⁹ multiprecision integers (teaching / demos; **not** an ANS word set). Sources live under **`lib/`** in the repository.
+
+| Piece | Role |
+|--------|------|
+| Vocabulary **`BIG-INTEGER`** | Kernel vocab; host **`BI-MUL`**, **`BI-DIVMOD`**, **`BI-ISQRT`** |
+| **`lib/big-int.fth`** | Full library (alloc, add/sub, `BI*`, print, …) |
+| **`lib/pi-chudnovsky.fth`**, **`lib/pitest.fth`** | High-precision π demo (results recorded in pitest) |
+| **`STEP-LIMIT`** | Inner-interpreter step budget; demos set `0` for large π |
+
+```forth
+\ From project root (nested includes resolve next to the loaded file):
+fload lib/pitest.fth
+\ Or from lib/:
+fload pitest
+```
+
+Layout and word list: header of **`lib/big-int.fth`**. See also **`ANS_COMPLIANCE.md`** (TZForth extensions).
 
 ## License / Attribution
 

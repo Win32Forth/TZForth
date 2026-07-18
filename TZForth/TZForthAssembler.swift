@@ -11,8 +11,8 @@ extension TZForth {
 
     // MARK: - ASSEMBLER vocab helpers
 
-    /// Word-list head cell for a VOCABULARY/CREATE word (e.g. ASSEMBLER).
-    private func wordlistHead(named vocabName: String) -> Cell? {
+    /// Word-list head cell for a VOCABULARY/CREATE word (e.g. ASSEMBLER, BIG-INTEGER).
+    internal func wordlistHead(named vocabName: String) -> Cell? {
         let hdr = self.findWord(vocabName)
         if hdr == 0 { return nil }
         let cfa = self.getCFA(hdr)

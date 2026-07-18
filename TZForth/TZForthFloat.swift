@@ -464,7 +464,7 @@ extension TZForth {
             return (rep.charFlag != 0 ? "-" : "") + trimmed + " "
         }
 
-        let prec = max(1, self.floatSetPrecision)
+        // Digit count already respects SET-PRECISION via floatRepresentScratch.
         let digits = String(bytes: rep.digits, encoding: .ascii) ?? ""
         let exp = rep.k - 1
         var out = rep.charFlag != 0 ? "-" : ""

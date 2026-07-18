@@ -33,6 +33,8 @@ extension TZForth {
         if dbc != 0 { self.defaultBlockCountVarAddr = dbc }
         let bbc = self.captureVariableDataAddr(named: "BLOCK-BUFFER-COUNT")
         if bbc != 0 { self.blockBufferCountVarAddr = bbc }
+        let sl = self.captureVariableDataAddr(named: "STEP-LIMIT")
+        if sl != 0 { self.stepLimitVarAddr = sl }
         let blk = self.captureVariableDataAddr(named: "BLK")
         if blk != 0 { self.blkVarAddr = blk }
         let bf = self.captureVariableDataAddr(named: "BLOCK-FILE")
@@ -51,6 +53,9 @@ extension TZForth {
         if self.blockBufferCountVarAddr != 0 {
             self.writeCell(self.blockBufferCountVarAddr, Cell(self.settings.blockBufferCount))
         }
+        if self.stepLimitVarAddr != 0 {
+            self.writeCell(self.stepLimitVarAddr, Cell(max(0, self.settings.stepLimit)))
+        }
         if self.blockFileVarAddr != 0 {
             self.writeCell(self.blockFileVarAddr, 0)
         }
@@ -60,6 +65,18 @@ extension TZForth {
         if self.scrVarAddr != 0 {
             self.writeCell(self.scrVarAddr, 0)
         }
+    }
+
+    /// Inner-interpreter dispatch budget from STEP-LIMIT @ (or settings). 0 = unlimited.
+    func effectiveStepLimit() -> Int {
+        if self.stepLimitVarAddr != 0 {
+            let v = self.readCell(self.stepLimitVarAddr)
+            if v <= 0 { return 0 }
+            if v > Cell(Int.max) { return Int.max }
+            return Int(v)
+        }
+        let s = self.settings.stepLimit
+        return s <= 0 ? 0 : s
     }
 
     func initializeBlockVariablesFromSettings() {
@@ -861,6 +878,7 @@ extension TZForth {
         let bs = self.effectiveBlockSize()
         let bufCount = self.effectiveBlockBufferCount()
         let defBlocks = self.effectiveDefaultBlockCount()
+        let stepLim = self.effectiveStepLimit()
         let memMB = self.memory.count / (1024 * 1024)
         let poolBytes = bs * bufCount
         let settingsPath = TZForthSettings.storageURL().path
@@ -871,6 +889,13 @@ extension TZForth {
         self.tell("    change: n BLOCK-BUFFER-COUNT ! SAVE-SETTINGS (restart; also moves block pool)\n")
         self.tell("  DEFAULT-BLOCK-COUNT @  = \(defBlocks)\n")
         self.tell("    change: n DEFAULT-BLOCK-COUNT ! SAVE-SETTINGS (new .blk default size)\n")
+        if stepLim == 0 {
+            self.tell("  STEP-LIMIT @           = 0 (unlimited)\n")
+        } else {
+            self.tell("  STEP-LIMIT @           = \(stepLim)\n")
+        }
+        self.tell("    change: n STEP-LIMIT !  (takes effect immediately; 0 = unlimited)\n")
+        self.tell("    persist: SAVE-SETTINGS  (inner-interpreter steps per run; pure multiprecision may need higher)\n")
         self.tell("  memory bytes           = \(self.memory.count) (\(memMB) MB)\n")
         self.tell("    change: n GROWMEMORYMB once per session before ALLOCATE; SAVE-SETTINGS stores MB for next boot\n")
         self.tell("  default blocks file    = \(self.settings.defaultBlocksFileName)\n")
@@ -893,11 +918,16 @@ extension TZForth {
         if self.defaultBlockCountVarAddr != 0 {
             s.defaultBlockCount = max(1, Int(self.readCell(self.defaultBlockCountVarAddr)))
         }
+        if self.stepLimitVarAddr != 0 {
+            let v = self.readCell(self.stepLimitVarAddr)
+            s.stepLimit = v <= 0 ? 0 : (v > Cell(Int.max) ? Int.max : Int(v))
+        }
         s.defaultMemoryMB = max(1, self.memory.count / (1024 * 1024))
         do {
             try s.save()
             self.settings = s
             self.tell("Settings saved. Restart TZForth for BLOCK-SIZE / BLOCK-BUFFER-COUNT / memory changes.\n")
+            self.tell("(STEP-LIMIT is already live; SAVE-SETTINGS only persists it for next boot.)\n")
         } catch {
             self.tell("? SAVE-SETTINGS failed: \(error.localizedDescription)\n")
         }

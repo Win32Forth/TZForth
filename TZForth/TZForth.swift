@@ -93,7 +93,7 @@ public final class TZForth {
 
     public typealias Cell = Int
 
-    private let CELL_SIZE = 8
+    internal let CELL_SIZE = 8  // TZForthBigInt.swift and other extensions
 
     // MARK: - Memory and state
 
@@ -484,6 +484,8 @@ public final class TZForth {
     var defaultBlockCountVarAddr: Cell = 0
     var blockBufferCountVarAddr: Cell = 0
     var scrVarAddr: Cell = 0
+    /// Data cell for kernel VARIABLE STEP-LIMIT (inner-interpreter step budget; 0 = unlimited).
+    var stepLimitVarAddr: Cell = 0
 
     /// When >= 2, the text interpreter is reading lines from this fileid (INCLUDE-FILE / INCLUDED).
     private var interpreterInputFileId: Cell = -1
@@ -833,7 +835,7 @@ public final class TZForth {
         ("<>",      "( n1 n2 -- flag )",  "not equal?"),
         
         // Dictionary & System
-        ("WORDS",   "( -- )",             "list all words (kernel alpha, then user in order)"),
+        ("WORDS",   "( -- ) [name]",      "list words in first search-order wordlist (optional name filter)"),
         ("SEE",     "( -- name )",        "decompile a word"),
         ("LOCATE",  "( -- name )",        "alias of SEE — decompile word definition"),
         ("HELP",    "( -- ) name",        "show help for a word"),
@@ -1049,7 +1051,7 @@ public final class TZForth {
         ("REPOSITION-FILE","( ud fileid -- ior )", "set file position"),
         ("RESIZE-FILE","( ud fileid -- ior )", "set file size"),
         ("INCLUDE-FILE","( fileid -- )",   "interpret contents of open text file, then close it"),
-        ("INCLUDED", "( c-addr u -- )",    "open and interpret named file, then close it"),
+        ("INCLUDED", "( c-addr u -- )",    "open and interpret named file, then close it (nested relatives: see FLOAD cwd note)"),
         ("INCLUDE", "( -- ) name",         "parse name and INCLUDED (immediate)"),
         ("REQUIRED", "( c-addr u -- )",   "INCLUDED if file spec not yet in INCLUDED-NAMES list"),
         ("REQUIRE", "( -- name )",        "PARSE-NAME REQUIRED (load once per spec string)"),
@@ -1081,8 +1083,15 @@ public final class TZForth {
         ("BLOCK-SIZE","( -- addr )",      "variable: bytes per block (default 1024; SAVE-SETTINGS + restart for pool)"),
         ("DEFAULT-BLOCK-COUNT","( -- addr )", "variable: blocks in a newly auto-created default .blk file"),
         ("BLOCK-BUFFER-COUNT","( -- addr )", "variable: LRU buffer slots (default 4; SAVE-SETTINGS + restart)"),
-        (".SETTINGS","( -- )",            "display block/memory settings and how to change them"),
-        ("SAVE-SETTINGS","( -- )",         "persist BLOCK-SIZE, buffer count, default block count, memory MB"),
+        ("STEP-LIMIT","( -- addr )",      "variable: max inner-interpreter steps per run (0=unlimited; SAVE-SETTINGS to persist)"),
+        (".SETTINGS","( -- )",            "display block/memory/step-limit settings and how to change them"),
+        ("SAVE-SETTINGS","( -- )",         "persist BLOCK-SIZE, buffer count, default block count, memory MB, STEP-LIMIT"),
+
+        // BIG-INTEGER vocabulary (TZForth host multiprecision; not ANS — see lib/big-int.fth)
+        ("BIG-INTEGER","( -- )",          "vocabulary: multiprecision BI words (ALSO BIG-INTEGER to search)"),
+        ("BI-MUL",  "( a b r -- )",       "BIG-INTEGER: host r=a*b (base 10^9 limbs; layout as lib/big-int.fth)"),
+        ("BI-DIVMOD","( num den quot rem work -- )", "BIG-INTEGER: host quot/rem = num/den (work ignored; same layout)"),
+        ("BI-ISQRT","( a r quot rem work t1 t2 -- )", "BIG-INTEGER: host floor-sqrt a → r (scratch args ignored)"),
 
         // Extended-Character (ANS 18.6.1 — UTF-8)
         ("XC-SIZE", "( xchar -- u )",       "bytes to encode xchar in memory"),
@@ -1109,7 +1118,7 @@ public final class TZForth {
         ("\\",      "( -- )",             "comment to end of line (immediate)"),
         ("\\\\",    "( -- )",             "block comment to next '{' (spans lines; use \\ not single \\ for single-line comments) (immediate)"),
         ("\\S",     "( -- )",             "stop FLOAD/INCLUDE file or remainder of multi-line console paste (immediate)"),
-        ("FLOAD",   "( -- ) name|dialog", "load .fth file (auto .fth if no ext in name; relative to cwd or abs/~; named uses host for sandbox scope+chdir; bare opens dialog)"),
+        ("FLOAD",   "( -- ) name|dialog", "load .fth (auto .fth; bare=dialog). Named: sandbox scope; temp cwd=file dir so nested INCLUDED/FLOAD resolve next to parent (restored after; not ANS-required)"),
         ("EDIT",    "( -- ) name|dialog", "open in system text editor (nav dialog or name; auto .fth fallback for bare names like FLOAD; updates cwd to file's folder; no load/interpret)"),
         ("FILE-ECHO","( -- addr )",       "variable controlling loaded-source echo (FLOAD, INCLUDE, …; use with ON/OFF)"),
         ("ON",      "( addr -- )",        "store 1 at addr (e.g. file-echo ON)"),
@@ -1230,8 +1239,9 @@ public final class TZForth {
         self.registerXCharWords()
         self.registerAssemblerWords()
         self.registerFloatWords()
+        self.registerBigIntWords()
 
-        // Record kernel boundary after bootstrap + block/xchar/assembler/float subsystems so RESET / resetToSafeState
+        // Record kernel boundary after bootstrap + block/xchar/assembler/float/bigint subsystems so RESET / resetToSafeState
         // retain ANS Block and TZForth .blk extension words (CREATE/OPEN/USE-BLOCK-FILE, etc.).
         kernelLatest = readCell(LATEST)
         kernelHere = readCell(DP_ADDR)
@@ -6627,19 +6637,30 @@ public final class TZForth {
 
             let filter = self.parseWord().uppercased()
 
-            // Collect kernel (internal) words vs user-defined words from *current vocabulary only*.
-            // Kernel = everything that existed at the end of bootstrap (kernelLatest).
-            var kernelWords: [(name: String, header: Cell)] = []
-            var userWords:   [(name: String, header: Cell)] = []
+            // List only the first wordlist in the search order (classic CONTEXT).
+            // e.g. ONLY FORTH ALSO BIG-INTEGER WORDS → BIG-INTEGER only, not FORTH.
+            // (Not CURRENT: compilation wordlist may still be FORTH after ALSO.)
+            let wlID: Cell
+            if self.searchOrder.isEmpty {
+                wlID = Cell(self.LATEST)
+            } else {
+                wlID = self.searchOrder[0]
+            }
 
-            let listHead = self.readCell(self.CURRENT)
-            var link = self.readCell(listHead)
+            var kernelWords: [(name: String, header: Cell)] = []
+            var userWords: [(name: String, header: Cell)] = []
+
+            var link = self.readCell(Int(wlID))
             var safety = 0
             while link != 0 && safety < 10000 {
                 safety += 1
                 if !self.isValidDictionaryLink(link) { break }
 
                 let flagsLen = self.readByte(Int(link) + 8)
+                if (flagsLen & self.FLAG_HIDDEN) != 0 {
+                    link = self.readCell(link)
+                    continue
+                }
                 let len = Int(flagsLen & self.MASK_NAMELENGTH)
                 var nameBytes: [UInt8] = []
                 for i in 0..<len {
@@ -6653,7 +6674,7 @@ public final class TZForth {
                     continue
                 }
 
-                if link <= self.kernelLatest {
+                if self.kernelLatest != 0 && link <= self.kernelLatest {
                     kernelWords.append((name, link))
                 } else {
                     userWords.append((name, link))
@@ -6661,29 +6682,25 @@ public final class TZForth {
                 link = self.readCell(link)
             }
 
-            // Internal words first, in alphabetic order (case-insensitive)
             kernelWords.sort { $0.name.uppercased() < $1.name.uppercased() }
-
-            // User words in "compile order" = chronological definition order.
-            // We walked the chain backwards (newest first), so reverse to get oldest-user-first.
             userWords.reverse()
 
-            // Print kernel section
+            let wlName = self.nameForWordlist(wlID)
+            let total = kernelWords.count + userWords.count
+            self.tell("--- \(wlName) (\(total)) ---\n")
+
             var count = 0
             for (name, _) in kernelWords {
                 self.tell(name + " ")
                 count += 1
                 if count % 8 == 0 { self.putkey(10) }
             }
-            if count % 8 != 0 { self.putkey(10) }
-
-            // Then user words (in the order the user actually defined them)
             for (name, _) in userWords {
                 self.tell(name + " ")
                 count += 1
                 if count % 8 == 0 { self.putkey(10) }
             }
-            if count % 8 != 0 { self.putkey(10) }
+            if count > 0 && count % 8 != 0 { self.putkey(10) }
         }
 
         // MARKER ( "name" -- )  Core Ext — save dict/search-order landmark; execution restores state.
@@ -8329,6 +8346,7 @@ public final class TZForth {
         self.feedLine(": VOCABULARY CREATE WORDLIST DROP DOES> PUSH-ORDER ;")
         self.feedLine("VOCABULARY EDITOR")
         self.feedLine("VOCABULARY ASSEMBLER")
+        self.feedLine("VOCABULARY BIG-INTEGER")
 
         // file-echo variable (user can do: file-echo ON   or   file-echo OFF ).
         // Controls whether FLOAD / INCLUDE / INCLUDE-FILE echo each source line as it loads.
@@ -8341,6 +8359,7 @@ public final class TZForth {
         self.feedLine("VARIABLE BLOCK-SIZE")
         self.feedLine("VARIABLE DEFAULT-BLOCK-COUNT")
         self.feedLine("VARIABLE BLOCK-BUFFER-COUNT")
+        self.feedLine("VARIABLE STEP-LIMIT")
         self.feedLine("VARIABLE BLK")
         self.feedLine("VARIABLE BLOCK-FILE")
         self.feedLine("VARIABLE SCR")
@@ -9594,10 +9613,11 @@ public final class TZForth {
         if let threshold = stopWhenRspAtMost {
             self.innerThreadStopRsp = threshold
         }
-        // Classic indirect-threaded / token-threaded inner interpreter
+        // Classic indirect-threaded / token-threaded inner interpreter.
+        // STEP-LIMIT (system setting / VARIABLE): max dispatches per run; 0 = unlimited.
         var safety = 0
-        let SAFETY_LIMIT = 2_000_000
-        while safety < SAFETY_LIMIT && !errorFlag && !exitReq && !throwActive {
+        let stepLimit = self.effectiveStepLimit()
+        while (stepLimit == 0 || safety < stepLimit) && !errorFlag && !exitReq && !throwActive {
             safety += 1
 
             let instrAddr = ip
@@ -9650,8 +9670,8 @@ public final class TZForth {
             if ip == 0 { break }   // safety
         }
 
-        if safety >= SAFETY_LIMIT && !errorFlag && !throwActive {
-            kernelThrow(StdThrow.nestingLimit, message: "? Execution limit exceeded (possible infinite loop or very deep recursion)")
+        if stepLimit != 0 && safety >= stepLimit && !errorFlag && !throwActive {
+            kernelThrow(StdThrow.nestingLimit, message: "? STEP-LIMIT exceeded (possible infinite loop or very deep recursion; 0 STEP-LIMIT ! disables)")
         }
     }
 
@@ -9997,6 +10017,7 @@ public final class TZForth {
     internal struct SessionEnvironmentSnapshot {
         var fileEcho: Cell = 0
         var base: Cell = 10
+        var stepLimit: Cell = 2_000_000
         var includedNamesHead: Cell = 0
         var debugEnabled: Bool = false
         var growMemoryAttempted: Bool = false
@@ -10028,13 +10049,18 @@ public final class TZForth {
         }
     }
 
-    /// Snapshot kernel variables and session flags (FILE-ECHO, BASE, memory growth, etc.).
+    /// Snapshot kernel variables and session flags (FILE-ECHO, BASE, STEP-LIMIT, memory growth, etc.).
     internal func captureSessionEnvironment() -> SessionEnvironmentSnapshot {
         var snap = SessionEnvironmentSnapshot()
         if self.fileEchoAddr != 0 {
             snap.fileEcho = self.readCell(self.fileEchoAddr)
         }
         snap.base = self.readCell(self.BASE)
+        if self.stepLimitVarAddr != 0 {
+            snap.stepLimit = self.readCell(self.stepLimitVarAddr)
+        } else {
+            snap.stepLimit = Cell(max(0, self.settings.stepLimit))
+        }
         if self.includedNamesVarAddr != 0 {
             snap.includedNamesHead = self.readCell(self.includedNamesVarAddr)
         }
@@ -10053,6 +10079,9 @@ public final class TZForth {
             self.writeCell(self.fileEchoAddr, snap.fileEcho)
         }
         self.writeCell(self.BASE, snap.base)
+        if self.stepLimitVarAddr != 0 {
+            self.writeCell(self.stepLimitVarAddr, snap.stepLimit)
+        }
         if self.includedNamesVarAddr != 0 {
             self.writeCell(self.includedNamesVarAddr, snap.includedNamesHead)
         }
@@ -10079,6 +10108,9 @@ public final class TZForth {
         }
         if self.readCell(self.BASE) != snap.base {
             warnings.append("WARNING: BASE not restored (got \(self.readCell(self.BASE)), expected \(snap.base))")
+        }
+        if self.stepLimitVarAddr != 0 && self.readCell(self.stepLimitVarAddr) != snap.stepLimit {
+            warnings.append("WARNING: STEP-LIMIT not restored (got \(self.readCell(self.stepLimitVarAddr)), expected \(snap.stepLimit))")
         }
         if self.debugEnabled != snap.debugEnabled {
             warnings.append("WARNING: debug state not restored")

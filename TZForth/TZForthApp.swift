@@ -48,6 +48,11 @@ struct TZForthApp: App {
                         NotificationCenter.default.post(name: .toolsViewAutoloadFolder, object: nil)
                     }
                 }
+                Menu("LIBRARY") {
+                    Button("VIEW Library Folder") {
+                        NotificationCenter.default.post(name: .toolsViewLibraryFolder, object: nil)
+                    }
+                }
                 Divider()
                 Button("RESET") {
                     NotificationCenter.default.post(name: .resetForth, object: nil)

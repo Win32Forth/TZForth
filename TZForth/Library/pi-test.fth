@@ -1,12 +1,16 @@
-\ pitest.fth — run from the lib/ directory
+\ pi-test.fth — high-precision π demo (shipped in Resources/Library)
+\
+\ Run:  FROMLIB FLOAD pi-test.fth
+\   or: Tools → LIBRARY → VIEW Library Folder, then open/edit as needed.
+\
 DECIMAL
 
 .( === Loading big-int.fth ===) CR
-S" big-int.fth" INCLUDED
+FROMLIB REQUIRE big-int.fth
 ALSO BIG-INTEGER
 
 .( === Loading pi-chudnovsky.fth ===) CR
-S" pi-chudnovsky.fth" INCLUDED
+FROMLIB REQUIRE pi-chudnovsky.fth
 
 .( === pi to 20 places ===) CR
 20 PI. CR
@@ -22,7 +26,7 @@ S" pi-chudnovsky.fth" INCLUDED
 
 .( === Reference 20 decimals ===) CR
 .( 3.14159265358979323846) CR
-.( === pitest done ===) CR
+.( === pi-test done ===) CR
 
 \s
 

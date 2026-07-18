@@ -50,7 +50,7 @@ The app is sandboxed with "user selected files" read-write entitlement. This mea
 - `chdir` to a path before authorizing will still set the logical view and report it (so resolves use the right path), but open/list will fail until the grant; the note in output explains.
 - Full paths or ~ work for FLOAD/EDIT/CHDIR when they are under a granted tree.
 - EDIT after FLOAD in same dir works for write (NSWorkspace handoff uses the active scope + file bookmarks).
-- **Nested relative includes:** During a named `FLOAD` / `INCLUDED`, TZForth temporarily sets the logical cwd to the **loaded file’s directory** so nested bare names (e.g. `S" big-int.fth" INCLUDED` next to the parent) resolve correctly. The outer cwd is restored when that load finishes. This is **not** required by ANS Forth-2012 (path resolution is implementation-defined). Practical tip: put sibling includes next to the parent file; do not prefix paths that already assume the project root if the parent lives in a subfolder (e.g. from `lib/pitest.fth`, use `S" big-int.fth"` not `S" lib/big-int.fth"`).
+- **Nested relative includes:** During a named `FLOAD` / `INCLUDED`, TZForth temporarily sets the logical cwd to the **loaded file’s directory** so nested bare names (e.g. `S" helper.fth" INCLUDED` next to the parent) resolve correctly. The outer cwd is restored when that load finishes. This is **not** required by ANS Forth-2012 (path resolution is implementation-defined). For app-shipped modules use **`FROMLIB FLOAD name`** (`Resources/Library/`).
 
 In short: it is *not* hopeless. One bare `fload` + pick in the folder containing Forthing.fth (or your sources) is enough to make the default "the right place" and keep named FLOAD working thereafter (even after quitting/relaunching the app).
 
@@ -151,25 +151,76 @@ The AutoLoad sources are **your** product logic; the TZForth engine is the host.
 | **`AutoLoad-Sample.fth`** | Documented example with `MAIN` + `CATCH`; not loaded unless used as `autoload.fth` |
 | **`README.txt`** | Short in-folder notes |
 
+## Library and FROMLIB (1.1.0+)
+
+Reusable Forth modules ship under:
+
+```text
+YourApp.app/Contents/Resources/Library/
+```
+
+(from project **`TZForth/Library/`** via the **Copy Library** build phase).
+
+### FROMLIB / FROM-LIBRARY
+
+| Word | Role |
+|------|------|
+| **`FROMLIB`** | Set **`FROM-LIBRARY`** (one-shot arm for the next file load) |
+| **`FROM-LIBRARY`** | Variable; `ON` / `OFF` or set by `FROMLIB` |
+| **`VIEW-LIBRARY`** | Open `Resources/Library` in Finder |
+
+When a file word starts (**`FLOAD` / `INCLUDE` / `INCLUDED` / `REQUIRE` / `REQUIRED` / `EDIT` / `DIR`**):
+
+1. If **`FROM-LIBRARY`** is set, it is **cleared immediately**.
+2. For a **relative** path (or bare **`DIR`**), cwd is switched to **`Resources/Library/`** for that operation (saved/restored on a stack — nesting-safe).
+3. Leaf names **without an extension** get **`.fth`** early for load/edit (so `big-int` and `big-int.fth` match). Not applied to `DIR` wildcards.
+4. Absolute / `~` paths ignore Library; bare **`FLOAD`** / **`EDIT`** (dialog) clear the flag without using Library.
+5. **REQUIRED** identity uses the **resolved absolute path** after the above.
+6. **`EDIT`** opens the resolved file in TextEdit; **`DIR`** lists Library (or a subpath/filter under it).
+
+**In a source file**, multi-line is allowed:
+
+```forth
+FROMLIB
+FLOAD big-int.fth
+```
+
+**In the console**, put them on one line:
+
+```forth
+FROMLIB FLOAD big-int.fth
+FROMLIB EDIT pi-test.fth
+FROMLIB DIR
+FROMLIB DIR *.fth
+```
+
+If `FROMLIB` is left armed at the end of a console line, it is cleared with a short reminder message. At end of a **file**, an unused arm is cleared quietly.
+
+**Tools → LIBRARY → VIEW Library Folder** (same as **`VIEW-LIBRARY`**).
+
+AutoLoad stays separate: boot may use `FROMLIB FLOAD …` inside `autoload.fth`.
+
 ## BIG-INTEGER (multiprecision, not ANS)
 
-TZForth includes an optional **`BIG-INTEGER`** vocabulary for base-10⁹ multiprecision integers (teaching / demos; **not** an ANS word set). Sources live under **`lib/`** in the repository.
+TZForth includes an optional **`BIG-INTEGER`** vocabulary for base-10⁹ multiprecision integers (teaching / demos; **not** an ANS word set). Sources ship in **`TZForth/Library/`** → **`Resources/Library/`** (not a separate top-level `lib/`).
 
 | Piece | Role |
 |--------|------|
 | Vocabulary **`BIG-INTEGER`** | Kernel vocab; host **`BI-MUL`**, **`BI-DIVMOD`**, **`BI-ISQRT`** |
-| **`lib/big-int.fth`** | Full library (alloc, add/sub, `BI*`, print, …) |
-| **`lib/pi-chudnovsky.fth`**, **`lib/pitest.fth`** | High-precision π demo (results recorded in pitest) |
+| **`Library/big-int.fth`** | Full library (alloc, add/sub, `BI*`, print, …) |
+| **`Library/pi-chudnovsky.fth`** | Chudnovsky π |
+| **`Library/pi-test.fth`** | Demo π to 20/50/100 (recorded results in file) |
+| **`Library/bi-test.fth`** | Unit tests for big-int (+ π smoke) |
 | **`STEP-LIMIT`** | Inner-interpreter step budget; demos set `0` for large π |
 
 ```forth
-\ From project root (nested includes resolve next to the loaded file):
-fload lib/pitest.fth
-\ Or from lib/:
-fload pitest
+FROMLIB FLOAD big-int.fth
+ALSO BIG-INTEGER
+FROMLIB FLOAD pi-test.fth     \ demo
+FROMLIB FLOAD bi-test.fth     \ unit tests
 ```
 
-Layout and word list: header of **`lib/big-int.fth`**. See also **`ANS_COMPLIANCE.md`** (TZForth extensions).
+Layout and word list: header of **`TZForth/Library/big-int.fth`**.
 
 ## License / Attribution
 

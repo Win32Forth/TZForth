@@ -22,10 +22,12 @@
 \   N = prec/14 + 10  is ample.
 \
 \ Usage:
-\   fload lib/big-int.fth
+\   FROMLIB FLOAD big-int.fth
 \   ALSO BIG-INTEGER
-\   fload lib/pi-chudnovsky.fth
+\   FROMLIB FLOAD pi-chudnovsky.fth
 \   100 PI.          \ print π to 100 decimal places
+\
+\ Or:  FROMLIB FLOAD pi-test.fth
 \
 \ =============================================================================
 

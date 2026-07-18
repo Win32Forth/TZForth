@@ -35,6 +35,8 @@ extension TZForth {
         if bbc != 0 { self.blockBufferCountVarAddr = bbc }
         let sl = self.captureVariableDataAddr(named: "STEP-LIMIT")
         if sl != 0 { self.stepLimitVarAddr = sl }
+        let fl = self.captureVariableDataAddr(named: "FROM-LIBRARY")
+        if fl != 0 { self.fromLibraryVarAddr = fl }
         let blk = self.captureVariableDataAddr(named: "BLK")
         if blk != 0 { self.blkVarAddr = blk }
         let bf = self.captureVariableDataAddr(named: "BLOCK-FILE")

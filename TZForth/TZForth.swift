@@ -304,6 +304,9 @@ public final class TZForth {
     /// Optional callback when bare CHDIR requests the folder picker (non-ConsoleView hosts).
     public var onDirectoryPickRequested: (() -> Void)? = nil
 
+    /// Set by VIEW-LIBRARY. Host opens Resources/Library in Finder.
+    public var viewLibraryRequested = false
+
     // Support for \\ (block comment to '{', can span lines in console or during FLOAD)
     // and \S (stop file load, or stop remainder of a multi-line console submit).
     private var inSlashSlashComment = false
@@ -486,6 +489,15 @@ public final class TZForth {
     var scrVarAddr: Cell = 0
     /// Data cell for kernel VARIABLE STEP-LIMIT (inner-interpreter step budget; 0 = unlimited).
     var stepLimitVarAddr: Cell = 0
+    /// Data cell for kernel VARIABLE FROM-LIBRARY (one-shot: next file load uses Resources/Library).
+    var fromLibraryVarAddr: Cell = 0
+    /// Cwd frames pushed when a load consumed FROM-LIBRARY (nested FROMLIB-safe).
+    private struct FromLibraryDirFrame {
+        var active: Bool
+        var savedLogical: String
+        var savedProcess: String
+    }
+    private var fromLibraryDirStack: [FromLibraryDirFrame] = []
 
     /// When >= 2, the text interpreter is reading lines from this fileid (INCLUDE-FILE / INCLUDED).
     private var interpreterInputFileId: Cell = -1
@@ -1086,6 +1098,11 @@ public final class TZForth {
         ("STEP-LIMIT","( -- addr )",      "variable: max inner-interpreter steps per run (0=unlimited; SAVE-SETTINGS to persist)"),
         (".SETTINGS","( -- )",            "display block/memory/step-limit settings and how to change them"),
         ("SAVE-SETTINGS","( -- )",         "persist BLOCK-SIZE, buffer count, default block count, memory MB, STEP-LIMIT"),
+
+        // Library (Resources/Library; FROMLIB + existing FLOAD/INCLUDE/REQUIRE)
+        ("FROM-LIBRARY","( -- addr )",    "variable: if non-zero, next file load is rooted at Resources/Library"),
+        ("FROMLIB", "( -- )",             "set FROM-LIBRARY; next FLOAD/INCLUDE/REQUIRE/EDIT/DIR uses Resources/Library"),
+        ("VIEW-LIBRARY","( -- )",         "open Contents/Resources/Library in Finder"),
 
         // BIG-INTEGER vocabulary (TZForth host multiprecision; not ANS — see lib/big-int.fth)
         ("BIG-INTEGER","( -- )",          "vocabulary: multiprecision BI words (ALSO BIG-INTEGER to search)"),
@@ -1761,6 +1778,8 @@ public final class TZForth {
         if self.loadNesting == 0 && self.evaluateNesting == 0 {
             self.replCompilationContinues = self.readCell(self.STATE) != 0
                 && (self.nonameCompile || self.hasOpenNamedColonDefinition())
+            // Orphaned FROMLIB on a console line (no load word same line).
+            self.clearOrphanedFromLibraryFlagAtConsoleLineEnd()
         }
         self.flushTerminalRefreshIfNeeded()
     }
@@ -2052,9 +2071,7 @@ public final class TZForth {
 
     @discardableResult
     private func loadFileContents(_ url: URL, registerSpec: String? = nil) -> Bool {
-        // Support FLOAD auto .fth: if the provided url's leaf has no dot, try the literal
-        // name first; if it doesn't exist, fall back to name + ".fth". This lets
-        // "fload foo" work whether the file is "foo" or "foo.fth".
+        // Prefer URL as given (caller should already normalize .fth). Also try + .fth on leaf.
         let leaf = url.lastPathComponent
         let candidates: [URL] = !leaf.contains(".") ?
             [url, url.deletingLastPathComponent().appendingPathComponent(leaf + ".fth")] :
@@ -2070,12 +2087,9 @@ public final class TZForth {
                 self.pendingFloadSpec = ""
                 return false
             }
-            let specToRegister = registerSpec ?? self.pendingFloadSpec
-            if !specToRegister.isEmpty {
-                self.nameJoinSpec(specToRegister)
-            } else {
-                self.nameJoinSpec(target.lastPathComponent)
-            }
+            // Registry key: absolute path so REQUIRED / FROMLIB identity is stable.
+            let key = target.standardizedFileURL.path
+            self.nameJoinSpec(key)
             if target.lastPathComponent == "utilities.fth" {
                 // Redefine ($") and $" — $" was compiled against the PARSE-based ($") and must be recompiled.
                 self.feedLine(": ($\") ( caddr -- caddr' u ) (hayes-quote-parse) ;")
@@ -2106,6 +2120,99 @@ public final class TZForth {
     func pathURLFromCounted(_ caddr: Int, _ u: Int) -> URL {
         let spec = stringFromAddr(caddr, u)
         return resolvedURL(for: spec)
+    }
+
+    // MARK: - FROMLIB / FROM-LIBRARY (Resources/Library root for next file load)
+
+    /// Append `.fth` when the leaf name has no extension (early normalize for open + REQUIRED keys).
+    func normalizeSourceSpec(_ spec: String) -> String {
+        let trimmed = spec.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return trimmed }
+        let leaf = (trimmed as NSString).lastPathComponent
+        if leaf.isEmpty { return trimmed }
+        if leaf.contains(".") { return trimmed }
+        return trimmed + ".fth"
+    }
+
+    private func isAbsoluteOrHomeSourceSpec(_ spec: String) -> Bool {
+        let s = spec.trimmingCharacters(in: .whitespacesAndNewlines)
+        if s.hasPrefix("/") || s.hasPrefix("~") { return true }
+        if s.count >= 2, s[s.index(s.startIndex, offsetBy: 1)] == ":" { return true } // Windows drive
+        return false
+    }
+
+    /// Bundle `Contents/Resources/Library/` if present.
+    public static func bundleLibraryDirectoryURL() -> URL? {
+        if let root = Bundle.main.resourceURL {
+            let dir = root.appendingPathComponent("Library", isDirectory: true)
+            if FileManager.default.fileExists(atPath: dir.path) { return dir }
+        }
+        if let u = Bundle.main.url(forResource: "Library", withExtension: nil) {
+            var isDir: ObjCBool = false
+            if FileManager.default.fileExists(atPath: u.path, isDirectory: &isDir), isDir.boolValue {
+                return u
+            }
+        }
+        return nil
+    }
+
+    private func isFromLibraryFlagSet() -> Bool {
+        if self.fromLibraryVarAddr != 0 {
+            return self.readCell(self.fromLibraryVarAddr) != 0
+        }
+        return false
+    }
+
+    private func setFromLibraryFlag(_ on: Bool) {
+        if self.fromLibraryVarAddr != 0 {
+            self.writeCell(self.fromLibraryVarAddr, on ? -1 : 0)
+        }
+    }
+
+    private func clearFromLibraryFlag() {
+        self.setFromLibraryFlag(false)
+    }
+
+    /// At start of a file load: consume FROM-LIBRARY; if armed and relative, switch cwd to Resources/Library.
+    private func beginFromLibraryLoad(forNormalizedSpec spec: String) -> FromLibraryDirFrame {
+        let armed = self.isFromLibraryFlagSet()
+        self.clearFromLibraryFlag()
+        var frame = FromLibraryDirFrame(active: false, savedLogical: "", savedProcess: "")
+        guard armed else { return frame }
+        if self.isAbsoluteOrHomeSourceSpec(spec) { return frame }
+        guard let lib = Self.bundleLibraryDirectoryURL() else { return frame }
+        frame.active = true
+        frame.savedLogical = self.logicalCurrentDirectory
+        frame.savedProcess = FileManager.default.currentDirectoryPath
+        self.logicalCurrentDirectory = lib.path
+        _ = FileManager.default.changeCurrentDirectoryPath(lib.path)
+        self.fromLibraryDirStack.append(frame)
+        return frame
+    }
+
+    private func endFromLibraryLoad(_ frame: FromLibraryDirFrame) {
+        guard frame.active else { return }
+        if !self.fromLibraryDirStack.isEmpty {
+            _ = self.fromLibraryDirStack.removeLast()
+        }
+        self.logicalCurrentDirectory = frame.savedLogical
+        let proc = frame.savedProcess.isEmpty ? frame.savedLogical : frame.savedProcess
+        if !proc.isEmpty {
+            _ = FileManager.default.changeCurrentDirectoryPath(proc)
+        }
+    }
+
+    /// Quiet clear of orphaned FROMLIB (end of source file).
+    private func clearOrphanedFromLibraryFlagQuietly() {
+        self.clearFromLibraryFlag()
+    }
+
+    /// Console: orphaned FROMLIB at end of REPL line.
+    private func clearOrphanedFromLibraryFlagAtConsoleLineEnd() {
+        guard self.loadNesting == 0, self.evaluateNesting == 0 else { return }
+        guard self.isFromLibraryFlagSet() else { return }
+        self.clearFromLibraryFlag()
+        self.tell("? FROMLIB: use on the same line as FLOAD/INCLUDE/REQUIRE/EDIT/DIR (console)\n")
     }
 
     /// Push a 64-bit file offset as a double-cell (high = 0).
@@ -2608,6 +2715,10 @@ public final class TZForth {
             self.interpretIfTrueDepth = 0
             self.bracketCompileDepth = 0
             self.bracketCompileResumeState = 0
+            // End of this source file: clear orphaned FROMLIB (multi-line FROMLIB…FLOAD was OK).
+            if !throwCaughtToCatch {
+                self.clearOrphanedFromLibraryFlagQuietly()
+            }
         }
         self.midFileLoadAborted = false
         self.fileInterpretLineNumberStack.append(self.fileInterpretLineNumber)
@@ -2720,6 +2831,17 @@ public final class TZForth {
         return false
     }
 
+    /// Presence check using a normalized string key (prefer absolute path for REQUIRED).
+    private func namePresentSpec(_ spec: String) -> Bool {
+        let bytes = Array(spec.utf8)
+        guard !bytes.isEmpty else { return false }
+        let slot = self.allocateStringBufferSlot()
+        for (i, b) in bytes.enumerated() {
+            self.writeByte(slot + i, b)
+        }
+        return self.namePresent(caddr: slot, u: bytes.count)
+    }
+
     private func nameJoin(caddr: Int, u: Int) {
         if self.namePresent(caddr: caddr, u: u) { return }
         guard let strAddr = self.saveMem(caddr: caddr, u: u) else { return }
@@ -2763,8 +2885,25 @@ public final class TZForth {
     }
 
     private func requiredFromSpec(_ caddr: Int, _ u: Int) {
-        if self.namePresent(caddr: caddr, u: u) { return }
-        self.includedFromSpec(caddr, u)
+        let raw = self.normalizeSourceSpec(self.stringFromAddr(caddr, u))
+        let frame = self.beginFromLibraryLoad(forNormalizedSpec: raw)
+        defer { self.endFromLibraryLoad(frame) }
+        let url = self.resolvedURL(for: raw)
+        let key = url.standardizedFileURL.path
+        if self.namePresentSpec(key) { return }
+        if let loading = self.currentlyLoadingSpec, loading == key { return }
+        self.currentlyLoadingSpec = key
+        defer { self.currentlyLoadingSpec = nil }
+        let (fid, ior) = self.openTextFileForInterpret(at: url)
+        if ior != self.FILE_IO_SUCCESS {
+            // Also try leaf+.fth already applied; try without re-normalize fails
+            self.throwFileNotFound("? REQUIRED could not open '\(url.lastPathComponent)'")
+            return
+        }
+        self.includeFileInterpret(Int(fid), closeWhenDone: true, loadLabel: "INCLUDED")
+        if !self.midFileLoadAborted && !self.throwActive {
+            self.nameJoinSpec(key)
+        }
     }
 
     private func parseNameFromInput() -> (caddr: Int, u: Int) {
@@ -2786,20 +2925,25 @@ public final class TZForth {
     }
 
     private func includedFromSpec(_ caddr: Int, _ u: Int) {
-        let spec = self.stringFromAddr(caddr, u)
-        if let loading = self.currentlyLoadingSpec, loading == spec {
+        let raw = self.normalizeSourceSpec(self.stringFromAddr(caddr, u))
+        let frame = self.beginFromLibraryLoad(forNormalizedSpec: raw)
+        defer { self.endFromLibraryLoad(frame) }
+        let url = self.resolvedURL(for: raw)
+        let key = url.standardizedFileURL.path
+        if let loading = self.currentlyLoadingSpec, loading == key {
             return
         }
-        self.currentlyLoadingSpec = spec
+        self.currentlyLoadingSpec = key
         defer { self.currentlyLoadingSpec = nil }
-        self.nameJoin(caddr: caddr, u: u)
-        let url = self.pathURLFromCounted(caddr, u)
         let (fid, ior) = self.openTextFileForInterpret(at: url)
         if ior != self.FILE_IO_SUCCESS {
             self.throwFileNotFound("? INCLUDED could not open '\(url.lastPathComponent)'")
             return
         }
         self.includeFileInterpret(Int(fid), closeWhenDone: true, loadLabel: "INCLUDED")
+        if !self.midFileLoadAborted && !self.throwActive {
+            self.nameJoinSpec(key)
+        }
     }
 
     // CHDIR support (used by the CHDIR word)
@@ -6634,6 +6778,8 @@ public final class TZForth {
             self.validateAndRepairSystemState()
             let spec = self.parseWordForHostParsing()
             if spec.isEmpty {
+                // Bare FLOAD (dialog): FROM-LIBRARY does not apply.
+                self.clearFromLibraryFlag()
                 // Bare FLOAD mid-include is never used by test suites; ignore to avoid dialogs.
                 if self.loadNesting > 0 { return }
                 // Swallow stray bare FLOAD on the same REPL line after a named FLOAD
@@ -6643,15 +6789,21 @@ public final class TZForth {
                 self.onFileLoadRequested?()
                 return
             }
-            self.resolveAndLoadFile(spec: spec)
-            guard let url = self.pendingLoadURL else { return }
-            self.pendingLoadURL = nil
+            let norm = self.normalizeSourceSpec(spec)
+            let fromLibFrame = self.beginFromLibraryLoad(forNormalizedSpec: norm)
             // Snapshot console-line tail (`FLOAD file.fth HERE .`) before nested loads can
             // disturb inputSourceStack (long Hayes suites with SAVE-INPUT / CATCH).
             let replFload = self.loadNesting == 0
             let resumeIn = self.readCell(self.IN)
             let resumeTail = replFload ? self.unparsedInputTailBytes(from: Int(resumeIn)) : []
-            self.performNamedFload(url: url, spec: spec)
+            self.resolveAndLoadFile(spec: norm)
+            guard let url = self.pendingLoadURL else {
+                self.endFromLibraryLoad(fromLibFrame)
+                return
+            }
+            self.pendingLoadURL = nil
+            self.performNamedFload(url: url, spec: norm)
+            self.endFromLibraryLoad(fromLibFrame)
             if replFload, !resumeTail.isEmpty {
                 self.restoreUnparsedInputTail(in: resumeIn, tail: resumeTail)
             }
@@ -6659,6 +6811,14 @@ public final class TZForth {
             if self.loadNesting == 0 {
                 self.namedFloadOnCurrentReplLine = true
             }
+        }
+
+        _ = register("FROMLIB") {
+            self.setFromLibraryFlag(true)
+        }
+
+        _ = register("VIEW-LIBRARY") {
+            self.viewLibraryRequested = true
         }
 
         // EDIT <name|dialog> — open in the system default text editor (TextEdit or user-chosen app for the type).
@@ -6674,11 +6834,17 @@ public final class TZForth {
             self.validateAndRepairSystemState()
             let spec = self.parseWord()
             if spec.isEmpty {
+                // Bare EDIT (dialog): FROM-LIBRARY does not apply.
+                self.clearFromLibraryFlag()
                 self.fileEditRequested = true
                 self.onFileEditRequested?()
                 return
             }
-            self.resolveAndEditFile(spec: spec)
+            let norm = self.normalizeSourceSpec(spec)
+            let fromLibFrame = self.beginFromLibraryLoad(forNormalizedSpec: norm)
+            defer { self.endFromLibraryLoad(fromLibFrame) }
+            // Resolve under Library (if armed) then hand absolute path to host for TextEdit.
+            self.resolveAndEditFile(spec: norm)
         }
 
         // CHDIR — with no arg: host folder picker at current logical dir. With <path>: change (~/relative).
@@ -6689,10 +6855,15 @@ public final class TZForth {
         }
 
         // DIR — with no arg: list current dir. With <path><filespec>: list matching files in that path
-        // (supports * and ? wildcards, ~, relative paths).
+        // (supports * and ? wildcards, ~, relative paths). FROMLIB DIR lists Resources/Library.
         _ = register("DIR") {
             self.validateAndRepairSystemState()
             let spec = self.parseWord()
+            // Relative / bare DIR under FROMLIB → Library root. Absolute/~/wild-only still consume flag.
+            // Use "." as a non-absolute marker so empty DIR arms Library cwd.
+            let armKey = (spec.isEmpty || !self.isAbsoluteOrHomeSourceSpec(spec)) ? (spec.isEmpty ? "." : spec) : spec
+            let fromLibFrame = self.beginFromLibraryLoad(forNormalizedSpec: armKey)
+            defer { self.endFromLibraryLoad(fromLibFrame) }
             self.listDirectory(spec: spec)
         }
 
@@ -8432,6 +8603,7 @@ public final class TZForth {
         self.feedLine("VARIABLE DEFAULT-BLOCK-COUNT")
         self.feedLine("VARIABLE BLOCK-BUFFER-COUNT")
         self.feedLine("VARIABLE STEP-LIMIT")
+        self.feedLine("VARIABLE FROM-LIBRARY")
         self.feedLine("VARIABLE BLK")
         self.feedLine("VARIABLE BLOCK-FILE")
         self.feedLine("VARIABLE SCR")

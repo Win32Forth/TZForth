@@ -22,8 +22,8 @@
 \ BI-ISQRT's scratch args are accepted for source compatibility and ignored
 \ by the host path.
 \
-\ Load (from project root or after chdir to lib/):
-\   fload lib/big-int.fth     or    fload big-int
+\ Load via FROMLIB (Resources/Library):
+\   FROMLIB FLOAD big-int.fth
 \ Use:  ALSO BIG-INTEGER   (or execute BIG-INTEGER) so BI words are visible.
 \       ONLY FORTH ALSO BIG-INTEGER WORDS   — list this word set only
 \
@@ -32,8 +32,9 @@
 \   end:   ONLY FORTH ALSO DEFINITIONS
 \
 \ Demos:
-\   fload lib/pitest.fth  — π demo 20/50/100 (STEP-LIMIT 0 for large)
-\   fload lib/bi-test.fth   — optional unit tests
+\   FROMLIB FLOAD pi-test.fth  — π demo 20/50/100
+\   FROMLIB FLOAD bi-test.fth  — unit tests
+\   
 \
 \ Word set (summary)
 \   Layout / alloc:  BI-CAP BI-LEN BI-LEN! BI-SGN BI-SGN! BI-DATA BI-LIMB

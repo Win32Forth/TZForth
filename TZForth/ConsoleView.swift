@@ -28,6 +28,8 @@ extension Notification.Name {
     static let toolsChdir = Notification.Name("ToolsChdir")
     /// Tools menu: AUTOLOAD → VIEW AutoLoad Folder (Finder on Resources/AutoLoad)
     static let toolsViewAutoloadFolder = Notification.Name("ToolsViewAutoloadFolder")
+    /// Tools menu: LIBRARY → VIEW Library Folder (Finder on Resources/Library)
+    static let toolsViewLibraryFolder = Notification.Name("ToolsViewLibraryFolder")
 }
 
 let consoleMessage = "=== TZForth (based on Leif Bruder's lbForth) ===\n\n"
@@ -220,6 +222,9 @@ struct ConsoleView: View {
             }
             .onReceive(NotificationCenter.default.publisher(for: .toolsViewAutoloadFolder)) { _ in
                 revealAutoloadFolderInFinder()
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .toolsViewLibraryFolder)) { _ in
+                revealLibraryFolderInFinder()
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .padding(8)
@@ -706,6 +711,19 @@ struct ConsoleView: View {
         NSWorkspace.shared.open(dir)
     }
 
+    /// Reveal Contents/Resources/Library/ in Finder.
+    private func revealLibraryFolderInFinder() {
+        if let dir = TZForth.bundleLibraryDirectoryURL() {
+            NSWorkspace.shared.open(dir)
+            return
+        }
+        // Create empty Library in bundle is not possible; show message.
+        isProgrammaticConsoleAppend = true
+        consoleText += "? Tools → LIBRARY: no Resources/Library in this app bundle (rebuild with TZForth/Library/)\n"
+        markProtectedThroughEndOfText()
+        isProgrammaticConsoleAppend = false
+    }
+
     private func showDirectoryPickDialog() {
         let requested = forth.directoryPickRequested
         forth.directoryPickRequested = false
@@ -836,6 +854,10 @@ struct ConsoleView: View {
         }
         if forth.fileLoadRequested {
             showFileLoadDialog()
+        }
+        if forth.viewLibraryRequested {
+            forth.viewLibraryRequested = false
+            revealLibraryFolderInFinder()
         }
         handlePendingLoadIfNeeded()
         handlePendingEditIfNeeded()

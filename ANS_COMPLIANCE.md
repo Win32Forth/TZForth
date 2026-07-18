@@ -318,7 +318,7 @@ Optional teaching word set for multiprecision integers (base **10⁹** limbs, 64
 | Vocabulary **`BIG-INTEGER`** | Kernel; host **`BI-MUL`**, **`BI-DIVMOD`**, **`BI-ISQRT`** |
 | **`TZForth/Library/big-int.fth`** (→ Resources/Library) | Alloc, add/sub, `BI*` → `BI-MUL`, print, … |
 | **`Library/pi-chudnovsky.fth`**, **`pi-test.fth`** | Chudnovsky π; load with `FROMLIB FLOAD pi-test.fth` |
-| **`FROMLIB` / `FROM-LIBRARY`** | Next file load rooted at Resources/Library |
+| **`FROMLIB` / `FROM-LIBRARY`** | Next file op rooted at Resources/Library (`FLOAD`/`EDIT`/`DIR`/`CHDIR`, …) |
 | **`STEP-LIMIT`** | Interpreter step budget; `0` disables (needed for large π runs) |
 
 Load pattern: `ONLY FORTH ALSO BIG-INTEGER DEFINITIONS` … library … `ONLY FORTH ALSO DEFINITIONS`. Use `ALSO BIG-INTEGER` (or execute the vocab) before using BI words. `WORDS` lists the **first** search-order wordlist only (`ONLY FORTH ALSO BIG-INTEGER WORDS` → BI set).

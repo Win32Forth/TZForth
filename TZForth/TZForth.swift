@@ -307,6 +307,15 @@ public final class TZForth {
     /// Set by VIEW-LIBRARY. Host opens Resources/Library in Finder.
     public var viewLibraryRequested = false
 
+    /// Optional start directory for the next bare FLOAD/EDIT/CHDIR open panel (e.g. FROMLIB EDIT).
+    /// Consumed (cleared) when the host shows the dialog. Does not change session CHDIR by itself.
+    /// FLOAD/EDIT always restore session cwd after; FROMLIB CHDIR adopts only if the user chooses a folder.
+    public var fileDialogStartDirectoryOverride: String? = nil
+
+    /// When true, host FLOAD/EDIT dialog or pending named EDIT must not leave session cwd at the file's folder
+    /// (FROMLIB: Library is only the panel/resolve root; restore previous current directory after).
+    public var preserveSessionCwdAfterFileOp = false
+
     // Support for \\ (block comment to '{', can span lines in console or during FLOAD)
     // and \S (stop file load, or stop remainder of a multi-line console submit).
     private var inSlashSlashComment = false
@@ -1100,8 +1109,8 @@ public final class TZForth {
         ("SAVE-SETTINGS","( -- )",         "persist BLOCK-SIZE, buffer count, default block count, memory MB, STEP-LIMIT"),
 
         // Library (Resources/Library; FROMLIB + existing FLOAD/INCLUDE/REQUIRE)
-        ("FROM-LIBRARY","( -- addr )",    "variable: if non-zero, next file load is rooted at Resources/Library"),
-        ("FROMLIB", "( -- )",             "set FROM-LIBRARY; next FLOAD/INCLUDE/REQUIRE/EDIT/DIR uses Resources/Library"),
+        ("FROM-LIBRARY","( -- addr )",    "variable: if non-zero, next FLOAD/INCLUDE/REQUIRE/EDIT/DIR/CHDIR uses Resources/Library"),
+        ("FROMLIB", "( -- )",             "set FROM-LIBRARY; next FLOAD/INCLUDE/REQUIRE/EDIT/DIR/CHDIR uses Resources/Library"),
         ("VIEW-LIBRARY","( -- )",         "open Contents/Resources/Library in Finder"),
 
         // BIG-INTEGER vocabulary (TZForth host multiprecision; not ANS — see lib/big-int.fth)
@@ -1140,7 +1149,7 @@ public final class TZForth {
         ("FILE-ECHO","( -- addr )",       "variable controlling loaded-source echo (FLOAD, INCLUDE, …; use with ON/OFF)"),
         ("ON",      "( addr -- )",        "store 1 at addr (e.g. file-echo ON)"),
         ("OFF",     "( addr -- )",        "store 0 at addr (e.g. file-echo OFF)"),
-        ("CHDIR",   "( -- ) path",        "change dir (no arg: folder picker at current); supports ~ and relative"),
+        ("CHDIR",   "( -- ) path",        "change dir (no arg: folder picker; FROMLIB: start at Library; cancel keeps cwd, pick adopts); ~ and relative"),
         ("DIR",     "( -- ) filespec",    "list dir (no arg: current; <path><filespec> with *? wildcards)"),
         ("(DO)",    "( limit start -- )", "internal runtime for DO (setup rstack)"),
         ("(?DO)",   "( limit start -- )", "internal runtime for ?DO"),
@@ -2212,7 +2221,7 @@ public final class TZForth {
         guard self.loadNesting == 0, self.evaluateNesting == 0 else { return }
         guard self.isFromLibraryFlagSet() else { return }
         self.clearFromLibraryFlag()
-        self.tell("? FROMLIB: use on the same line as FLOAD/INCLUDE/REQUIRE/EDIT/DIR (console)\n")
+        self.tell("? FROMLIB: use on the same line as FLOAD/INCLUDE/REQUIRE/EDIT/DIR/CHDIR (console)\n")
     }
 
     /// Push a 64-bit file offset as a double-cell (high = 0).
@@ -6778,8 +6787,15 @@ public final class TZForth {
             self.validateAndRepairSystemState()
             let spec = self.parseWordForHostParsing()
             if spec.isEmpty {
-                // Bare FLOAD (dialog): FROM-LIBRARY does not apply.
-                self.clearFromLibraryFlag()
+                // Bare FLOAD (dialog): if FROMLIB was armed, start the panel at Resources/Library
+                // without permanently changing session CHDIR (cancel or pick).
+                if self.isFromLibraryFlagSet(), let lib = Self.bundleLibraryDirectoryURL() {
+                    self.clearFromLibraryFlag()
+                    self.fileDialogStartDirectoryOverride = lib.path
+                    self.preserveSessionCwdAfterFileOp = true
+                } else {
+                    self.clearFromLibraryFlag()
+                }
                 // Bare FLOAD mid-include is never used by test suites; ignore to avoid dialogs.
                 if self.loadNesting > 0 { return }
                 // Swallow stray bare FLOAD on the same REPL line after a named FLOAD
@@ -6834,23 +6850,59 @@ public final class TZForth {
             self.validateAndRepairSystemState()
             let spec = self.parseWord()
             if spec.isEmpty {
-                // Bare EDIT (dialog): FROM-LIBRARY does not apply.
-                self.clearFromLibraryFlag()
+                // Bare EDIT (dialog): if FROMLIB was armed, start the panel at Resources/Library
+                // without permanently changing session CHDIR (cancel or pick).
+                if self.isFromLibraryFlagSet(), let lib = Self.bundleLibraryDirectoryURL() {
+                    self.clearFromLibraryFlag()
+                    self.fileDialogStartDirectoryOverride = lib.path
+                    self.preserveSessionCwdAfterFileOp = true
+                } else {
+                    self.clearFromLibraryFlag()
+                }
                 self.fileEditRequested = true
                 self.onFileEditRequested?()
                 return
             }
             let norm = self.normalizeSourceSpec(spec)
             let fromLibFrame = self.beginFromLibraryLoad(forNormalizedSpec: norm)
+            if fromLibFrame.active {
+                // Named FROMLIB EDIT: host must not leave cwd at the Library file's folder.
+                self.preserveSessionCwdAfterFileOp = true
+            }
             defer { self.endFromLibraryLoad(fromLibFrame) }
             // Resolve under Library (if armed) then hand absolute path to host for TextEdit.
             self.resolveAndEditFile(spec: norm)
         }
 
         // CHDIR — with no arg: host folder picker at current logical dir. With <path>: change (~/relative).
+        // FROMLIB CHDIR: bare picker starts at Resources/Library (cancel keeps session cwd; pick adopts
+        // the chosen folder permanently, wherever the user navigated). Named relative path resolves
+        // under Library then permanently chdirs there (unlike FLOAD/EDIT which restore).
         _ = register("CHDIR") {
             self.validateAndRepairSystemState()
             let spec = self.parseWord()
+            if self.isFromLibraryFlagSet() {
+                self.clearFromLibraryFlag()
+                if spec.isEmpty {
+                    // Bare FROMLIB CHDIR: panel starts in Library; do not touch session cwd until pick.
+                    if let lib = Self.bundleLibraryDirectoryURL() {
+                        self.fileDialogStartDirectoryOverride = lib.path
+                    }
+                    self.directoryPickRequested = true
+                    self.onDirectoryPickRequested?()
+                    return
+                }
+                // Named: relative → under Library permanently; absolute/~ → normal changeDirectory.
+                if !self.isAbsoluteOrHomeSourceSpec(spec), let lib = Self.bundleLibraryDirectoryURL() {
+                    let expanded = (spec as NSString).expandingTildeInPath
+                    let target = URL(fileURLWithPath: lib.path)
+                        .appendingPathComponent(expanded).path
+                    self.changeDirectory(spec: target)
+                } else {
+                    self.changeDirectory(spec: spec)
+                }
+                return
+            }
             self.changeDirectory(spec: spec)
         }
 

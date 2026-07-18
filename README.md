@@ -165,18 +165,22 @@ YourApp.app/Contents/Resources/Library/
 
 | Word | Role |
 |------|------|
-| **`FROMLIB`** | Set **`FROM-LIBRARY`** (one-shot arm for the next file load) |
+| **`FROMLIB`** | Set **`FROM-LIBRARY`** (one-shot arm for the next file op) |
 | **`FROM-LIBRARY`** | Variable; `ON` / `OFF` or set by `FROMLIB` |
 | **`VIEW-LIBRARY`** | Open `Resources/Library` in Finder |
 
-When a file word starts (**`FLOAD` / `INCLUDE` / `INCLUDED` / `REQUIRE` / `REQUIRED` / `EDIT` / `DIR`**):
+When a file word starts (**`FLOAD` / `INCLUDE` / `INCLUDED` / `REQUIRE` / `REQUIRED` / `EDIT` / `DIR` / `CHDIR`**):
 
 1. If **`FROM-LIBRARY`** is set, it is **cleared immediately**.
-2. For a **relative** path (or bare **`DIR`**), cwd is switched to **`Resources/Library/`** for that operation (saved/restored on a stack — nesting-safe).
-3. Leaf names **without an extension** get **`.fth`** early for load/edit (so `big-int` and `big-int.fth` match). Not applied to `DIR` wildcards.
-4. Absolute / `~` paths ignore Library; bare **`FLOAD`** / **`EDIT`** (dialog) clear the flag without using Library.
+2. For a **relative** path (or bare **`DIR`**), cwd is switched to **`Resources/Library/`** for that operation (saved/restored on a stack — nesting-safe), except **`CHDIR`** (see below).
+3. Leaf names **without an extension** get **`.fth`** early for load/edit (so `big-int` and `big-int.fth` match). Not applied to `DIR` wildcards or `CHDIR`.
+4. Absolute / `~` paths ignore Library. Bare **`FLOAD`** / **`EDIT`** (dialog) after **`FROMLIB`** start the open panel at **`Resources/Library/`** (session CHDIR is unchanged).
 5. **REQUIRED** identity uses the **resolved absolute path** after the above.
 6. **`EDIT`** opens the resolved file in TextEdit; **`DIR`** lists Library (or a subpath/filter under it).
+7. **`FROMLIB CHDIR`** (unlike load/edit):
+   - **Bare:** folder picker starts at **`Resources/Library/`**. **Cancel** leaves the session cwd unchanged. **Choose** permanently sets cwd to the selected folder (wherever you navigated).
+   - **Named relative:** resolve under Library and **permanently** `CHDIR` there (e.g. `FROMLIB CHDIR .` → Library).
+   - Absolute / `~` paths still change normally (flag is consumed only).
 
 **In a source file**, multi-line is allowed:
 
@@ -192,6 +196,8 @@ FROMLIB FLOAD big-int.fth
 FROMLIB EDIT pi-test.fth
 FROMLIB DIR
 FROMLIB DIR *.fth
+FROMLIB CHDIR            \ picker at Library; cancel = keep cwd, pick = adopt folder
+FROMLIB CHDIR .          \ permanently enter Resources/Library
 ```
 
 If `FROMLIB` is left armed at the end of a console line, it is cleared with a short reminder message. At end of a **file**, an unused arm is cleared quietly.

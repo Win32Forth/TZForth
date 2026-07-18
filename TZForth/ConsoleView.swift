@@ -733,11 +733,20 @@ struct ConsoleView: View {
         forth.pendingLoadURL = nil
         guard requested else { return }
 
-        let startDirPath = forth.logicalCurrentDirectory.isEmpty
-            ? FileManager.default.currentDirectoryPath
-            : forth.logicalCurrentDirectory
+        // FROMLIB CHDIR: panel may start at Resources/Library without changing session cwd.
+        // Cancel → leave session cwd as-is. OK → permanently adopt the chosen folder.
+        let overrideStart = forth.fileDialogStartDirectoryOverride
+        forth.fileDialogStartDirectoryOverride = nil
+        let startDirPath = overrideStart
+            ?? (forth.logicalCurrentDirectory.isEmpty
+                ? FileManager.default.currentDirectoryPath
+                : forth.logicalCurrentDirectory)
         let startDir = URL(fileURLWithPath: startDirPath)
-        activateLastDirectoryScope(parent: startDir)
+        if overrideStart == nil {
+            // Normal bare CHDIR: activate any existing bookmark for the session start dir.
+            activateLastDirectoryScope(parent: startDir)
+        }
+        // Override start (e.g. Library): do not rewrite session scope/cwd before the pick.
 
         let panel = NSOpenPanel()
         panel.title = "CHDIR — Choose Directory"
@@ -760,6 +769,7 @@ struct ConsoleView: View {
                     }
                 }
             }
+            // Cancel: session cwd / scope left unchanged (including FROMLIB CHDIR).
         }
     }
 
@@ -776,9 +786,18 @@ struct ConsoleView: View {
         // Use logicalCurrentDirectory (which our improved seeding + chdir logic keeps pointed
         // at the "right place" like ~/Downloads or the project dir) so the panel starts where
         // the user expects, even if the process cwd is still the sandbox container.
-        let startDirPath = forth.logicalCurrentDirectory.isEmpty ? FileManager.default.currentDirectoryPath : forth.logicalCurrentDirectory
+        // FROMLIB bare FLOAD: panel starts in Library; session CHDIR must not stick after cancel or load.
+        let preserveCwd = forth.preserveSessionCwdAfterFileOp || forth.fileDialogStartDirectoryOverride != nil
+        let savedLogical = forth.logicalCurrentDirectory
+        let savedProcess = FileManager.default.currentDirectoryPath
+        forth.preserveSessionCwdAfterFileOp = false
+        let startDirPath = forth.fileDialogStartDirectoryOverride
+            ?? (forth.logicalCurrentDirectory.isEmpty ? FileManager.default.currentDirectoryPath : forth.logicalCurrentDirectory)
+        forth.fileDialogStartDirectoryOverride = nil
         let startDir = URL(fileURLWithPath: startDirPath)
-        activateLastDirectoryScope(parent: startDir)
+        if !preserveCwd {
+            activateLastDirectoryScope(parent: startDir)
+        }
 
         let panel = NSOpenPanel()
         panel.title = "FLOAD Forth Source"
@@ -788,8 +807,6 @@ struct ConsoleView: View {
         panel.canChooseDirectories = false
         panel.allowsMultipleSelection = false
 
-        // Start the panel at the logical dir (the one reported by "chdir" and used for
-        // relative named FLOAD). After successful pick we still chdir + bookmark the parent.
         panel.directoryURL = startDir
         panel.allowedContentTypes = [
             UTType(filenameExtension: "fth") ?? .plainText,
@@ -797,9 +814,6 @@ struct ConsoleView: View {
             .plainText,
             UTType(filenameExtension: "forth") ?? .plainText
         ]
-        // Note: allowedContentTypes provides the type filter. To allow picking files outside these
-        // extensions (previous allowsOtherFileTypes behavior), the panel still permits navigation;
-        // users can typically choose "All Files" in the type dropdown or the types act as suggestions.
 
         panel.begin { result in
             if result == .OK, let url = panel.url {
@@ -807,34 +821,45 @@ struct ConsoleView: View {
                 let accessing = url.startAccessingSecurityScopedResource()
 
                 DispatchQueue.main.async {
-                    // Create a security-scoped bookmark for the *directory* so that on future
-                    // launches we can re-acquire scoped access for named FLOAD/EDIT relative
-                    // to this dir (and the initial cwd / panel default).
-                    do {
-                        let bookmark = try parent.bookmarkData(options: [.withSecurityScope],
-                                                               includingResourceValuesForKeys: nil,
-                                                               relativeTo: nil)
-                        UserDefaults.standard.set(bookmark, forKey: "LastFLOADDirectoryBookmark")
-                    } catch {
-                        // Fallback to path only (less reliable across launches)
-                        UserDefaults.standard.set(parent.path, forKey: "LastFLOADDirectory")
+                    if preserveCwd {
+                        // Load without permanently adopting the Library (or file parent) as CHDIR.
+                        self.forth.loadFile(url)
+                        self.restoreSessionDirectory(logical: savedLogical, process: savedProcess)
+                    } else {
+                        do {
+                            let bookmark = try parent.bookmarkData(options: [.withSecurityScope],
+                                                                   includingResourceValuesForKeys: nil,
+                                                                   relativeTo: nil)
+                            UserDefaults.standard.set(bookmark, forKey: "LastFLOADDirectoryBookmark")
+                        } catch {
+                            UserDefaults.standard.set(parent.path, forKey: "LastFLOADDirectory")
+                        }
+                        activateLastDirectoryScope(parent: parent)
+                        self.forth.loadFile(url)
+                        if self.currentScopedDirectory != nil {
+                            self.forth.onOutput?("(sandbox: directory access authorized via \(parent.lastPathComponent))\n")
+                        }
                     }
-
-                    // Activate the dir scope (using bookmark) + chdir. This is crucial so that
-                    // subsequent named operations and external EDIT handoff have proper access.
-                    activateLastDirectoryScope(parent: parent)
-
-                    self.forth.loadFile(url)
-                    if self.currentScopedDirectory != nil {
-                        self.forth.onOutput?("(sandbox: directory access authorized via \(parent.lastPathComponent))\n")
-                    }
-
                     if accessing {
                         url.stopAccessingSecurityScopedResource()
                     }
                 }
+            } else if preserveCwd {
+                DispatchQueue.main.async {
+                    self.restoreSessionDirectory(logical: savedLogical, process: savedProcess)
+                }
             }
-            // Cancel: flag already cleared; no load.
+        }
+    }
+
+    /// Restore logical + process cwd after a FROMLIB file dialog or named EDIT.
+    private func restoreSessionDirectory(logical: String, process: String) {
+        if !logical.isEmpty {
+            forth.logicalCurrentDirectory = logical
+        }
+        let proc = process.isEmpty ? logical : process
+        if !proc.isEmpty {
+            _ = FileManager.default.changeCurrentDirectoryPath(proc)
         }
     }
 
@@ -869,6 +894,10 @@ struct ConsoleView: View {
     private func handlePendingEditIfNeeded() {
         guard let url = forth.pendingEditURL else { return }
         forth.pendingEditURL = nil
+        let preserveCwd = forth.preserveSessionCwdAfterFileOp
+        forth.preserveSessionCwdAfterFileOp = false
+        let savedLogical = forth.logicalCurrentDirectory
+        let savedProcess = FileManager.default.currentDirectoryPath
 
         // Support EDIT convention like FLOAD: for names without dot in leaf, if the exact file
         // doesn't exist but "name.fth" does, use the .fth version. This lets "EDIT Forthing"
@@ -884,10 +913,12 @@ struct ConsoleView: View {
         }
 
         let parent = target.deletingLastPathComponent()
-        // Activate the (bookmarked) dir scope first. This is required so that the subsequent
-        // startAccessing on the (constructed) file URL succeeds and the scope can be transferred
-        // to the external editor via NSWorkspace.open for write access.
-        activateLastDirectoryScope(parent: parent)
+        if !preserveCwd {
+            // Activate the (bookmarked) dir scope first. This is required so that the subsequent
+            // startAccessing on the (constructed) file URL succeeds and the scope can be transferred
+            // to the external editor via NSWorkspace.open for write access.
+            activateLastDirectoryScope(parent: parent)
+        }
 
         // For *named* EDIT the URL was resolved from a path spec (possibly with ~), not from a
         // fresh panel pick, so we may not have a brand-new security scope for it. We still
@@ -900,13 +931,15 @@ struct ConsoleView: View {
         // plain constructed target URL.
         var opened = false
         if accessing {
-            // Opportunistically bookmark the dir if we have access right now.
-            do {
-                let bookmark = try parent.bookmarkData(options: [.withSecurityScope],
-                                                       includingResourceValuesForKeys: nil,
-                                                       relativeTo: nil)
-                UserDefaults.standard.set(bookmark, forKey: "LastFLOADDirectoryBookmark")
-            } catch {}
+            if !preserveCwd {
+                // Opportunistically bookmark the dir if we have access right now.
+                do {
+                    let bookmark = try parent.bookmarkData(options: [.withSecurityScope],
+                                                           includingResourceValuesForKeys: nil,
+                                                           relativeTo: nil)
+                    UserDefaults.standard.set(bookmark, forKey: "LastFLOADDirectoryBookmark")
+                } catch {}
+            }
             do {
                 let fileBM = try target.bookmarkData(options: [.withSecurityScope],
                                                      includingResourceValuesForKeys: nil,
@@ -930,6 +963,9 @@ struct ConsoleView: View {
         }
         if accessing {
             target.stopAccessingSecurityScopedResource()
+        }
+        if preserveCwd {
+            restoreSessionDirectory(logical: savedLogical, process: savedProcess)
         }
     }
 
@@ -1204,22 +1240,29 @@ struct ConsoleView: View {
         forth.pendingLoadURL = nil
         guard requested else { return }
 
-        // Ensure the current (logical) directory has its security scope active (from bookmark).
-        // Use logicalCurrentDirectory so the panel starts in the place the user sees via "chdir"
-        // / the initial report / named FLOAD resolution (~/Downloads, project dir, etc.).
-        let startDirPath = forth.logicalCurrentDirectory.isEmpty ? FileManager.default.currentDirectoryPath : forth.logicalCurrentDirectory
+        // FROMLIB bare EDIT: panel starts in Library; always restore session CHDIR after (OK or Cancel).
+        let preserveCwd = forth.preserveSessionCwdAfterFileOp || forth.fileDialogStartDirectoryOverride != nil
+        let savedLogical = forth.logicalCurrentDirectory
+        let savedProcess = FileManager.default.currentDirectoryPath
+        forth.preserveSessionCwdAfterFileOp = false
+        let startDirPath = forth.fileDialogStartDirectoryOverride
+            ?? (forth.logicalCurrentDirectory.isEmpty ? FileManager.default.currentDirectoryPath : forth.logicalCurrentDirectory)
+        forth.fileDialogStartDirectoryOverride = nil
         let startDir = URL(fileURLWithPath: startDirPath)
-        activateLastDirectoryScope(parent: startDir)
+        if !preserveCwd {
+            activateLastDirectoryScope(parent: startDir)
+        }
 
         let panel = NSOpenPanel()
         panel.title = "EDIT File in Text Editor"
-        panel.message = "Select a source (or text) file to open in the system default editor (e.g. TextEdit). The current directory will be changed to the file's folder."
+        panel.message = preserveCwd
+            ? "Select a library source file to open in the system default editor (e.g. TextEdit)."
+            : "Select a source (or text) file to open in the system default editor (e.g. TextEdit). The current directory will be changed to the file's folder."
         panel.prompt = "Edit"
         panel.canChooseFiles = true
         panel.canChooseDirectories = false
         panel.allowsMultipleSelection = false
 
-        // Start from the logical dir (consistent with FLOAD and with what "chdir" reports).
         panel.directoryURL = startDir
         panel.allowedContentTypes = [
             UTType(filenameExtension: "fth") ?? .plainText,
@@ -1236,52 +1279,72 @@ struct ConsoleView: View {
                 let accessing = url.startAccessingSecurityScopedResource()
 
                 DispatchQueue.main.async {
-                    // Same side effects as named EDIT handling and as FLOAD dialog:
-                    // persist last dir (for next launch via bookmark for sandbox scope), chdir (current session + relatives), open editor.
-                    do {
-                        let bookmark = try parent.bookmarkData(options: [.withSecurityScope],
-                                                               includingResourceValuesForKeys: nil,
-                                                               relativeTo: nil)
-                        UserDefaults.standard.set(bookmark, forKey: "LastFLOADDirectoryBookmark")
-                    } catch {
-                        UserDefaults.standard.set(parent.path, forKey: "LastFLOADDirectory")
-                    }
-                    // Activate dir scope so that NSWorkspace.open can grant write access to editor.
-                    activateLastDirectoryScope(parent: parent)
-
-                    // To properly hand off write access to an external editor in a sandboxed app,
-                    // create a security-scoped bookmark for the *file* (while we have access from the panel)
-                    // and open a freshly resolved scoped URL.
-                    var opened = false
-                    do {
-                        let fileBM = try url.bookmarkData(options: [.withSecurityScope],
-                                                          includingResourceValuesForKeys: nil,
-                                                          relativeTo: nil)
-                        var stale = false
-                        if let scopedFile = try? URL(resolvingBookmarkData: fileBM,
-                                                     options: .withSecurityScope,
-                                                     relativeTo: nil,
-                                                     bookmarkDataIsStale: &stale),
-                           !stale {
-                            if scopedFile.startAccessingSecurityScopedResource() {
-                                NSWorkspace.shared.open(scopedFile)
-                                scopedFile.stopAccessingSecurityScopedResource()
-                                opened = true
+                    if preserveCwd {
+                        var opened = false
+                        do {
+                            let fileBM = try url.bookmarkData(options: [.withSecurityScope],
+                                                              includingResourceValuesForKeys: nil,
+                                                              relativeTo: nil)
+                            var stale = false
+                            if let scopedFile = try? URL(resolvingBookmarkData: fileBM,
+                                                         options: .withSecurityScope,
+                                                         relativeTo: nil,
+                                                         bookmarkDataIsStale: &stale),
+                               !stale {
+                                if scopedFile.startAccessingSecurityScopedResource() {
+                                    NSWorkspace.shared.open(scopedFile)
+                                    scopedFile.stopAccessingSecurityScopedResource()
+                                    opened = true
+                                }
                             }
+                        } catch {}
+                        if !opened {
+                            NSWorkspace.shared.open(url)
                         }
-                    } catch {}
-                    if !opened {
-                        NSWorkspace.shared.open(url)
+                        self.forth.editFile(url)
+                        self.restoreSessionDirectory(logical: savedLogical, process: savedProcess)
+                    } else {
+                        do {
+                            let bookmark = try parent.bookmarkData(options: [.withSecurityScope],
+                                                                   includingResourceValuesForKeys: nil,
+                                                                   relativeTo: nil)
+                            UserDefaults.standard.set(bookmark, forKey: "LastFLOADDirectoryBookmark")
+                        } catch {
+                            UserDefaults.standard.set(parent.path, forKey: "LastFLOADDirectory")
+                        }
+                        activateLastDirectoryScope(parent: parent)
+                        var opened = false
+                        do {
+                            let fileBM = try url.bookmarkData(options: [.withSecurityScope],
+                                                              includingResourceValuesForKeys: nil,
+                                                              relativeTo: nil)
+                            var stale = false
+                            if let scopedFile = try? URL(resolvingBookmarkData: fileBM,
+                                                         options: .withSecurityScope,
+                                                         relativeTo: nil,
+                                                         bookmarkDataIsStale: &stale),
+                               !stale {
+                                if scopedFile.startAccessingSecurityScopedResource() {
+                                    NSWorkspace.shared.open(scopedFile)
+                                    scopedFile.stopAccessingSecurityScopedResource()
+                                    opened = true
+                                }
+                            }
+                        } catch {}
+                        if !opened {
+                            NSWorkspace.shared.open(url)
+                        }
+                        self.forth.editFile(url)
                     }
-
-                    self.forth.editFile(url)
-
                     if accessing {
                         url.stopAccessingSecurityScopedResource()
                     }
                 }
+            } else if preserveCwd {
+                DispatchQueue.main.async {
+                    self.restoreSessionDirectory(logical: savedLogical, process: savedProcess)
+                }
             }
-            // Cancel: flag cleared; nothing to edit.
         }
     }
     

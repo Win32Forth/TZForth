@@ -54,6 +54,30 @@ The app is sandboxed with "user selected files" read-write entitlement. This mea
 
 In short: it is *not* hopeless. One bare `fload` + pick in the folder containing Forthing.fth (or your sources) is enough to make the default "the right place" and keep named FLOAD working thereafter (even after quitting/relaunching the app).
 
+## AutoLoad (product boot)
+
+Ship Forth sources under:
+
+```text
+YourApp.app/Contents/Resources/AutoLoad/autoload.fth
+```
+
+(from project **`TZForth/AutoLoad/`** at build time via the **Copy AutoLoad** phase).
+
+On launch:
+
+1. If **`Resources/AutoLoad/autoload.fth`** exists → load/interpret it (silent if missing).
+2. If **`MAIN`** is defined → execute it once (no host banners).
+3. Console stays open.
+
+**Tools → AUTOLOAD → VIEW AutoLoad Folder** opens that bundle folder in Finder (add/edit/remove files for zip-style customization). There is no separate EDIT menu item.
+
+| File | Role |
+|------|------|
+| Project **`TZForth/AutoLoad/`** | Source copied into the app |
+| **`autoload.fth`** | Boot file (lowercase name) |
+| **`AutoLoad-Sample.fth`** | Example — not auto-run |
+
 ## BIG-INTEGER (multiprecision, not ANS)
 
 TZForth includes an optional **`BIG-INTEGER`** vocabulary for base-10⁹ multiprecision integers (teaching / demos; **not** an ANS word set). Sources live under **`lib/`** in the repository.

@@ -887,7 +887,7 @@ public final class TZForth {
         ("DEBUG-ON","( -- )",             "enable per-line [DEBUG] state+stack output"),
         ("DEBUG-OFF","( -- )",            "disable per-line debug output"),
         ("RESET",   "( -- )",             "reset stacks + dictionary to kernel, state, clear screen"),
-        ("CLS",     "( -- )",             "clear the console screen"),
+        ("CLS",     "( -- )",             "clear the entire console window (including banner)"),
         
         // Base
         ("HEX",     "( -- )",             "set BASE to 16"),
@@ -1901,6 +1901,78 @@ public final class TZForth {
         if self.readCell(self.STATE) == 0 && !self.isBlockingOnHost {
             self.ip = 0
         }
+    }
+
+    // MARK: - Bundle AutoLoad (Contents/Resources/AutoLoad)
+
+    /// Load `Resources/AutoLoad/autoload.fth` if present; run `MAIN` when defined.
+    /// Missing file → silent no-op. No host banners; source `.( … )` still prints.
+    public func runAutoLoadIfPresent() {
+        guard let autoURL = Self.bundleAutoLoadFileURL() else { return }
+
+        let autoDir = autoURL.deletingLastPathComponent()
+        let savedLogical = self.logicalCurrentDirectory
+        let savedCwd = FileManager.default.currentDirectoryPath
+
+        self.logicalCurrentDirectory = autoDir.path
+        _ = FileManager.default.changeCurrentDirectoryPath(autoDir.path)
+
+        let ok = self.loadFile(autoURL)
+        if ok && self.findWord("MAIN") != 0 {
+            self.feedLine("MAIN")
+        }
+
+        self.logicalCurrentDirectory = savedLogical
+        _ = FileManager.default.changeCurrentDirectoryPath(savedCwd)
+    }
+
+    /// Bundle `Contents/Resources/AutoLoad/` directory, if present.
+    public static func bundleAutoloadDirectoryURL() -> URL? {
+        if let file = Self.bundleAutoLoadFileURL() {
+            return file.deletingLastPathComponent()
+        }
+        if let root = Bundle.main.resourceURL {
+            let dir = root.appendingPathComponent("AutoLoad", isDirectory: true)
+            if FileManager.default.fileExists(atPath: dir.path) { return dir }
+        }
+        return nil
+    }
+
+    /// URL of `AutoLoad/autoload.fth` in the main bundle, if present.
+    public static func bundleAutoLoadFileURL() -> URL? {
+        var candidates: [URL] = []
+        if let u = Bundle.main.url(forResource: "autoload", withExtension: "fth", subdirectory: "AutoLoad") {
+            candidates.append(u)
+        }
+        if let u = Bundle.main.url(forResource: "AutoLoad", withExtension: "fth", subdirectory: "AutoLoad") {
+            candidates.append(u)
+        }
+        if let root = Bundle.main.resourceURL {
+            candidates.append(root.appendingPathComponent("AutoLoad/autoload.fth"))
+            candidates.append(root.appendingPathComponent("AutoLoad/AutoLoad.fth"))
+            candidates.append(root.appendingPathComponent("autoload.fth"))
+            candidates.append(root.appendingPathComponent("AutoLoad.fth"))
+        }
+        if let u = Bundle.main.url(forResource: "autoload", withExtension: "fth") {
+            candidates.append(u)
+        }
+        if let u = Bundle.main.url(forResource: "AutoLoad", withExtension: "fth") {
+            candidates.append(u)
+        }
+        if let root = Bundle.main.resourceURL {
+            let dir = root.appendingPathComponent("AutoLoad", isDirectory: true)
+            if let files = try? FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil) {
+                for f in files where f.pathExtension.lowercased() == "fth" {
+                    if f.deletingPathExtension().lastPathComponent.lowercased() == "autoload" {
+                        candidates.append(f)
+                    }
+                }
+            }
+        }
+        for url in candidates {
+            if FileManager.default.fileExists(atPath: url.path) { return url }
+        }
+        return nil
     }
 
     // MARK: - FLOAD support (file loading / including source)

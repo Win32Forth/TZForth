@@ -15,6 +15,9 @@
 			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
 			membershipExceptions = (
 				"ANS-VALIDATE.txt",
+				"AutoLoad/AutoLoad-Sample.fth",
+				AutoLoad/autoload.fth,
+				AutoLoad/README.txt,
 				TestTZForth.swift,
 			);
 			target = 29A09F072FCB95CE00778693 /* TZForth */;
@@ -69,6 +72,7 @@
 				29A09F042FCB95CE00778693 /* Sources */,
 				29A09F052FCB95CE00778693 /* Frameworks */,
 				29A09F062FCB95CE00778693 /* Resources */,
+				29A09F20 /* Copy AutoLoad */,
 			);
 			buildRules = (
 			);
@@ -128,6 +132,30 @@
 		};
 /* End PBXResourcesBuildPhase section */
 
+/* Begin PBXShellScriptBuildPhase section */
+		29A09F20 /* Copy AutoLoad */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+				"$(SRCROOT)/TZForth/AutoLoad",
+			);
+			name = "Copy AutoLoad";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+				"$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/AutoLoad",
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "set -e\nSRC=\"${SRCROOT}/TZForth/AutoLoad\"\nDEST=\"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/AutoLoad\"\n# Copy everything in TZForth/AutoLoad → Contents/Resources/AutoLoad/\n# (ENABLE_USER_SCRIPT_SANDBOXING is OFF so the whole folder is readable.)\nrm -rf \"${DEST}\"\nmkdir -p \"${DEST}\"\nif [ -d \"${SRC}\" ]; then\n  # Files only at top level; skip junk; preserve names (autoload.fth must be exact for boot).\n  for f in \"${SRC}\"/* \"${SRC}\"/.[!.]* \"${SRC}\"/..?*; do\n    [ -e \"$f\" ] || continue\n    base=$(basename \"$f\")\n    case \"$base\" in\n      .DS_Store|*.swp|*~) continue ;;\n    esac\n    if [ -f \"$f\" ]; then\n      cp -f \"$f\" \"${DEST}/\"\n    elif [ -d \"$f\" ]; then\n      cp -R \"$f\" \"${DEST}/\"\n    fi\n  done\nfi\n";
+		};
+/* End PBXShellScriptBuildPhase section */
+
 /* Begin PBXSourcesBuildPhase section */
 		29A09F042FCB95CE00778693 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
@@ -178,7 +206,7 @@
 				DEVELOPMENT_TEAM = X5YCJL3LJ8;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
 				ENABLE_TESTABILITY = YES;
-				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				GCC_C_LANGUAGE_STANDARD = gnu17;
 				GCC_DYNAMIC_NO_PIC = NO;
 				GCC_NO_COMMON_BLOCKS = YES;
@@ -245,7 +273,7 @@
 				ENABLE_NS_ASSERTIONS = NO;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
 				ENABLE_TESTABILITY = YES;
-				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				GCC_C_LANGUAGE_STANDARD = gnu17;
 				GCC_NO_COMMON_BLOCKS = YES;
 				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;

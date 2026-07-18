@@ -20,6 +20,14 @@ import UniformTypeIdentifiers  // for allowedContentTypes (replaces deprecated a
 extension Notification.Name {
     static let clearConsole = Notification.Name("ClearConsole")
     static let resetForth   = Notification.Name("ResetForth")
+    /// Tools menu: bare EDIT (file picker → TextEdit).
+    static let toolsEdit = Notification.Name("ToolsEdit")
+    /// Tools menu: bare FLOAD (file picker → load).
+    static let toolsFload = Notification.Name("ToolsFload")
+    /// Tools menu: CHDIR (folder picker).
+    static let toolsChdir = Notification.Name("ToolsChdir")
+    /// Tools menu: AUTOLOAD → VIEW AutoLoad Folder (Finder on Resources/AutoLoad)
+    static let toolsViewAutoloadFolder = Notification.Name("ToolsViewAutoloadFolder")
 }
 
 let consoleMessage = "=== TZForth (based on Leif Bruder's lbForth) ===\n\n"
@@ -47,6 +55,9 @@ struct ConsoleView: View {
 
     /// Suppresses re-entrancy when reverting a delete that crossed the protected boundary.
     @State private var isRevertingProtectedEdit = false
+
+    /// When true, onChange must not revert consoleText (startup / AutoLoad / engine output).
+    @State private var isProgrammaticConsoleAppend = false
 
     /// Tracks how much of the current user input (relative to protectedLength) has already
     /// been consumed as key data while waitingForKey. Used to compute delta new keystrokes
@@ -99,6 +110,12 @@ struct ConsoleView: View {
             .onChange(of: consoleText) { oldValue, newValue in
                 if isRevertingProtectedEdit {
                     isRevertingProtectedEdit = false
+                    return
+                }
+                // Engine/startup output must not be treated as illegal edits of protected text.
+                if isProgrammaticConsoleAppend {
+                    checkForCommandExecution(newValue)
+                    keepCursorVisible()
                     return
                 }
                 if newValue.count < protectedLength
@@ -175,17 +192,34 @@ struct ConsoleView: View {
             }
             // Listen for menu commands from the Tools menu (defined at App level)
             .onReceive(NotificationCenter.default.publisher(for: .clearConsole)) { _ in
-                consoleText = consoleMessage
+                // Full wipe (including banner) — same as Forth CLS.
+                consoleText = ""
                 markProtectedThroughEndOfText()
                 forth.clearScreenRequested = false
                 keepCursorVisible(followPrompt: true)
             }
             .onReceive(NotificationCenter.default.publisher(for: .resetForth)) { _ in
                 forth.resetToSafeState()
+                // RESET restores a clean REPL banner; CLS alone leaves the window empty.
                 consoleText = consoleMessage
                 markProtectedThroughEndOfText()
                 forth.clearScreenRequested = false
                 keepCursorVisible(followPrompt: true)
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .toolsEdit)) { _ in
+                forth.fileEditRequested = true
+                showFileEditDialog()
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .toolsFload)) { _ in
+                forth.fileLoadRequested = true
+                showFileLoadDialog()
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .toolsChdir)) { _ in
+                forth.directoryPickRequested = true
+                showDirectoryPickDialog()
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .toolsViewAutoloadFolder)) { _ in
+                revealAutoloadFolderInFinder()
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .padding(8)
@@ -209,9 +243,11 @@ struct ConsoleView: View {
                 // Hook the Forth output callback
                 forth.onOutput = { text in
                     let applyOutput = {
+                        isProgrammaticConsoleAppend = true
                         pinCaretRequest += 1
                         consoleText += text
                         markProtectedThroughEndOfText()
+                        isProgrammaticConsoleAppend = false
                         keepCursorVisible(followPrompt: true)
                         handlePostFeedActions()
                     }
@@ -269,10 +305,21 @@ struct ConsoleView: View {
                     self.performScopedNamedLoad(url: url)
                 }
 
-                // Initially everything (the banner) is "protected" output
+                // Initially protect the banner (+ current directory line).
                 markProtectedThroughEndOfText()
                 lastKeyConsumedUserLength = 0
                 keepCursorVisible(followPrompt: true)
+
+                // Product boot after the first frame commits. Running AutoLoad synchronously
+                // inside onAppear can lose @State console appends (protected-text revert /
+                // SwiftUI batching). Next main-queue turn is reliable.
+                DispatchQueue.main.async {
+                    self.isProgrammaticConsoleAppend = true
+                    self.forth.runAutoLoadIfPresent()
+                    self.markProtectedThroughEndOfText()
+                    self.isProgrammaticConsoleAppend = false
+                    self.keepCursorVisible(followPrompt: true)
+                }
             }
     }
     
@@ -401,16 +448,19 @@ struct ConsoleView: View {
         }
     }
 
-    /// CLS clears scrollback; PAGE clears and shows the facility terminal buffer (already refreshed).
+    /// CLS clears the entire console window (including the startup banner).
+    /// PAGE / facility terminal uses its own buffer refresh path.
     private func applyClearScreenIfRequested() {
         guard forth.clearScreenRequested else { return }
         if forth.isFacilityTerminalActive {
             forth.clearScreenRequested = false
             return
         }
-        consoleText = consoleMessage
+        isProgrammaticConsoleAppend = true
+        consoleText = ""
         markProtectedThroughEndOfText()
         lastKeyConsumedUserLength = 0
+        isProgrammaticConsoleAppend = false
         forth.clearScreenRequested = false
     }
 
@@ -642,6 +692,18 @@ struct ConsoleView: View {
             // so "chdir" reports the right place and named FLOAD constructs the correct URL.
             forth.logicalCurrentDirectory = target.path
         }
+    }
+
+    /// Reveal Contents/Resources/AutoLoad/ in Finder (bundle seed / zip-customize location).
+    private func revealAutoloadFolderInFinder() {
+        guard let dir = TZForth.bundleAutoloadDirectoryURL() else {
+            isProgrammaticConsoleAppend = true
+            consoleText += "? Tools → AUTOLOAD: no Resources/AutoLoad in this app bundle\n"
+            markProtectedThroughEndOfText()
+            isProgrammaticConsoleAppend = false
+            return
+        }
+        NSWorkspace.shared.open(dir)
     }
 
     private func showDirectoryPickDialog() {

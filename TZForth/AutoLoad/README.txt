@@ -1,21 +1,48 @@
 TZForth AutoLoad (product boot)
 ===============================
 
-At build time this folder is copied into:
+Full documentation: repository README.md section "AutoLoad (product boot)".
+
+Build
+-----
+This folder is copied wholesale into the app at build time:
 
   YourApp.app/Contents/Resources/AutoLoad/
 
-On launch, if Resources/AutoLoad/autoload.fth exists, TZForth loads it and runs
-MAIN when defined (silent if missing). No Application Support copy.
+via the Xcode "Copy AutoLoad" Run Script phase (entire directory).
 
-  autoload.fth          Product boot file (required name, lowercase)
-  AutoLoad-Sample.fth   Example (NOT loaded unless renamed to autoload.fth)
+Boot (at launch)
+----------------
+1. If Resources/AutoLoad/autoload.fth is missing → silent; normal REPL.
+2. If present → load/interpret it (no host path banners).
+   During load, cwd is this AutoLoad folder (nested INCLUDED of bare names works).
+3. If MAIN is defined → execute MAIN once (silent if MAIN is absent).
+4. Console stays open.
+
+Boot file name must be lowercase: autoload.fth
+
+Files in this project folder
+----------------------------
+  autoload.fth          Product boot (optional; omit for pure REPL)
+  AutoLoad-Sample.fth   Example MAIN + CATCH pattern (not auto-loaded)
   README.txt            This note
+  (any other .fth)      Copied into the app; include from autoload.fth as needed
 
-Tools → AUTOLOAD → VIEW AutoLoad Folder opens the bundle Resources/AutoLoad/
-in Finder so you can add/edit/remove files (typical for zip distribution).
+Tools menu
+----------
+  Tools → AUTOLOAD → VIEW AutoLoad Folder
+    Opens Contents/Resources/AutoLoad/ in Finder so you can add/edit/remove
+    files (zip-style customization after install). Use Finder to open/save
+    files; there is no separate EDIT autoload.fth menu.
 
-To ship an application:
-  1. Put autoload.fth (and helpers) in project TZForth/AutoLoad/.
-  2. Define : MAIN ( -- ) ... ; if you want a startup entry.
-  3. Archive / build Release.
+Ship a product
+--------------
+  1. Edit/add files under project TZForth/AutoLoad/ (especially autoload.fth).
+  2. Define : MAIN ( -- ) ... ; if you want a startup entry (see sample).
+  3. Archive or Release-build; distribute the .app.
+
+Notes
+-----
+- CLS clears the whole console including the TZForth banner.
+- Editing inside a signed .app can affect code signature; fine for personal
+  zip use. App Store products should ship the intended AutoLoad at Archive time.

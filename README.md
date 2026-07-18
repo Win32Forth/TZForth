@@ -56,27 +56,100 @@ In short: it is *not* hopeless. One bare `fload` + pick in the folder containing
 
 ## AutoLoad (product boot)
 
-Ship Forth sources under:
+AutoLoad turns TZForth from a bare development REPL into a **product host**: you ship Forth sources inside the app; on launch they are loaded and an optional **`MAIN`** word runs. The console stays open (hybrid app + REPL). Hiding the console is future work.
 
-```text
-YourApp.app/Contents/Resources/AutoLoad/autoload.fth
+### Where files live
+
+| Location | Role |
+|----------|------|
+| **Project** `TZForth/AutoLoad/` | Source of truth in the repo / Xcode project |
+| **App bundle** `YourApp.app/Contents/Resources/AutoLoad/` | What the running app loads and what users can browse after install |
+
+At **build** time, the **Copy AutoLoad** Run Script phase copies **everything** in `TZForth/AutoLoad/` into `Contents/Resources/AutoLoad/` (whole folder; not a hand-maintained file list). The `AutoLoad` folder is excluded from Xcode’s automatic Resources membership so files are **not** also flattened into `Contents/Resources/`.
+
+### Boot contract
+
+1. After the console is ready, TZForth looks for:
+   ```text
+   Contents/Resources/AutoLoad/autoload.fth
+   ```
+   The boot file name must be **`autoload.fth`** (lowercase). Other names in that folder are **not** auto-loaded.
+2. **If the file is missing** → do nothing (silent). Normal development REPL.
+3. **If present** → load and interpret it (no host “AutoLoad: …” banners).
+   - During load, logical cwd is the **AutoLoad** directory, so nested  
+     `S" helper.fth" INCLUDED` resolves next to `autoload.fth`.
+   - Interpret-time output (e.g. `.( Hello) CR`) appears in the console as usual.
+4. **If `MAIN` is defined** after that load → execute **`MAIN`** once (no host banner).
+5. **If `MAIN` is absent** → silent; the file has already been interpreted.
+6. Console remains open for further commands.
+
+Suggested structure (see also `AutoLoad-Sample.fth`):
+
+```forth
+DECIMAL
+\ S" my-lib.fth" INCLUDED   \ optional companions in the same folder
+
+: APP-RUN  ( -- )
+  CLS
+  .( My product starts here.) CR
+  ;
+
+: MAIN  ( -- )
+  ['] APP-RUN CATCH
+  ?DUP IF  .ERROR CR  THEN
+  ;
 ```
 
-(from project **`TZForth/AutoLoad/`** at build time via the **Copy AutoLoad** phase).
+Prefer **`CATCH`** around the real app body so faults return cleanly to the REPL.
 
-On launch:
+### Tools menu
 
-1. If **`Resources/AutoLoad/autoload.fth`** exists → load/interpret it (silent if missing).
-2. If **`MAIN`** is defined → execute it once (no host banners).
-3. Console stays open.
+```text
+Tools
+  CLS
+  EDIT              bare EDIT (file picker → TextEdit)
+  FLOAD             bare FLOAD (file picker → load)
+  CHDIR             folder picker
+  AUTOLOAD ▸
+    VIEW AutoLoad Folder   → Finder on Contents/Resources/AutoLoad/
+  ────────
+  RESET
+```
 
-**Tools → AUTOLOAD → VIEW AutoLoad Folder** opens that bundle folder in Finder (add/edit/remove files for zip-style customization). There is no separate EDIT menu item.
+**VIEW AutoLoad Folder** is the supported way to inspect or customize the **bundle** AutoLoad tree after install (especially for zip distribution). Open files from Finder to edit/save. There is **no** separate “EDIT autoload.fth” menu item.
+
+### Development vs Release
+
+| Workflow | What happens |
+|----------|----------------|
+| **Xcode Run (Debug)** | Copy AutoLoad runs each build; edit `TZForth/AutoLoad/` in the project, Run, and the app gets a fresh copy under DerivedData’s `.app`. |
+| **Archive / zip** | Same copy phase; ship the `.app` with your AutoLoad content baked in. |
+| **User customizes a zip’d app** | **VIEW AutoLoad Folder**, then edit files in `…/Resources/AutoLoad/`. Restart the app to re-run boot. Gatekeeper / signature notes apply if the package was signed (see below). |
+
+`CLS` clears the **entire** console window (including the TZForth title banner), which is useful at the start of `MAIN` / `APP-RUN`.
+
+### Packaging a different product
+
+1. Put `autoload.fth` and helpers in **`TZForth/AutoLoad/`**.
+2. Optionally rename/adapt **`AutoLoad-Sample.fth`**.
+3. Set app name / icon / bundle ID as needed.
+4. **Product → Archive** (or Release build) and distribute the `.app` (zip or App Store).
+
+The AutoLoad sources are **your** product logic; the TZForth engine is the host.
+
+### Distribution notes (zip vs App Store)
+
+- **Pre-Archive AutoLoad content** is normal and fully supported (part of the signed app).
+- **Editing files inside a shipped `.app`** after install is fine for personal/zip use (VIEW AutoLoad Folder). It can invalidate a **code signature**; App Store apps should treat Resources as read-only product content. For end-user writable data that survives updates, a future option is Application Support (not used by AutoLoad today).
+- Someone shipping “their own app” should rebuild/archive with **their** AutoLoad and **their** signing identity—not re-upload a modified install of TZForth.
+
+### Project files in `TZForth/AutoLoad/`
 
 | File | Role |
 |------|------|
-| Project **`TZForth/AutoLoad/`** | Source copied into the app |
-| **`autoload.fth`** | Boot file (lowercase name) |
-| **`AutoLoad-Sample.fth`** | Example — not auto-run |
+| **`autoload.fth`** | Boot file loaded at startup (if present) |
+| **`AutoLoad-Sample.fth`** | Documented example with `MAIN` + `CATCH`; not loaded unless used as `autoload.fth` |
+| **`README.txt`** | Short in-folder notes |
 
 ## BIG-INTEGER (multiprecision, not ANS)
 

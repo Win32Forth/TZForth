@@ -253,7 +253,9 @@ extension TZForth {
             return
         }
         let spec = self.settings.defaultBlocksFileName
-        let url = self.resolvedURL(for: spec)
+        // Prefer cwd-relative default name, but never open/create under a read-only tree
+        // (app bundle Resources/Library — Hayes FROMLIB loads would fail FLUSH).
+        let url = self.writableBlockFileURL(preferred: self.resolvedURL(for: spec))
         if FileManager.default.fileExists(atPath: url.path) {
             let (bid, ior) = self.openBlockFileAtPath(url.path)
             if ior == self.FILE_IO_SUCCESS {
@@ -265,6 +267,39 @@ extension TZForth {
                 self.useBlockFile(Int(bid))
             }
         }
+    }
+
+    /// If `preferred` is not safely writable (e.g. inside the app bundle), map to
+    /// Application Support/TZForth/<same leaf name>. Hayes and FROMLIB loads use
+    /// Resources/Library as cwd; a local `blocks.blk` there cannot be FLUSHed.
+    func writableBlockFileURL(preferred: URL) -> URL {
+        // Bundle paths always redirect (same rule as File-Access scratch files).
+        if self.pathIsInsideAppBundle(preferred.path) {
+            return self.writableScratchURL(preferred: preferred)
+        }
+        let fm = FileManager.default
+        let preferredPath = preferred.path
+        let appSupportLeaf = {
+            self.applicationSupportTZForthDirectoryURL()
+                .appendingPathComponent(preferred.lastPathComponent)
+        }
+        if fm.fileExists(atPath: preferredPath) {
+            return fm.isWritableFile(atPath: preferredPath) ? preferred : appSupportLeaf()
+        }
+        let parent = preferred.deletingLastPathComponent().path
+        var isDir: ObjCBool = false
+        if fm.fileExists(atPath: parent, isDirectory: &isDir), isDir.boolValue {
+            return fm.isWritableFile(atPath: parent) ? preferred : appSupportLeaf()
+        }
+        return preferred
+    }
+
+    /// CREATE/OPEN block files with relative names also avoid the read-only bundle.
+    func createBlockFileCounted(caddr: Int, u: Int, blockCount: Int) -> (Cell, Cell) {
+        let spec = self.stringFromAddr(caddr, u)
+        let path = self.normalizedBlockPath(spec)
+        let resolved = self.writableBlockFileURL(preferred: self.resolvedURL(for: path))
+        return self.createBlockFileAtPath(resolved.path, blockCount: max(1, blockCount))
     }
 
     func currentBlockFileId() -> Int {
@@ -286,13 +321,6 @@ extension TZForth {
             self.blockFlushVolume(fileId: prev, toDisk: true)
         }
         self.writeCell(self.blockFileVarAddr, Cell(bid))
-    }
-
-    func createBlockFileCounted(caddr: Int, u: Int, blockCount: Int) -> (Cell, Cell) {
-        let spec = self.stringFromAddr(caddr, u)
-        let path = self.normalizedBlockPath(spec)
-        let resolved = self.resolvedURL(for: path)
-        return self.createBlockFileAtPath(resolved.path, blockCount: max(1, blockCount))
     }
 
     func createBlockFileAtPath(_ path: String, blockCount: Int) -> (Cell, Cell) {
@@ -323,7 +351,7 @@ extension TZForth {
     func openBlockFileCounted(caddr: Int, u: Int) -> (Cell, Cell) {
         let spec = self.stringFromAddr(caddr, u)
         let path = self.normalizedBlockPath(spec)
-        let url = self.resolvedURL(for: path)
+        let url = self.writableBlockFileURL(preferred: self.resolvedURL(for: path))
         return self.openBlockFileAtPath(url.path)
     }
 

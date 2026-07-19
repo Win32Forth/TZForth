@@ -2128,7 +2128,44 @@ public final class TZForth {
 
     func pathURLFromCounted(_ caddr: Int, _ u: Int) -> URL {
         let spec = stringFromAddr(caddr, u)
-        return resolvedURL(for: spec)
+        // File-Access OPEN/CREATE/DELETE/RENAME/FILE-STATUS. When the session cwd is
+        // under the app bundle (FROMLIB → Resources/Library/…), relative names like
+        // fatest1.txt must not target the read-only bundle. Map those to Application
+        // Support. Source loads (INCLUDED/REQUIRED/FLOAD) use resolvedURL directly and
+        // still read suite files from the bundle.
+        return self.writableScratchURL(preferred: resolvedURL(for: spec))
+    }
+
+    /// Application Support/TZForth/ directory (created on demand).
+    func applicationSupportTZForthDirectoryURL() -> URL {
+        let fm = FileManager.default
+        let base = fm.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+            ?? URL(fileURLWithPath: NSTemporaryDirectory())
+        let dir = base.appendingPathComponent("TZForth", isDirectory: true)
+        try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
+        return dir
+    }
+
+    /// True when `path` is inside the running app bundle (read-only Resources, etc.).
+    func pathIsInsideAppBundle(_ path: String) -> Bool {
+        if let resources = Bundle.main.resourceURL?.path, path.hasPrefix(resources) {
+            return true
+        }
+        let bundle = Bundle.main.bundlePath
+        if !bundle.isEmpty, path.hasPrefix(bundle + "/") || path == bundle {
+            return true
+        }
+        return false
+    }
+
+    /// If `preferred` would land in the app bundle, remap to Application Support/TZForth/<leaf>.
+    /// Used for File-Access scratch files and default block volumes under FROMLIB loads.
+    func writableScratchURL(preferred: URL) -> URL {
+        if pathIsInsideAppBundle(preferred.path) {
+            return applicationSupportTZForthDirectoryURL()
+                .appendingPathComponent(preferred.lastPathComponent)
+        }
+        return preferred
     }
 
     // MARK: - FROMLIB / FROM-LIBRARY (Resources/Library root for next file load)
@@ -2495,7 +2532,17 @@ public final class TZForth {
         let url = URL(fileURLWithPath: path)
         let fm = FileManager.default
         if create {
-            fm.createFile(atPath: path, contents: Data(), attributes: nil)
+            do {
+                try fm.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            } catch {
+                return (0, FILE_IO_ERROR)
+            }
+            // CREATE-FILE: create or truncate to empty.
+            do {
+                try Data().write(to: url, options: .atomic)
+            } catch {
+                return (0, FILE_IO_ERROR)
+            }
         }
         guard fm.fileExists(atPath: path) else {
             return (0, FILE_IO_ERROR)
@@ -7147,9 +7194,11 @@ public final class TZForth {
         _ = register("ANS-VALIDATE") {
             let results = self.runANSValidation()
             // After runANSValidation, logicalCurrentDirectory has been restored to the value
-            // it had when ANS-VALIDATE was invoked. Use it (or fm cwd) for the output file.
-            // Write beside TZForth/TestTZForth.swift (tracked ANS-VALIDATE.txt in the Xcode
-            // project folder). Excluded from the app bundle so regeneration stays writable.
+            // it had when ANS-VALIDATE was invoked. Prefer writing next to TestTZForth.swift
+            // when that is a writable project tree; otherwise use logical cwd.
+            // If the chosen path is inside the read-only app bundle (e.g. FROMLIB CHDIR .
+            // left cwd under Resources/Library), remap to Application Support/TZForth/
+            // — same host policy as File-Access scratch files and default .blk volumes.
             var outBase = self.logicalCurrentDirectory.isEmpty ? FileManager.default.currentDirectoryPath : self.logicalCurrentDirectory
             let fm2 = FileManager.default
             let subDir = URL(fileURLWithPath: outBase).appendingPathComponent("TZForth")
@@ -7161,8 +7210,10 @@ public final class TZForth {
             } else if fm2.fileExists(atPath: directTest.path) {
                 outBase = outBase
             }
-            let outURL = URL(fileURLWithPath: outBase).appendingPathComponent("ANS-VALIDATE.txt")
+            var outURL = URL(fileURLWithPath: outBase).appendingPathComponent("ANS-VALIDATE.txt")
+            outURL = self.writableScratchURL(preferred: outURL)
             do {
+                try fm2.createDirectory(at: outURL.deletingLastPathComponent(), withIntermediateDirectories: true)
                 try results.write(to: outURL, atomically: true, encoding: .utf8)
                 self.tell("ANS-VALIDATE results written to \(outURL.path)\n")
             } catch {

@@ -90,6 +90,8 @@ struct ConsoleView: View {
             text: $consoleText,
             isFocused: $isFocused,
             pinCaretRequest: $pinCaretRequest,
+            // UTF-16 index of first user-editable character (same boundary as backspace protect).
+            editableStartUTF16: (protectedSnapshot as NSString).length,
             onReturnPressed: { handleReturnKey() },
             onFacilityKeyDown: { event in
                 guard forth.waitingForExtendedKey else { return false }
@@ -146,9 +148,13 @@ struct ConsoleView: View {
                 return .handled
             }
             .onKeyPress(.leftArrow) {
-                guard forth.waitingForExtendedKey else { return .ignored }
-                forth.provideExtendedKey(TZForth.makeFKeyEvent(TZForth.FacilityFKey.left))
-                return .handled
+                if forth.waitingForExtendedKey {
+                    forth.provideExtendedKey(TZForth.makeFKeyEvent(TZForth.FacilityFKey.left))
+                    return .handled
+                }
+                // Normal editing: AppKit moveLeft is clamped in ConsoleTextView.doCommandBy
+                // so the caret cannot enter protected output / previous lines.
+                return .ignored
             }
             .onKeyPress(.rightArrow) {
                 guard forth.waitingForExtendedKey else { return .ignored }
@@ -1567,6 +1573,8 @@ private struct ConsoleTextView: NSViewRepresentable {
     @Binding var text: String
     @FocusState.Binding var isFocused: Bool
     @Binding var pinCaretRequest: Int
+    /// First UTF-16 index the user may place the caret in (engine/protected output is before this).
+    var editableStartUTF16: Int
     var onReturnPressed: () -> Bool
     var onFacilityKeyDown: ((NSEvent) -> Bool)?
     var onTextViewReady: (NSTextView) -> Void
@@ -1787,6 +1795,8 @@ private struct ConsoleTextView: NSViewRepresentable {
         weak var textView: NSTextView?
         var isProgrammaticUpdate = false
         var lastHandledPinCaretRequest = 0
+        /// Avoid re-entrancy when we clamp the selection after navigation.
+        private var isClampingSelection = false
 
         init(parent: ConsoleTextView) {
             self.parent = parent
@@ -1797,10 +1807,114 @@ private struct ConsoleTextView: NSViewRepresentable {
             parent.text = textView.string
         }
 
+        func textViewDidChangeSelection(_ notification: Notification) {
+            guard !isProgrammaticUpdate, !isClampingSelection, let textView else { return }
+            clampSelectionToEditableRegion(textView)
+        }
+
+        /// Keep caret/selection out of protected engine output (same idea as backspace guard).
+        func clampSelectionToEditableRegion(_ textView: NSTextView) {
+            let docLen = (textView.string as NSString).length
+            let minLoc = min(max(0, parent.editableStartUTF16), docLen)
+            var sel = textView.selectedRange()
+            let selEnd = sel.location + sel.length
+            guard sel.location < minLoc else { return }
+
+            if selEnd <= minLoc {
+                sel = NSRange(location: minLoc, length: 0)
+            } else {
+                sel = NSRange(location: minLoc, length: selEnd - minLoc)
+            }
+            isClampingSelection = true
+            textView.setSelectedRange(sel)
+            isClampingSelection = false
+        }
+
         func textView(_ textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
             if commandSelector == #selector(NSResponder.insertNewline(_:)) {
                 return parent.onReturnPressed()
             }
+
+            // Swallow leftward / upward navigation that would leave the current input
+            // (into protected history). Selection clamp alone can leave the caret mid-history
+            // briefly; intercept common selectors and pin to the editable start instead.
+            let minLoc = min(max(0, parent.editableStartUTF16), (textView.string as NSString).length)
+            let sel = textView.selectedRange()
+
+            let leftOrUp: Set<Selector> = [
+                #selector(NSResponder.moveLeft(_:)),
+                #selector(NSResponder.moveLeftAndModifySelection(_:)),
+                #selector(NSResponder.moveBackward(_:)),
+                #selector(NSResponder.moveBackwardAndModifySelection(_:)),
+                #selector(NSResponder.moveWordLeft(_:)),
+                #selector(NSResponder.moveWordLeftAndModifySelection(_:)),
+                #selector(NSResponder.moveWordBackward(_:)),
+                #selector(NSResponder.moveWordBackwardAndModifySelection(_:)),
+                #selector(NSResponder.moveToBeginningOfLine(_:)),
+                #selector(NSResponder.moveToBeginningOfLineAndModifySelection(_:)),
+                #selector(NSResponder.moveToLeftEndOfLine(_:)),
+                #selector(NSResponder.moveToLeftEndOfLineAndModifySelection(_:)),
+                #selector(NSResponder.moveToBeginningOfParagraph(_:)),
+                #selector(NSResponder.moveToBeginningOfParagraphAndModifySelection(_:)),
+                #selector(NSResponder.moveToBeginningOfDocument(_:)),
+                #selector(NSResponder.moveToBeginningOfDocumentAndModifySelection(_:)),
+                #selector(NSResponder.moveUp(_:)),
+                #selector(NSResponder.moveUpAndModifySelection(_:)),
+                #selector(NSResponder.pageUp(_:)),
+                #selector(NSResponder.pageUpAndModifySelection(_:)),
+            ]
+
+            if leftOrUp.contains(commandSelector) {
+                // Already at the start of user input: do not move into protected text / prior line.
+                if sel.location <= minLoc && sel.length == 0 {
+                    textView.setSelectedRange(NSRange(location: minLoc, length: 0))
+                    return true
+                }
+                // Single-step left/back: clamp one position at a time to the boundary.
+                if commandSelector == #selector(NSResponder.moveLeft(_:))
+                    || commandSelector == #selector(NSResponder.moveBackward(_:)) {
+                    if sel.length > 0 {
+                        // Collapse selection toward the left, but not past editable start.
+                        let newLoc = max(minLoc, sel.location)
+                        textView.setSelectedRange(NSRange(location: newLoc, length: 0))
+                        return true
+                    }
+                    if sel.location > minLoc {
+                        textView.setSelectedRange(NSRange(location: sel.location - 1, length: 0))
+                    } else {
+                        textView.setSelectedRange(NSRange(location: minLoc, length: 0))
+                    }
+                    return true
+                }
+                // Word/line/doc/up: jump to editable start instead of entering history.
+                if commandSelector == #selector(NSResponder.moveWordLeft(_:))
+                    || commandSelector == #selector(NSResponder.moveWordBackward(_:))
+                    || commandSelector == #selector(NSResponder.moveToBeginningOfLine(_:))
+                    || commandSelector == #selector(NSResponder.moveToLeftEndOfLine(_:))
+                    || commandSelector == #selector(NSResponder.moveToBeginningOfParagraph(_:))
+                    || commandSelector == #selector(NSResponder.moveToBeginningOfDocument(_:))
+                    || commandSelector == #selector(NSResponder.moveUp(_:))
+                    || commandSelector == #selector(NSResponder.pageUp(_:)) {
+                    textView.setSelectedRange(NSRange(location: minLoc, length: 0))
+                    return true
+                }
+                // Shift-modified selection left/up: grow selection only within editable region.
+                if commandSelector == #selector(NSResponder.moveLeftAndModifySelection(_:))
+                    || commandSelector == #selector(NSResponder.moveBackwardAndModifySelection(_:)) {
+                    if sel.location <= minLoc {
+                        return true
+                    }
+                    let newLoc = max(minLoc, sel.location - 1)
+                    let newLen = sel.length + (sel.location - newLoc)
+                    textView.setSelectedRange(NSRange(location: newLoc, length: newLen))
+                    return true
+                }
+                // Other extend-selection leftward/upward: clamp to editable start.
+                let end = max(sel.location + sel.length, minLoc)
+                textView.setSelectedRange(NSRange(location: minLoc, length: max(0, end - minLoc)))
+                return true
+            }
+
             return false
         }
     }

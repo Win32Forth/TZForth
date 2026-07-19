@@ -11,20 +11,20 @@ TEST2b post-slash exec: saw123=true out=123 OK
 TEST2b-include: echopre=true echopost=false sawEcho=true
 TEST2b-repl: prebatch=true postbatch=false (expect true false)
 TEST2b-err: shouldnot=false line1=true (expect false true) out=true verbose !
-? ansval_errstop_A456E599.fth line 1: ? verbose
+? ansval_errstop_A0A1516B.fth line 1: ? verbose
     true verbose !
-? FLOAD of ansval_errstop_A456E599.fth aborted at line 1
+? FLOAD of ansval_errstop_A0A1516B.fth aborted at line 1
 TEST2b-err-catch: caught=true out=OK
 -13  ? THROW 27 OK
 TEST2b-nested: before=true inner=true neverinner=false after=true neverouter=false (expect true true false true false)
 TEST2b-nested-outer: inner=false neverouter2=false (expect false false)
-TEST2b-faultline: child=true context=true notParent=true (expect true true true) out=1 2 + .  fload ansval_fault_child_A456E599.fth
+TEST2b-faultline: child=true context=true notParent=true (expect true true true) out=1 2 + .  fload ansval_fault_child_A0A1516B.fth
 3 notaword
-? ansval_fault_child_A456E599.fth line 1: ? notaword
+? ansval_fault_child_A0A1516B.fth line 1: ? notaword
     notaword
-    (while interpreting ansval_fault_parent_A456E599.fth line 1)
-? FLOAD of ansval_fault_child_A456E599.fth aborted at line 1
-TEST2b-nestedline: line2=true notline9=true missing=true (expect true true true) out=fload ansval_nested_child_A456E599.fth
+    (while interpreting ansval_fault_parent_A0A1516B.fth line 1)
+? FLOAD of ansval_fault_child_A0A1516B.fth aborted at line 1
+TEST2b-nestedline: line2=true notline9=true missing=true (expect true true true) out=fload ansval_nested_child_A0A1516B.fth
 \ line 1
 \ line 2
 \ line 3
@@ -33,11 +33,11 @@ TEST2b-nestedline: line2=true notline9=true missing=true (expect true true true)
 \ line 6
 \ line 7
 \ line 8
-fload ansval_nested_missing_A456E599.fth
+fload ansval_nested_missing_A0A1516B.fth
   (If the file is in your current directory, type bare `fload` and pick any file in that folder once to authorize it. Then named FLOAD and CHDIR will stick across launches.)
-? FLOAD could not read 'ansval_nested_missing_A456E599.fth' (not found or unreadable)
-    in ansval_nested_parent_A456E599.fth line 2:
-    fload ansval_nested_missing_A456E599.fth
+? FLOAD could not read 'ansval_nested_missing_A0A1516B.fth' (not found or unreadable)
+    in ansval_nested_parent_A0A1516B.fth line 2:
+    fload ansval_nested_missing_A0A1516B.fth
 TEST2c debug: dbg1=true dbg2=true dbg3=true
 TEST2c debug output: saw any [DEBUG]=true
 TEST2c post-debug repl: sawDbgInRepl=false out=3 OK
@@ -314,9 +314,7 @@ TEST6 REQUIRED once: pass
 TEST6 INCLUDED reload: pass
 TEST6 REQUIRED FLOAD register: pass
 TEST6 INCLUDED-NAMES: pass
-TEST6 .INCLUDED list: FAIL got 'Included:
-  (none)
-OK' (expected ansval_req1_A456E599.fth)
+TEST6 .INCLUDED list: pass
 TEST6 ENVIRONMENT? FILE: pass
 TEST6 CREATE-FILE: pass
 TEST6 REPOSITION-FILE: pass
@@ -500,7 +498,6 @@ TEST6 Block LIST/SCR: pass
 TEST6 Block LOAD: pass
 TEST6 Block THRU: pass
 TEST6 Block BLK: pass
-TEST6 ANS core summary: 426/427 passed
-WARNING: some ANS 2012 core tests failed — review against standard stack effects.
+TEST6 ANS core summary: 427/427 passed
 
 === ANS-VALIDATE complete ===

@@ -34,7 +34,7 @@ The REPL console is fully working (see TZForth/ConsoleView.swift + TZForth.swift
 - Classic load semantics (shared by `FLOAD`, `INCLUDE`, `INCLUDE-FILE`): `FILE-ECHO ON` at top of a file takes effect for that load; `\S` aborts remainder of *that* file only; compile errors mid-load abort the rest of the file and leave REPL clean/interpreting; no per-line OK spam during loads.
 - **Exception handling:** kernel faults are **CATCH-able** (standard ANS throw codes). **`.ERROR`** prints a spaced message for a code on the stack. Named **`fload`** completes synchronously so you can write `: safe-fload  ['] fload catch ?dup if  ." load failed:" .error  else  drop  then ;` — see **`THROW_CODES.md`** for the full code map.
 
-Automated tests (`FTEST=1`; see `TestTZForth.swift` header) cover load/comment harnesses plus **430** ANS spot-checks (Core, Core Ext, File-Access, String, **Facility** (structures, terminal, `EKEY*`/`MS`/`TIME&DATE`), Exception, Memory, Double, Locals, Programming-Tools (**CODE**/`;CODE`/`RET`), **Extended-Character** (UTF-8), **Float** Tier A/B/C (IEEE 64-bit separate F stack, `REPRESENT`, `FS.`/`FE.`), **Block** + TZ `.blk` extensions, etc.). In-app: **`ANS-VALIDATE`** (same core suite, **427/427**; writes `ANS-VALIDATE.txt` to logical cwd — use **`EDIT ans-validate.txt`** from any directory; tracked baseline: `TZForth/ANS-VALIDATE.txt`). After `ANS-VALIDATE` or `fload test`, the REPL restores dictionary and interpret-session state so normal commands still print **`OK`**. Hayes **forth2012-test-suite** (Block + Float `fp/` included): **0 errors** on all executed word sets — reproduce with `CHDIR Tests/forth2012-test-suite/src` then **`FLOAD test`** (driver: `Tests/forth2012-test-suite/src/test.fth`); baseline transcript: `Tests/forth2012-test-suite/src/HAYES-RESULTS.txt`. Details: **`ANS_COMPLIANCE.md`**.
+Automated tests (`FTEST=1`; see `TestTZForth.swift` header) cover load/comment harnesses plus **430** ANS spot-checks (Core, Core Ext, File-Access, String, **Facility** (structures, terminal, `EKEY*`/`MS`/`TIME&DATE`), Exception, Memory, Double, Locals, Programming-Tools (**CODE**/`;CODE`/`RET`), **Extended-Character** (UTF-8), **Float** Tier A/B/C (IEEE 64-bit separate F stack, `REPRESENT`, `FS.`/`FE.`), **Block** + TZ `.blk` extensions, etc.). In-app: **`ANS-VALIDATE`** (same core suite, **427/427**; writes `ANS-VALIDATE.txt` to logical cwd when writable, otherwise **`Application Support/TZForth/ANS-VALIDATE.txt`** if cwd is inside the app bundle — console prints the full path; tracked baseline: `TZForth/ANS-VALIDATE.txt`). After `ANS-VALIDATE` or `fload test`, the REPL restores dictionary and interpret-session state so normal commands still print **`OK`**. Hayes **forth2012-test-suite** (Block + Float `fp/` included): **0 errors** on all executed word sets — preferred in-app run: **`FROMLIB FLOAD HayesTest.fth`** (ships as `Resources/Library/HayesTest.fth` → `HayesTest/src/test.fth`); baseline transcript: `TZForth/Library/HayesTest/src/HAYES-RESULTS.txt`. Details: **`ANS_COMPLIANCE.md`**.
 
 ## Sandbox and FLOAD (important for loading your own Forthing.fth etc.)
 
@@ -51,6 +51,7 @@ The app is sandboxed with "user selected files" read-write entitlement. This mea
 - Full paths or ~ work for FLOAD/EDIT/CHDIR when they are under a granted tree.
 - EDIT after FLOAD in same dir works for write (NSWorkspace handoff uses the active scope + file bookmarks).
 - **Nested relative includes:** During a named `FLOAD` / `INCLUDED`, TZForth temporarily sets the logical cwd to the **loaded file’s directory** so nested bare names (e.g. `S" helper.fth" INCLUDED` next to the parent) resolve correctly. The outer cwd is restored when that load finishes. This is **not** required by ANS Forth-2012 (path resolution is implementation-defined). For app-shipped modules use **`FROMLIB FLOAD name`** (`Resources/Library/`).
+- **Writable scratch under Application Support** (when the path would land inside the **.app** bundle): see **[Bundle is read-only; Application Support for data](#bundle-is-read-only-application-support-for-data)** below.
 
 In short: it is *not* hopeless. One bare `fload` + pick in the folder containing Forthing.fth (or your sources) is enough to make the default "the right place" and keep named FLOAD working thereafter (even after quitting/relaunching the app).
 
@@ -151,7 +152,7 @@ The AutoLoad sources are **your** product logic; the TZForth engine is the host.
 | **`AutoLoad-Sample.fth`** | Documented example with `MAIN` + `CATCH`; not loaded unless used as `autoload.fth` |
 | **`README.txt`** | Short in-folder notes |
 
-## Library and FROMLIB (1.1.0+)
+## Library and FROMLIB (1.1.0+; Hayes suite / prepare-blocks in 1.1.1+)
 
 Reusable Forth modules ship under:
 
@@ -206,6 +207,54 @@ If `FROMLIB` is left armed at the end of a console line, it is cleared with a sh
 
 AutoLoad stays separate: boot may use `FROMLIB FLOAD …` inside `autoload.fth`.
 
+### Bundle is read-only; Application Support for data
+
+**`Contents/Resources/`** (including **`Library/`** and **`AutoLoad/`**) is part of the signed app package. macOS treats it as **read-only** after install. You can **`FLOAD` / `INCLUDE` / `REQUIRE` / `EDIT` / `DIR`** sources there; you cannot reliably **`CREATE-FILE`**, **`WRITE-FILE`**, **`FLUSH`** a `.blk`, or otherwise mutate files that live *inside* the bundle.
+
+#### Host remapping (not a Forth word)
+
+When a **File-Access** or **block-file** path would resolve **inside the running app bundle**, the **host** (Swift engine) silently maps the leaf name to a writable location:
+
+```text
+~/Library/Application Support/TZForth/<filename>
+```
+
+On a sandboxed build that is typically under the app container, e.g.:
+
+```text
+~/Library/Containers/<bundle-id>/Data/Library/Application Support/TZForth/
+```
+
+| Operation | Remap if path is under the .app? |
+|-----------|----------------------------------|
+| **`CREATE-FILE`**, **`OPEN-FILE`**, **`DELETE-FILE`**, **`RENAME-FILE`**, **`FILE-STATUS`** | **Yes** (via host path resolution) |
+| Default / relative **`.blk`** open & create (`blocks.blk`, `CREATE-BLOCK-FILE`, …) | **Yes** (same idea) |
+| **`ANS-VALIDATE`** report file (`ANS-VALIDATE.txt`) | **Yes** — written under Application Support when logical cwd is inside the bundle |
+| **`FLOAD`**, **`INCLUDE`**, **`INCLUDED`**, **`REQUIRE`**, **`REQUIRED`**, **`EDIT`**, **`DIR`** | **No** — still use Library / cwd as documented (read suite sources from the bundle) |
+
+This is **implementation-defined host policy**, not an ANS word and **not** a dictionary definition. Dictionary words keep their standard stack effects; only the **filesystem location** changes when the would-be path is inside the bundle.
+
+**What to expect**
+
+```forth
+FROMLIB FLOAD HayesTest.fth
+\ During filetest, S" fatest1.txt" CREATE-FILE does *not* write into
+\ Resources/Library/HayesTest/src/ — it creates Application Support/TZForth/fatest1.txt
+```
+
+```forth
+\ Explicit paths always win (no remap of absolute/~ targets outside the bundle):
+S" ~/Documents/mydata.txt" R/W CREATE-FILE
+```
+
+**Recommended practice for user data**
+
+1. Prefer **absolute** or **`~`** paths under Documents / Application Support, or  
+2. **`CHDIR`** (or bare FLOAD pick) to a **user-authorized** writable folder, then use relative names, or  
+3. Rely on the remap only for **scratch** files created while cwd is under Library (tests, demos).
+
+Settings already live in Application Support (`settings.json`). Hayes block tests also use an explicit Forth setup (`prepare-blocks.fth`) that **`USE-BLOCK-FILE`**s `~/Library/Application Support/TZForth/hayes-blocks.blk`.
+
 ## BIG-INTEGER (multiprecision, not ANS)
 
 TZForth includes an optional **`BIG-INTEGER`** vocabulary for base-10⁹ multiprecision integers (teaching / demos; **not** an ANS word set). Sources ship in **`TZForth/Library/`** → **`Resources/Library/`** (not a separate top-level `lib/`).
@@ -217,6 +266,7 @@ TZForth includes an optional **`BIG-INTEGER`** vocabulary for base-10⁹ multipr
 | **`Library/pi-chudnovsky.fth`** | Chudnovsky π |
 | **`Library/pi-test.fth`** | Demo π to 20/50/100 (recorded results in file) |
 | **`Library/bi-test.fth`** | Unit tests for big-int (+ π smoke) |
+| **`Library/HayesTest.fth`** + **`HayesTest/`** | John Hayes forth2012 full suite (Block + Float) |
 | **`STEP-LIMIT`** | Inner-interpreter step budget; demos set `0` for large π |
 
 ```forth
@@ -224,6 +274,7 @@ FROMLIB FLOAD big-int.fth
 ALSO BIG-INTEGER
 FROMLIB FLOAD pi-test.fth     \ demo
 FROMLIB FLOAD bi-test.fth     \ unit tests
+FROMLIB FLOAD HayesTest.fth   \ full ANS Hayes suite (long run)
 ```
 
 Layout and word list: header of **`TZForth/Library/big-int.fth`**.

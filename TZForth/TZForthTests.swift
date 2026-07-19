@@ -62,6 +62,17 @@ extension TZForth {
             collected = ""
         }
 
+        /// Banner for intentional fault-injection tests — written only to the
+        /// ANS-VALIDATE.txt report (`results`), not the live console.
+        /// Does not touch `collected`, so result matchers stay clean.
+        func noteExpectedError(_ message: String) {
+            results += "--- expected error (intentional): \(message) ---\n"
+        }
+
+        func noteExpectedErrorEnd() {
+            results += "--- end expected error ---\n"
+        }
+
         let fm = FileManager.default
         let tmp = URL(fileURLWithPath: NSTemporaryDirectory())
         let suffix = UUID().uuidString.prefix(8)
@@ -185,27 +196,32 @@ extension TZForth {
         resetTest()
         let ferr = tmp.appendingPathComponent("ansval_errstop_\(suffix).fth")
         do {
+            // Intentional undefined word on line 1 so FLOAD aborts before `: shouldnot`.
             try """
-true verbose !
+notaword-ansval-errstop
 : shouldnot 99 ;
 """.write(to: ferr, atomically: true, encoding: String.Encoding.utf8)
         } catch {
             results += "TEST2b-err write fail: \(error)\n"
         }
+        noteExpectedError("FLOAD aborts on undefined word (line 1); : shouldnot must not be defined")
         collected = ""
         self.loadFile(ferr)
         let hasErrStopBad = self.debugFind("SHOULDNOT")
         let hasLine1 = collected.contains("line 1")
         results += "TEST2b-err: shouldnot=\(hasErrStopBad) line1=\(hasLine1) (expect false true) out=\(collected.trimmingCharacters(in: .whitespacesAndNewlines))\n"
+        noteExpectedErrorEnd()
 
         resetTest()
         _ = fm.changeCurrentDirectoryPath(tmp.path)
         self.logicalCurrentDirectory = tmp.path
         self.feedLine(": safe-inc S\" \(ferr.lastPathComponent)\" ['] INCLUDED CATCH ;")
+        noteExpectedError("same undefined word via INCLUDED, recovered with CATCH")
         collected = ""
         self.feedLine("safe-inc . .ERROR")
         let caughtFload = collected.contains("-13") || collected.contains("-70") || collected.contains("undefined word") || collected.contains("File I/O")
         results += "TEST2b-err-catch: caught=\(caughtFload) out=\(collected.trimmingCharacters(in: .whitespacesAndNewlines))\n"
+        noteExpectedErrorEnd()
         self.logicalCurrentDirectory = savedLog2b
         _ = fm.changeCurrentDirectoryPath(savedCwd2b)
 
@@ -269,6 +285,7 @@ fload \(fnInnerLate.lastPathComponent)
         } catch {
             results += "TEST2b-faultline write fail: \(error)\n"
         }
+        noteExpectedError("nested FLOAD fault must cite child file/line (not parent)")
         collected = ""
         _ = fm.changeCurrentDirectoryPath(tmp.path)
         self.logicalCurrentDirectory = tmp.path
@@ -279,6 +296,7 @@ fload \(fnInnerLate.lastPathComponent)
         let citesParentContext = collected.contains("while interpreting \(parentName) line 1")
         let avoidsParentFault = !collected.contains("\(parentName) line 1: ? notaword")
         results += "TEST2b-faultline: child=\(citesChild) context=\(citesParentContext) notParent=\(avoidsParentFault) (expect true true true) out=\(collected.trimmingCharacters(in: .whitespacesAndNewlines))\n"
+        noteExpectedErrorEnd()
         self.logicalCurrentDirectory = savedLog2b
         _ = fm.changeCurrentDirectoryPath(savedCwd2b)
 
@@ -294,6 +312,7 @@ fload \(fnInnerLate.lastPathComponent)
         } catch {
             results += "TEST2b-nestedline write fail: \(error)\n"
         }
+        noteExpectedError("missing nested file; parent line counter must stay on line 2")
         collected = ""
         _ = fm.changeCurrentDirectoryPath(tmp.path)
         self.logicalCurrentDirectory = tmp.path
@@ -303,6 +322,7 @@ fload \(fnInnerLate.lastPathComponent)
         let avoidsParentLine9 = !collected.contains("in \(nestedParentName) line 9:")
         let citesMissing = collected.contains("could not read '\(fnNestedMissing)'")
         results += "TEST2b-nestedline: line2=\(citesParentLine2) notline9=\(avoidsParentLine9) missing=\(citesMissing) (expect true true true) out=\(collected.trimmingCharacters(in: .whitespacesAndNewlines))\n"
+        noteExpectedErrorEnd()
         self.logicalCurrentDirectory = savedLog2b
         _ = fm.changeCurrentDirectoryPath(savedCwd2b)
 
@@ -972,7 +992,11 @@ fload \(fnInnerLate.lastPathComponent)
         ansTest("INCLUDED-NAMES", "S\" \(freq4Base)\" REQUIRED INCLUDED-NAMES @ 0= .", "0")
         resetTest()
         resetIncludedNames()
-        self.feedLine("S\" \(freq1Base)\" REQUIRED")
+        // freq1 body is `1+` — leave a cell on the stack so interpret succeeds and
+        // REQUIRED nameJoin runs (registration is skipped if the load aborts).
+        _ = fm.changeCurrentDirectoryPath(tmp.path)
+        self.logicalCurrentDirectory = tmp.path
+        self.feedLine("1 S\" \(freq1Base)\" REQUIRED")
         collected = ""
         self.feedLine(".INCLUDED")
         ansTotal += 1

@@ -383,7 +383,7 @@ fload \(fInnerErr.lastPathComponent)
     resetTest()
     let ferr = tmp.appendingPathComponent("tz-errstop.fth")
     try! """
-true verbose !
+notaword-ansval-errstop
 : shouldnot 99 ;
 """.write(to: ferr, atomically: true, encoding: String.Encoding.utf8)
     collected = ""
@@ -1245,7 +1245,10 @@ fload \(fnInnerLate.lastPathComponent)
     ansTest("INCLUDED-NAMES", "S\" \(freq4Base)\" REQUIRED INCLUDED-NAMES @ 0= .", "0")
     resetTest()
     resetIncludedNames()
-    forth.feedLine("S\" \(freq1Base)\" REQUIRED")
+    // freq1 body is `1+` — leave a cell so interpret succeeds and REQUIRED registers the name.
+    _ = fm.changeCurrentDirectoryPath(tmp.path)
+    forth.logicalCurrentDirectory = tmp.path
+    forth.feedLine("1 S\" \(freq1Base)\" REQUIRED")
     collected = ""
     forth.feedLine(".INCLUDED")
     ansTotal += 1

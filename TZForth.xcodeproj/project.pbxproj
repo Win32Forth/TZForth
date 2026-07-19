@@ -18,11 +18,77 @@
 				"AutoLoad/AutoLoad-Sample.fth",
 				AutoLoad/autoload.fth,
 				AutoLoad/README.txt,
+				"Library/bi-test.fth",
 				"Library/big-int.fth",
+				Library/HayesTest.fth,
+				Library/HayesTest/doc/history.txt,
+				Library/HayesTest/doc/prelimtestoutput.txt,
+				Library/HayesTest/doc/testoutput.txt,
+				Library/HayesTest/prelimtest.md,
+				Library/HayesTest/README.md,
+				"Library/HayesTest/src/ANS-VALIDATE.txt",
+				Library/HayesTest/src/blocks.blk,
+				Library/HayesTest/src/blocktest.fth,
+				Library/HayesTest/src/core.fr,
+				Library/HayesTest/src/coreexttest.fth,
+				Library/HayesTest/src/coreplustest.fth,
+				"Library/HayesTest/src/debug-bootstrap.fth",
+				"Library/HayesTest/src/debug-coreplus.fth",
+				"Library/HayesTest/src/debug-else-chain.fth",
+				"Library/HayesTest/src/debug-else-chain2.fth",
+				"Library/HayesTest/src/debug-else-chain3.fth",
+				"Library/HayesTest/src/debug-else-then.fth",
+				"Library/HayesTest/src/debug-full-chain.fth",
+				"Library/HayesTest/src/debug-lines181-197.fth",
+				"Library/HayesTest/src/debug-preamble180.fth",
+				"Library/HayesTest/src/debug-pt5.fth",
+				"Library/HayesTest/src/debug-pt8-context.fth",
+				"Library/HayesTest/src/debug-pt8.fth",
+				"Library/HayesTest/src/debug-pt10-only.fth",
+				"Library/HayesTest/src/debug-pt10-trace.fth",
+				"Library/HayesTest/src/debug-t197.fth",
+				"Library/HayesTest/src/debug-t220.fth",
+				"Library/HayesTest/src/debug-t250.fth",
+				"Library/HayesTest/src/debug-t300.fth",
+				"Library/HayesTest/src/debug-t385.fth",
+				"Library/HayesTest/src/debug-toolstest-197.fth",
+				"Library/HayesTest/src/debug-toolstest-fullhead.fth",
+				"Library/HayesTest/src/debug-toolstest-head.fth",
+				Library/HayesTest/src/doubletest.fth,
+				Library/HayesTest/src/errorreport.fth,
+				Library/HayesTest/src/exceptiontest.fth,
+				Library/HayesTest/src/facilitytest.fth,
+				Library/HayesTest/src/filetest.fth,
+				"Library/HayesTest/src/fp/ak-fp-test.fth",
+				"Library/HayesTest/src/fp/fatan2-test.fs",
+				"Library/HayesTest/src/fp/fpio-test.4th",
+				"Library/HayesTest/src/fp/fpzero-test.4th",
+				"Library/HayesTest/src/fp/ieee-arith-test.fs",
+				"Library/HayesTest/src/fp/ieee-fprox-test.fs",
+				Library/HayesTest/src/fp/paranoia.4th,
+				"Library/HayesTest/src/fp/readme-fp.txt",
+				Library/HayesTest/src/fp/runfptests.fth,
+				"Library/HayesTest/src/fp/to-float-test.4th",
+				Library/HayesTest/src/fp/ttester.fs,
+				"Library/HayesTest/src/HAYES-RESULTS.txt",
+				Library/HayesTest/src/localstest.fth,
+				Library/HayesTest/src/memorytest.fth,
+				Library/HayesTest/src/prelimtest.fth,
+				"Library/HayesTest/src/prepare-blocks.fth",
+				"Library/HayesTest/src/required-helper1.fth",
+				"Library/HayesTest/src/required-helper2.fth",
+				"Library/HayesTest/src/runtests-tzforth.fth",
+				Library/HayesTest/src/runtests.fth,
+				Library/HayesTest/src/searchordertest.fth,
+				Library/HayesTest/src/stringtest.fth,
+				Library/HayesTest/src/test.fth,
+				Library/HayesTest/src/tester.fr,
+				Library/HayesTest/src/toolstest.fth,
+				Library/HayesTest/src/ttester.fs,
+				Library/HayesTest/src/utilities.fth,
 				"Library/pi-chudnovsky.fth",
 				"Library/pi-test.fth",
-				"Library/bi-test.fth",
-				"Library/README.txt",
+				Library/README.txt,
 				TestTZForth.swift,
 			);
 			target = 29A09F072FCB95CE00778693 /* TZForth */;
@@ -249,7 +315,7 @@
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
 				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
-				MACOSX_DEPLOYMENT_TARGET = 27.0;
+				MACOSX_DEPLOYMENT_TARGET = 26.6;
 				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
 				MTL_FAST_MATH = YES;
 				ONLY_ACTIVE_ARCH = YES;
@@ -310,7 +376,7 @@
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
 				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
-				MACOSX_DEPLOYMENT_TARGET = 27.0;
+				MACOSX_DEPLOYMENT_TARGET = 26.6;
 				MTL_ENABLE_DEBUG_INFO = NO;
 				MTL_FAST_MATH = YES;
 				ONLY_ACTIVE_ARCH = YES;
@@ -327,7 +393,7 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 3;
+				CURRENT_PROJECT_VERSION = 4;
 				DEAD_CODE_STRIPPING = YES;
 				DEVELOPMENT_TEAM = X5YCJL3LJ8;
 				ENABLE_APP_SANDBOX = YES;
@@ -337,11 +403,13 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
 				INFOPLIST_KEY_UILaunchStoryboardName = "";
+				IPHONEOS_DEPLOYMENT_TARGET = 26.6;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				MARKETING_VERSION = 1.1.0;
+				MACOSX_DEPLOYMENT_TARGET = 26.6;
+				MARKETING_VERSION = 1.1.1;
 				PRODUCT_BUNDLE_IDENTIFIER = TZForth.TZForth;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				REGISTER_APP_GROUPS = YES;
@@ -364,7 +432,7 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 3;
+				CURRENT_PROJECT_VERSION = 4;
 				DEAD_CODE_STRIPPING = YES;
 				DEVELOPMENT_TEAM = X5YCJL3LJ8;
 				ENABLE_APP_SANDBOX = YES;
@@ -374,11 +442,13 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
 				INFOPLIST_KEY_UILaunchStoryboardName = "";
+				IPHONEOS_DEPLOYMENT_TARGET = 26.6;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				MARKETING_VERSION = 1.1.0;
+				MACOSX_DEPLOYMENT_TARGET = 26.6;
+				MARKETING_VERSION = 1.1.1;
 				PRODUCT_BUNDLE_IDENTIFIER = TZForth.TZForth;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				REGISTER_APP_GROUPS = YES;

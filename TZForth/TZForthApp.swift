@@ -22,9 +22,20 @@
 //
 
 import SwiftUI
+import AppKit
+
+/// Quit when the user closes the last console window (typical single-window tool behavior).
+/// Multiple windows remain possible via File → New Window for now, but closing the last one ends the app.
+final class TZForthAppDelegate: NSObject, NSApplicationDelegate {
+    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
+        true
+    }
+}
 
 @main
 struct TZForthApp: App {
+    @NSApplicationDelegateAdaptor(TZForthAppDelegate.self) private var appDelegate
+
     var body: some Scene {
         WindowGroup {
             ContentView()

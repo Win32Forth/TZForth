@@ -30,6 +30,8 @@ extension Notification.Name {
     static let toolsViewAutoloadFolder = Notification.Name("ToolsViewAutoloadFolder")
     /// Tools menu: LIBRARY → VIEW Library Folder (Finder on Resources/Library)
     static let toolsViewLibraryFolder = Notification.Name("ToolsViewLibraryFolder")
+    /// Tools menu: DOCS → VIEW Documents Folder (Finder on Resources/docs)
+    static let toolsViewDocsFolder = Notification.Name("ToolsViewDocsFolder")
 }
 
 let consoleMessage = "=== TZForth (based on Leif Bruder's lbForth) ===\n\n"
@@ -231,6 +233,9 @@ struct ConsoleView: View {
             }
             .onReceive(NotificationCenter.default.publisher(for: .toolsViewLibraryFolder)) { _ in
                 revealLibraryFolderInFinder()
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .toolsViewDocsFolder)) { _ in
+                revealDocsFolderInFinder()
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .padding(8)
@@ -726,6 +731,18 @@ struct ConsoleView: View {
         // Create empty Library in bundle is not possible; show message.
         isProgrammaticConsoleAppend = true
         consoleText += "? Tools → LIBRARY: no Resources/Library in this app bundle (rebuild with TZForth/Library/)\n"
+        markProtectedThroughEndOfText()
+        isProgrammaticConsoleAppend = false
+    }
+
+    /// Reveal Contents/Resources/docs/ in Finder (RTF manuals for TextEdit).
+    private func revealDocsFolderInFinder() {
+        if let dir = TZForth.bundleDocsDirectoryURL() {
+            NSWorkspace.shared.open(dir)
+            return
+        }
+        isProgrammaticConsoleAppend = true
+        consoleText += "? Tools → DOCS: no Resources/docs in this app bundle (rebuild with TZForth/Docs/)\n"
         markProtectedThroughEndOfText()
         isProgrammaticConsoleAppend = false
     }

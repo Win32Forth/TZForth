@@ -2202,6 +2202,21 @@ public final class TZForth {
         return nil
     }
 
+    /// Bundle `Contents/Resources/docs/` (RTF manuals) if present.
+    public static func bundleDocsDirectoryURL() -> URL? {
+        if let root = Bundle.main.resourceURL {
+            let dir = root.appendingPathComponent("docs", isDirectory: true)
+            if FileManager.default.fileExists(atPath: dir.path) { return dir }
+        }
+        if let u = Bundle.main.url(forResource: "docs", withExtension: nil) {
+            var isDir: ObjCBool = false
+            if FileManager.default.fileExists(atPath: u.path, isDirectory: &isDir), isDir.boolValue {
+                return u
+            }
+        }
+        return nil
+    }
+
     private func isFromLibraryFlagSet() -> Bool {
         if self.fromLibraryVarAddr != 0 {
             return self.readCell(self.fromLibraryVarAddr) != 0

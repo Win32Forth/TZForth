@@ -59,6 +59,11 @@ struct TZForthApp: App {
                         NotificationCenter.default.post(name: .toolsViewAutoloadFolder, object: nil)
                     }
                 }
+                Menu("DOCS") {
+                    Button("VIEW Documents Folder") {
+                        NotificationCenter.default.post(name: .toolsViewDocsFolder, object: nil)
+                    }
+                }
                 Menu("LIBRARY") {
                     Button("VIEW Library Folder") {
                         NotificationCenter.default.post(name: .toolsViewLibraryFolder, object: nil)

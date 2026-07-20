@@ -930,7 +930,11 @@ struct ConsoleView: View {
 
                 DispatchQueue.main.async {
                     if preserveCwd {
-                        // Load without permanently adopting the Library (or file parent) as CHDIR.
+                        // FROMLIB bare FLOAD: do not permanently change session CHDIR, but
+                        // nested FLOAD/INCLUDED must resolve next to the picked file
+                        // (e.g. Editor/SZ-EDITOR.fth → FLOAD sz-host.fth).
+                        self.forth.logicalCurrentDirectory = parent.path
+                        _ = FileManager.default.changeCurrentDirectoryPath(parent.path)
                         self.forth.loadFile(url)
                         self.restoreSessionDirectory(logical: savedLogical, process: savedProcess)
                     } else {

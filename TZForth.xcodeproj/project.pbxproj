@@ -17,12 +17,12 @@
 				"ANS-VALIDATE.txt",
 				AutoLoad/ANEW.fth,
 				"AutoLoad/AutoLoad-Sample.fth",
-				"AutoLoad/SZ-EDITOR-README.txt",
-				"AutoLoad/SZ-EDITOR.fth",
 				AutoLoad/autoload.fth,
 				AutoLoad/README.txt,
 				"AutoLoad/sz-buffer.fth",
 				"AutoLoad/sz-edit.fth",
+				"AutoLoad/SZ-EDITOR-README.txt",
+				"AutoLoad/SZ-EDITOR.fth",
 				"AutoLoad/sz-host.fth",
 				"AutoLoad/sz-screen.fth",
 				Docs/ANS_COMPLIANCE.rtf,
@@ -97,6 +97,8 @@
 				Library/HayesTest/src/toolstest.fth,
 				Library/HayesTest/src/ttester.fs,
 				Library/HayesTest/src/utilities.fth,
+				"Legacy/README.txt",
+				"Legacy/SmallZimmerEditor.fth",
 				"Library/pi-chudnovsky.fth",
 				"Library/pi-test.fth",
 				Library/README.txt,
@@ -157,6 +159,7 @@
 				29A09F20 /* Copy AutoLoad */,
 				29A09F21 /* Copy Library */,
 				29A09F22 /* Copy Docs */,
+				29A09F23 /* Copy Legacy */,
 			);
 			buildRules = (
 			);
@@ -279,6 +282,27 @@
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
 			shellScript = "set -e\nSRC=\"${SRCROOT}/TZForth/Docs\"\nDEST=\"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/docs\"\nrm -rf \"${DEST}\"\nmkdir -p \"${DEST}\"\nif [ -d \"${SRC}\" ]; then\n  for f in \"${SRC}\"/* \"${SRC}\"/.[!.]* \"${SRC}\"/..?*; do\n    [ -e \"$f\" ] || continue\n    base=$(basename \"$f\")\n    case \"$base\" in\n      .DS_Store|*.swp|*~) continue ;;\n    esac\n    if [ -f \"$f\" ]; then\n      cp -f \"$f\" \"${DEST}/\"\n    elif [ -d \"$f\" ]; then\n      cp -R \"$f\" \"${DEST}/\"\n    fi\n  done\nfi\n";
+		};
+		29A09F23 /* Copy Legacy */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+				"$(SRCROOT)/TZForth/Legacy",
+			);
+			name = "Copy Legacy";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+				"$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/Legacy",
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "set -e\nSRC=\"${SRCROOT}/TZForth/Legacy\"\nDEST=\"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/Legacy\"\nrm -rf \"${DEST}\"\nmkdir -p \"${DEST}\"\nif [ -d \"${SRC}\" ]; then\n  for f in \"${SRC}\"/* \"${SRC}\"/.[!.]* \"${SRC}\"/..?*; do\n    [ -e \"$f\" ] || continue\n    base=$(basename \"$f\")\n    case \"$base\" in\n      .DS_Store|*.swp|*~) continue ;;\n    esac\n    if [ -f \"$f\" ]; then\n      cp -f \"$f\" \"${DEST}/\"\n    elif [ -d \"$f\" ]; then\n      cp -R \"$f\" \"${DEST}/\"\n    fi\n  done\nfi\n";
 		};
 /* End PBXShellScriptBuildPhase section */
 
@@ -426,7 +450,7 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 5;
+				CURRENT_PROJECT_VERSION = 6;
 				DEAD_CODE_STRIPPING = YES;
 				DEVELOPMENT_TEAM = X5YCJL3LJ8;
 				ENABLE_APP_SANDBOX = YES;
@@ -443,7 +467,7 @@
 					"@executable_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 26.6;
-				MARKETING_VERSION = 1.1.2;
+				MARKETING_VERSION = 1.1.3;
 				PRODUCT_BUNDLE_IDENTIFIER = TZForth.TZForth;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				REGISTER_APP_GROUPS = YES;
@@ -466,7 +490,7 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 5;
+				CURRENT_PROJECT_VERSION = 6;
 				DEAD_CODE_STRIPPING = YES;
 				DEVELOPMENT_TEAM = X5YCJL3LJ8;
 				ENABLE_APP_SANDBOX = YES;
@@ -483,7 +507,7 @@
 					"@executable_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 26.6;
-				MARKETING_VERSION = 1.1.2;
+				MARKETING_VERSION = 1.1.3;
 				PRODUCT_BUNDLE_IDENTIFIER = TZForth.TZForth;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				REGISTER_APP_GROUPS = YES;

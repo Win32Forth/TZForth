@@ -173,6 +173,18 @@ public final class TZForth {
     /// True when PAGE or AT-XY has activated the facility terminal buffer.
     public var isFacilityTerminalActive: Bool { facilityTerminal.isActive }
 
+    /// Facility cursor (0-based col/row) after the last PAGE/AT-XY/EMIT sequence.
+    /// Host uses this to reverse-video the editor insert point in the console.
+    public var facilityCursorCol: Int { facilityTerminal.cursorCol }
+    public var facilityCursorRow: Int { facilityTerminal.cursorRow }
+
+    /// Leave PAGE/AT-XY mode without wiping the host console (unlike CLS).
+    public func leaveFacilityTerminalMode() {
+        self.facilityTerminal.deactivate()
+        self.terminalRefreshPending = false
+        self.clearScreenRequested = false
+    }
+
     /// Set by the BYE word. The host app (ConsoleView) should observe this and terminate.
     public var quitRequested = false
 
@@ -2922,9 +2934,20 @@ public final class TZForth {
 
     private func namePresent(caddr: Int, u: Int) -> Bool {
         var node = self.readIncludedNamesHead()
-        while node != 0 {
+        var safety = 0
+        while node != 0 && safety < 10_000 {
+            safety += 1
+            // Reject dangling heads left after heap reset / dict restore.
+            if node < 0 || node + Self.INCLUDED_NAMES_NODE_BYTES > self.memory.count {
+                self.writeIncludedNamesHead(0)
+                return false
+            }
             let strAddr = Int(self.readCell(node + 8))
             let strU = Int(self.readCell(node + 16))
+            if strU < 0 || strAddr < 0 || strAddr + strU > self.memory.count {
+                self.writeIncludedNamesHead(0)
+                return false
+            }
             if self.compareCharacterStrings(caddr1: caddr, u1: u, caddr2: strAddr, u2: strU) == 0 {
                 return true
             }
@@ -7025,9 +7048,7 @@ public final class TZForth {
         /// Leave ANS Facility terminal mode (PAGE/AT-XY buffer) and return output to the console.
         /// Does not clear the console text by itself — pair with CLS if a full wipe is wanted.
         _ = register("FACILITY-OFF") {
-            self.facilityTerminal.deactivate()
-            self.terminalRefreshPending = false
-            self.clearScreenRequested = false
+            self.leaveFacilityTerminalMode()
         }
 
         /// Push pending Facility terminal buffer to the host now (after PAGE + AT-XY + EMIT).
@@ -10489,9 +10510,6 @@ public final class TZForth {
         if self.stepLimitVarAddr != 0 {
             self.writeCell(self.stepLimitVarAddr, snap.stepLimit)
         }
-        if self.includedNamesVarAddr != 0 {
-            self.writeCell(self.includedNamesVarAddr, snap.includedNamesHead)
-        }
         self.debugEnabled = snap.debugEnabled
         self.growMemoryAttempted = snap.growMemoryAttempted
         self.allocateEverUsed = snap.allocateEverUsed
@@ -10504,6 +10522,14 @@ public final class TZForth {
         self.resetHeapState(clearAllocateFlag: !snap.allocateEverUsed)
         if self.blockPoolBase > 0 {
             self.heapBump = self.blockPoolBase
+        }
+        // INCLUDED-NAMES nodes live on the ALLOCATE heap (path strings + next links).
+        // After resetHeapState those nodes are gone — restoring snap.includedNamesHead
+        // was use-after-free. The next FLOAD called namePresent, walked path bytes as
+        // "next" pointers (e.g. "/Users/t…"), and threw Memory read out of range.
+        // Clear the list; REQUIRED/INCLUDED will rebuild it on subsequent loads.
+        if self.includedNamesVarAddr != 0 {
+            self.writeCell(self.includedNamesVarAddr, 0)
         }
     }
 
@@ -10558,6 +10584,7 @@ public final class TZForth {
         waitingForExtendedKey = false
         waitingForMs = false
         waitingForXKey = false
+        isResumingBlockingPrimitive = false
         xkeyAssembly.removeAll(keepingCapacity: true)
         extendedKeyQueue.removeAll(keepingCapacity: true)
         fileLoadRequested = false

@@ -162,7 +162,7 @@ struct ConsoleView: View {
             }
             .onKeyPress(.upArrow) {
                 if forth.waitingForKey {
-                    _ = deliverBlockingKey(16) // Ctrl-P
+                    _ = deliverBlockingKey(16) // up
                     return .handled
                 }
                 if forth.waitingForExtendedKey {
@@ -174,7 +174,7 @@ struct ConsoleView: View {
             }
             .onKeyPress(.downArrow) {
                 if forth.waitingForKey {
-                    _ = deliverBlockingKey(14) // Ctrl-N
+                    _ = deliverBlockingKey(14) // down
                     return .handled
                 }
                 if forth.waitingForExtendedKey {
@@ -186,7 +186,7 @@ struct ConsoleView: View {
             }
             .onKeyPress(.leftArrow) {
                 if forth.waitingForKey {
-                    _ = deliverBlockingKey(2) // Ctrl-B
+                    _ = deliverBlockingKey(2) // left
                     return .handled
                 }
                 if forth.waitingForExtendedKey {
@@ -199,7 +199,7 @@ struct ConsoleView: View {
             }
             .onKeyPress(.rightArrow) {
                 if forth.waitingForKey {
-                    _ = deliverBlockingKey(6) // Ctrl-F
+                    _ = deliverBlockingKey(6) // right
                     return .handled
                 }
                 guard forth.waitingForExtendedKey else { return .ignored }
@@ -207,21 +207,32 @@ struct ConsoleView: View {
                 return .handled
             }
             .onKeyPress(.home) {
+                // While KEY waits, AppKit keyDown maps Home / Ctrl-Home (needs modifiers).
+                if forth.waitingForKey { return .ignored }
                 guard forth.waitingForExtendedKey else { return .ignored }
                 forth.provideExtendedKey(TZForth.makeFKeyEvent(TZForth.FacilityFKey.home))
                 return .handled
             }
             .onKeyPress(.end) {
+                if forth.waitingForKey { return .ignored }
                 guard forth.waitingForExtendedKey else { return .ignored }
                 forth.provideExtendedKey(TZForth.makeFKeyEvent(TZForth.FacilityFKey.end))
                 return .handled
             }
             .onKeyPress(.pageUp) {
+                if forth.waitingForKey {
+                    _ = deliverBlockingKey(23) // PgUp
+                    return .handled
+                }
                 guard forth.waitingForExtendedKey else { return .ignored }
                 forth.provideExtendedKey(TZForth.makeFKeyEvent(TZForth.FacilityFKey.prior))
                 return .handled
             }
             .onKeyPress(.pageDown) {
+                if forth.waitingForKey {
+                    _ = deliverBlockingKey(24) // PgDn
+                    return .handled
+                }
                 guard forth.waitingForExtendedKey else { return .ignored }
                 forth.provideExtendedKey(TZForth.makeFKeyEvent(TZForth.FacilityFKey.next))
                 return .handled
@@ -338,10 +349,15 @@ struct ConsoleView: View {
                         self.markProtectedThroughEndOfText()
                         self.lastKeyConsumedUserLength = 0
                         self.keepCursorVisible(followPrompt: true)
+                        // Reverse-video the Facility cursor cell (editor insert point).
+                        self.applyFacilityCursorHighlight()
                         // Keep the flag set until the next turn so any deferred
                         // SwiftUI onChange still treats this as engine output.
                         DispatchQueue.main.async {
                             self.isProgrammaticConsoleAppend = false
+                            // Attributes can be cleared when SwiftUI rebinds the string;
+                            // re-apply once the text view has caught up.
+                            self.applyFacilityCursorHighlight()
                         }
                     }
                     if Thread.isMainThread {
@@ -449,6 +465,37 @@ struct ConsoleView: View {
             isDeliveringBlockingKey = false
         }
         return true
+    }
+
+    /// Reverse-video the Facility cursor cell so the editor insert point is obvious.
+    /// Facility rows are fixed 80-column lines joined by newlines after the banner.
+    ///
+    /// Always clear prior highlights first: when the cursor moves without scrolling,
+    /// the painted screen string is often identical, so NSTextView does not replace
+    /// the storage — only re-applying attributes would leave a "trail" of old cells.
+    private func applyFacilityCursorHighlight() {
+        guard let textView = consoleTextView, let storage = textView.textStorage else { return }
+
+        let full = NSRange(location: 0, length: storage.length)
+        if full.length > 0 {
+            storage.removeAttribute(.backgroundColor, range: full)
+            // Restore default ink after a prior reverse-video cell.
+            storage.addAttribute(.foregroundColor, value: NSColor.textColor, range: full)
+        }
+
+        guard forth.isFacilityTerminalActive else { return }
+
+        let bannerLen = (consoleMessage as NSString).length
+        let cols = 80
+        let row = forth.facilityCursorRow
+        let col = min(max(0, forth.facilityCursorCol), cols - 1)
+        // Each rendered line is `cols` ASCII bytes + '\n' (except we may have added a trailing \n).
+        let loc = bannerLen + row * (cols + 1) + col
+        guard loc >= 0 && loc < storage.length else { return }
+
+        let range = NSRange(location: loc, length: 1)
+        storage.addAttribute(.backgroundColor, value: NSColor.controlAccentColor, range: range)
+        storage.addAttribute(.foregroundColor, value: NSColor.white, range: range)
     }
 
     /// REPL Return: always submit the full current input, never split the line at the caret.
@@ -1982,25 +2029,36 @@ extension ConsoleView {
             return nil
         }
 
-        // Prefer arrows by keyCode (reliable on macOS).
+        let mods = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        let ctrl = mods.contains(.control)
+
+        // Prefer navigation keys by keyCode (reliable on macOS).
         switch event.keyCode {
-        case 123: return 2    // Left  → Ctrl-B code
-        case 124: return 6    // Right → Ctrl-F
-        case 125: return 14   // Down  → Ctrl-N
-        case 126: return 16   // Up    → Ctrl-P
+        case 123: return 2    // Left
+        case 124: return 6    // Right
+        case 125: return 14   // Down
+        case 126: return 16   // Up
         case 51:  return 8    // Backspace
-        case 117: return 127  // Forward delete
+        case 117: return 4    // Forward delete → Ctrl-D (delete under cursor)
         case 36, 76: return 13 // Return / Enter
+        case 115: return ctrl ? 28 : 1   // Home / Ctrl-Home (line / file start)
+        case 119: return ctrl ? 29 : 5   // End  / Ctrl-End  (line / file end)
+        case 116: return 23   // Page Up
+        case 121: return 24   // Page Down
         default: break
         }
 
         // Control+letter → ASCII control 1..26 (before raw characters, which may be empty).
-        let mods = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
-        if mods.contains(.control),
+        // Do not map Ctrl-B/F/N/P (2/6/14/16): editor motion is arrow keys only.
+        if ctrl,
            let ch = event.charactersIgnoringModifiers?.lowercased().unicodeScalars.first {
             let v = Int(ch.value)
             if v >= 97 && v <= 122 {
-                return v - 96
+                let code = v - 96
+                if code == 2 || code == 6 || code == 14 || code == 16 {
+                    return nil
+                }
+                return code
             }
         }
 

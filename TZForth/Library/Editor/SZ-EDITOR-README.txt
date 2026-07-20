@@ -13,6 +13,7 @@ Status
   Phase 2  sz-buffer.fth               done
   Phase 3  sz-screen.fth               done mono redraw/scroll
   Phase 4  sz-edit.fth                 done minimal edit loop
+  Phase 5  navigation + frame/cursor   done
 
 Files
 -----
@@ -48,14 +49,20 @@ Editor keys
   Use the Control key (⌃), NOT the Command/Apple key (⌘).
   ⌘Q quits the whole macOS app; editor quit is ⌃Q.
 
-  Ctrl-S     save to current name
-  Ctrl-Q     quit (asks if modified)
-  Ctrl-B/F   left / right
-  Ctrl-P/N   up / down
-  Arrow keys same as Ctrl-B/F/N/P when KEY routing is active
-  Enter      newline CRLF
-  BS / Del   backspace
+  Ctrl-S       save to current name
+  Ctrl-Q       quit (asks if modified)
+  Arrow keys   move
+  Home / ^A    start of line
+  End  / ^E    end of line
+  Ctrl-Home    start of file
+  Ctrl-End     end of file
+  PgUp / PgDn  page up / down
+  Enter        newline CRLF
+  BS           backspace
+  Del / ^D     delete under cursor
   other printable  insert
+
+  Display: framed text area; insert point reverse-video (accent color)
 
 After quit
 ----------

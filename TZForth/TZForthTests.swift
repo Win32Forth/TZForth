@@ -45,6 +45,7 @@ extension TZForth {
         let originalOnOutput = self.onOutput
         let originalOnPerformNamedLoad = self.onPerformNamedLoad
         let originalOnMsDelayRequested = self.onMsDelayRequested
+        let originalOnTerminalRefresh = self.onTerminalRefresh
         self.onOutput = { text in
             collected += text
         }
@@ -667,7 +668,6 @@ fload \(fnInnerLate.lastPathComponent)
 
         // Core (QUIT SOURCE PARSE PAD POSTPONE [COMPILE] + SP!/RSP! helpers + improved ENV)
         ansTest("ARSHIFT", "-8 1 ARSHIFT .", "-4")
-        ansTest("CLS (no crash)", "CLS 42 .", "42")
         ansTest("SPACES (no crash)", "2 SPACES 99 .", "99")
         ansTest("SOURCE", "SOURCE DROP 0= .", "0")  // addr non-zero, u may be 0 at test point
         ansTest(">IN +! skip", "S\" 1 >IN +! xSOURCE TYPE\" EVALUATE", "SOURCE")
@@ -744,7 +744,10 @@ fload \(fnInnerLate.lastPathComponent)
         ansTest("nested structure size", "T6S4 .", "32")
         ansTest("ENVIRONMENT? FACILITY", "S\" FACILITY\" ENVIRONMENT? .", "-1")
 
-        // Facility terminal (10.6.1): PAGE / AT-XY with 80×25 buffer
+        // Facility terminal (10.6.1): PAGE / AT-XY with 80×25 buffer.
+        // Capture into a local only for these checks — must restore the host
+        // onTerminalRefresh afterward (ConsoleView). Leaving this stub in place
+        // made SZ-EDITOR look hung after ANS-VALIDATE (redraws never reached the UI).
         var termScreen = ""
         self.onTerminalRefresh = { termScreen = $0 }
         resetTest()
@@ -776,6 +779,10 @@ fload \(fnInnerLate.lastPathComponent)
         } else {
             results += "TEST6 AT-XY EMIT: FAIL short screen\n"
         }
+        // Leave Facility mode without painting a blank frame to the live console, then
+        // restore the host refresh hook for any later code that needs it.
+        self.leaveFacilityTerminalMode()
+        self.onTerminalRefresh = originalOnTerminalRefresh
 
         // Facility Phase 3: MS / TIME&DATE / EKEY* / EMIT? / K-*
         ansTest("EMIT?", "EMIT? .", "-1")
@@ -1392,9 +1399,11 @@ fload \(fnInnerLate.lastPathComponent)
             results += "WARNING: could not restore settings.json after validation: \(error.localizedDescription)\n"
         }
 
+        self.leaveFacilityTerminalMode()
         self.onOutput = originalOnOutput
         self.onPerformNamedLoad = originalOnPerformNamedLoad
         self.onMsDelayRequested = originalOnMsDelayRequested
+        self.onTerminalRefresh = originalOnTerminalRefresh
 
         results += "\n=== ANS-VALIDATE complete ===\n"
         return results

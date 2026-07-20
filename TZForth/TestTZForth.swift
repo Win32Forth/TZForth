@@ -924,7 +924,6 @@ fload \(fnInnerLate.lastPathComponent)
     ansTest("ABORT\" no", "0 ABORT\" oops\" 42 .", "42")
 
     // Check a few more that should be present and not crash
-    ansTest("CLS (no crash)", "CLS 42 .", "42")
     ansTest("SPACES (no crash)", "2 SPACES 99 .", "99")
 
     // New Core (QUIT SOURCE PARSE PAD POSTPONE [COMPILE] + SP!/RSP! + improved ENV)

@@ -29,9 +29,9 @@ FLOAD sz-edit.fth
 : SZ-BANNER  ( -- )
    CR
    .( === SZ-EDITOR TZForth port ===) CR
-   .( Phases 1-4: load/save + mono screen + minimal edit) CR
+   .( Phases 1-5: edit + navigation + framed screen) CR
    .( SZ-BUFFER-SMOKE  SZ-EDIT-SMOKE  or  S" file" SZ-EDIT-FILE) CR
-   .( Keys: Ctrl-S save  Ctrl-Q quit  Ctrl-B/F/P/N or arrows  type/BS/Enter) CR
+   .( Keys: ^S save ^Q quit  arrows  Home/End  ^Home/^End  PgUp/Dn  BS Del type) CR
    .( Note: use Control key, not Command/Apple key) CR
    CR
 ;

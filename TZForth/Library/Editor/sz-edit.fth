@@ -1,29 +1,40 @@
-\ sz-edit.fth — SZ-EDITOR interactive loop (Phase 4)
+\ sz-edit.fth — SZ-EDITOR interactive loop (Phase 5 navigation)
 \
 \ Keys (Control = ⌃, not Command/Apple ⌘):
-\   printable     insert
-\   Enter         CRLF
-\   BS / Del      backspace
-\   arrows        move (host maps to same codes as Ctrl-B/F/N/P)
-\   Ctrl-B/F      left / right
-\   Ctrl-P/N      up / down
-\   Ctrl-S        save
-\   Ctrl-Q        quit
+\   printable       insert
+\   Enter           CRLF
+\   BS              backspace
+\   Del / Ctrl-D    delete under cursor
+\   arrows          move (host delivers codes 2/6/14/16)
+\   Home / Ctrl-A   start of line
+\   End  / Ctrl-E   end of line
+\   Ctrl-Home       start of file
+\   Ctrl-End        end of file
+\   PgUp / PgDn     page up / down
+\   Ctrl-S          save
+\   Ctrl-Q          quit
 \
 \ Depends on: sz-host, sz-buffer, sz-screen
 
 DECIMAL
 
-  2 CONSTANT SZ-CTRL-B
-  6 CONSTANT SZ-CTRL-F
+  1 CONSTANT SZ-HOME-LINE      \ Ctrl-A / Home
+  2 CONSTANT SZ-LEFT           \ ← arrow (host)
+  4 CONSTANT SZ-DEL-FWD        \ Ctrl-D / forward delete
+  5 CONSTANT SZ-END-LINE       \ Ctrl-E / End
+  6 CONSTANT SZ-RIGHT          \ → arrow (host)
   8 CONSTANT SZ-BS
  10 CONSTANT SZ-LF-KEY
  13 CONSTANT SZ-ENTER
- 14 CONSTANT SZ-CTRL-N
- 16 CONSTANT SZ-CTRL-P
+ 14 CONSTANT SZ-DOWN           \ ↓ arrow (host)
+ 16 CONSTANT SZ-UP             \ ↑ arrow (host)
  17 CONSTANT SZ-CTRL-Q
  19 CONSTANT SZ-CTRL-S
-127 CONSTANT SZ-DEL
+ 23 CONSTANT SZ-PGUP
+ 24 CONSTANT SZ-PGDN
+ 28 CONSTANT SZ-HOME-FILE      \ Ctrl-Home
+ 29 CONSTANT SZ-END-FILE       \ Ctrl-End
+127 CONSTANT SZ-DEL            \ also delete-forward (legacy)
 
 VARIABLE SZ-DONE
 
@@ -31,19 +42,13 @@ VARIABLE SZ-DONE
 \ Insert / delete at SZ-CUR
 \ -----------------------------------------------------------------------------
 
-\ Open u bytes at SZ-CUR (shift tail right). Uses MOVE (overlap-safe).
-\ flag true on success.
 : SZ-OPEN-HOLE  ( u -- flag )
    DUP SZ-FREE-BYTES > IF  DROP 0 EXIT  THEN
    DUP 0= IF  DROP -1 EXIT  THEN
-   >R                                   \ R: u
-   SZ-TEND SZ-CUR @ -                   \ n = bytes after cursor
+   >R
+   SZ-TEND SZ-CUR @ -
    DUP 0> IF
-      \ ( n )  MOVE ( src dest u ) — shift [CUR,TEND) to [CUR+u,TEND+u)
-      SZ-CUR @                          \ n src
-      SZ-CUR @ R@ +                     \ n src dest
-      ROT                               \ src dest n
-      MOVE
+      SZ-CUR @  SZ-CUR @ R@ +  ROT  MOVE
    ELSE
       DROP
    THEN
@@ -53,7 +58,6 @@ VARIABLE SZ-DONE
 ;
 
 : SZ-INSERT-CH  ( c -- )
-   \ only store printable and tab
    DUP BL < OVER 126 > OR IF  DROP EXIT  THEN
    1 SZ-OPEN-HOLE 0= IF  DROP EXIT  THEN
    SZ-CUR @ C!
@@ -72,12 +76,37 @@ VARIABLE SZ-DONE
 : SZ-BACKSPACE  ( -- )
    SZ-CUR @ SZ-TBUF = IF  EXIT  THEN
    -1 SZ-CUR +!
-   SZ-TEND SZ-CUR @ - 1-                    \ bytes after the deleted char
+   SZ-TEND SZ-CUR @ - 1-
    DUP 0> IF
-      SZ-CUR @ 1+  SZ-CUR @  ROT  MOVE      \ src dest u
+      SZ-CUR @ 1+  SZ-CUR @  ROT  MOVE
    ELSE
       DROP
    THEN
+   -1 SZ-TLEN +!
+   SZ-TLEN @ 0< IF  0 SZ-TLEN !  THEN
+   SZ-TOUCH
+;
+
+\ Delete character(s) under cursor (forward). CRLF pair removed as one unit.
+: SZ-DELETE-FWD  ( -- )
+   SZ-CUR @ SZ-TEND = IF  EXIT  THEN
+   \ CRLF under cursor?
+   SZ-CUR @ C@ SZ-CH-CR =
+   SZ-CUR @ 1+ SZ-TEND U< AND
+   IF
+      SZ-CUR @ 1+ C@ SZ-CH-LF = IF
+         SZ-TEND SZ-CUR @ - 2 - DUP 0> IF
+            SZ-CUR @ 2 +  SZ-CUR @  ROT  MOVE
+         ELSE  DROP  THEN
+         -2 SZ-TLEN +!
+         SZ-TLEN @ 0< IF  0 SZ-TLEN !  THEN
+         SZ-TOUCH EXIT
+      THEN
+   THEN
+   \ single byte
+   SZ-TEND SZ-CUR @ - 1- DUP 0> IF
+      SZ-CUR @ 1+  SZ-CUR @  ROT  MOVE
+   ELSE  DROP  THEN
    -1 SZ-TLEN +!
    SZ-TLEN @ 0< IF  0 SZ-TLEN !  THEN
    SZ-TOUCH
@@ -112,26 +141,46 @@ VARIABLE SZ-DONE
    R> DROP
 ;
 
+: SZ-GO-HOME-LINE  ( -- )
+   SZ-CUR-LINE SZ-CUR ! ;
+
+: SZ-GO-END-LINE  ( -- )
+   SZ-CUR-LINE SZ-PARSE-LINE + SZ-CUR ! ;
+
+: SZ-GO-HOME-FILE  ( -- )
+   SZ-TBUF SZ-CUR ! ;
+
+: SZ-GO-END-FILE  ( -- )
+   SZ-TEND SZ-CUR ! ;
+
+: SZ-PAGE-UP  ( -- )
+   SZ-TEXT-ROWS 0 DO  SZ-GO-UP  LOOP ;
+
+: SZ-PAGE-DOWN  ( -- )
+   SZ-TEXT-ROWS 0 DO  SZ-GO-DOWN  LOOP ;
+
 \ -----------------------------------------------------------------------------
 \ Save / quit
 \ -----------------------------------------------------------------------------
 
+: SZ-MSG-LINE  ( -- )
+   SZ-TEXT-BOT 2 + SZ-BLANK-ROW
+   0 SZ-TEXT-BOT 2 + AT-XY
+;
+
 : SZ-DO-SAVE  ( -- )
    SZ-HAS-NAME? 0= IF
-      SZ-TEXT-BOT 1+ SZ-BLANK-ROW
-      0 SZ-TEXT-BOT 1+ AT-XY
+      SZ-MSG-LINE
       .( no filename — use SZ-SAVE-AS after quit)
       TERMINAL-REFRESH
       EXIT
    THEN
    SZ-SAVE IF
-      SZ-TEXT-BOT 1+ SZ-BLANK-ROW
-      0 SZ-TEXT-BOT 1+ AT-XY
+      SZ-MSG-LINE
       .( SAVE failed)
       TERMINAL-REFRESH
    ELSE
-      SZ-TEXT-BOT 1+ SZ-BLANK-ROW
-      0 SZ-TEXT-BOT 1+ AT-XY
+      SZ-MSG-LINE
       .( saved )
       SZ-GET-NAME TYPE
       .(  ) SZ-TLEN @ 0 .R .( b)
@@ -141,8 +190,7 @@ VARIABLE SZ-DONE
 
 : SZ-CONFIRM-QUIT  ( -- flag )
    SZ-MODIFIED @ 0= IF  -1 EXIT  THEN
-   SZ-TEXT-BOT 1+ SZ-BLANK-ROW
-   0 SZ-TEXT-BOT 1+ AT-XY
+   SZ-MSG-LINE
    .( Modified! Quit without save? y/N )
    TERMINAL-REFRESH
    KEY
@@ -154,23 +202,28 @@ VARIABLE SZ-DONE
 ;
 
 \ -----------------------------------------------------------------------------
-\ Dispatch — motion and controls first; never insert control codes
+\ Dispatch
 \ -----------------------------------------------------------------------------
 
 : SZ-HANDLE-KEY  ( c -- )
-   \ strip any high bits if host ever sends them
    255 AND
    DUP SZ-CTRL-Q = IF  DROP SZ-DO-QUIT EXIT  THEN
    DUP SZ-CTRL-S = IF  DROP SZ-DO-SAVE EXIT  THEN
-   DUP SZ-CTRL-B = IF  DROP SZ-GO-LEFT EXIT  THEN
-   DUP SZ-CTRL-F = IF  DROP SZ-GO-RIGHT EXIT  THEN
-   DUP SZ-CTRL-P = IF  DROP SZ-GO-UP EXIT  THEN
-   DUP SZ-CTRL-N = IF  DROP SZ-GO-DOWN EXIT  THEN
+   DUP SZ-LEFT = IF  DROP SZ-GO-LEFT EXIT  THEN
+   DUP SZ-RIGHT = IF  DROP SZ-GO-RIGHT EXIT  THEN
+   DUP SZ-UP = IF  DROP SZ-GO-UP EXIT  THEN
+   DUP SZ-DOWN = IF  DROP SZ-GO-DOWN EXIT  THEN
+   DUP SZ-HOME-LINE = IF  DROP SZ-GO-HOME-LINE EXIT  THEN
+   DUP SZ-END-LINE = IF  DROP SZ-GO-END-LINE EXIT  THEN
+   DUP SZ-HOME-FILE = IF  DROP SZ-GO-HOME-FILE EXIT  THEN
+   DUP SZ-END-FILE = IF  DROP SZ-GO-END-FILE EXIT  THEN
+   DUP SZ-PGUP = IF  DROP SZ-PAGE-UP EXIT  THEN
+   DUP SZ-PGDN = IF  DROP SZ-PAGE-DOWN EXIT  THEN
    DUP SZ-BS = IF  DROP SZ-BACKSPACE EXIT  THEN
-   DUP SZ-DEL = IF  DROP SZ-BACKSPACE EXIT  THEN
+   DUP SZ-DEL-FWD = IF  DROP SZ-DELETE-FWD EXIT  THEN
+   DUP SZ-DEL = IF  DROP SZ-DELETE-FWD EXIT  THEN
    DUP SZ-ENTER = IF  DROP SZ-INSERT-CRLF EXIT  THEN
    DUP SZ-LF-KEY = IF  DROP SZ-INSERT-CRLF EXIT  THEN
-   \ printable only
    DUP BL < IF  DROP EXIT  THEN
    DUP 127 < IF  SZ-INSERT-CH EXIT  THEN
    DROP
@@ -185,7 +238,6 @@ VARIABLE SZ-DONE
       SZ-REDRAW
       KEY SZ-HANDLE-KEY
    REPEAT
-   \ Always leave facility mode before any console output / CLS.
    FACILITY-OFF
    CLS
    .( SZ-EDITOR: done) CR
@@ -193,19 +245,9 @@ VARIABLE SZ-DONE
    SZ-.INFO
 ;
 
-: SZ-EDIT  ( -- )  SZ-EDIT-LOOP ;
-
 : SZ-EDIT-FILE  ( c-addr u -- )
    SZ-LOAD IF  .( SZ-EDIT-FILE: load failed) CR EXIT  THEN
-   SZ-EDIT
+   SZ-EDIT-LOOP
 ;
 
-: SZ-EDIT"  ( -- )
-   [CHAR] " PARSE SZ-EDIT-FILE
-;
-
-: SZ-EDIT-SMOKE  ( -- )
-   S" sz-smoke-out.txt" SZ-LOAD
-   IF  .( SZ-EDIT-SMOKE: load a file or run SZ-BUFFER-SMOKE first) CR EXIT  THEN
-   SZ-EDIT
-;
+: SZEDIT  ( -- )  BL WORD COUNT SZ-EDIT-FILE ;

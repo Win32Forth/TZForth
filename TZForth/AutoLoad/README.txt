@@ -15,7 +15,9 @@ Boot (at launch)
 ----------------
 1. If Resources/AutoLoad/autoload.fth is missing → silent; normal REPL.
 2. If present → load/interpret it (no host path banners).
-   During load, cwd is this AutoLoad folder (nested INCLUDED of bare names works).
+   During load, cwd is this AutoLoad folder. Nested FLOAD / INCLUDE of bare
+   names (e.g. FLOAD ANEW.fth) reads siblings from Resources/AutoLoad without
+   a security-scope dialog — the folder is inside the app bundle.
 3. If MAIN is defined → execute MAIN once (silent if MAIN is absent).
 4. Console stays open.
 
@@ -25,8 +27,12 @@ Files in this project folder
 ----------------------------
   autoload.fth          Product boot (optional; omit for pure REPL)
   AutoLoad-Sample.fth   Example MAIN + CATCH pattern (not auto-loaded)
+  ANEW.fth              Classic ANEW reload marker (optional FLOAD from autoload)
   README.txt            This note
   (any other .fth)      Copied into the app; include from autoload.fth as needed
+
+Example in autoload.fth (optional):
+  FLOAD ANEW.fth
 
 Tools menu
 ----------

@@ -1,6 +1,6 @@
 \ autoload.fth — product boot (lowercase name required)
 
-\ .( Hi, this is a demo autoload.fth that does pretty much nothing.) CR
+FLOAD ANEW.fth
 
 \ Required: define MAIN so the host can start the app after load.
 : APP-RUN  ( -- )

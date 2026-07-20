@@ -1001,16 +1001,42 @@ struct ConsoleView: View {
         let savedLogicalCwd = forth.logicalCurrentDirectory
         let savedProcessCwd = FileManager.default.currentDirectoryPath
         defer {
+            forth.logicalCurrentDirectory = savedLogicalCwd
             let restorePath = savedLogicalCwd.isEmpty ? savedProcessCwd : savedLogicalCwd
-            if restorePath != forth.logicalCurrentDirectory {
+            if !restorePath.isEmpty {
+                _ = FileManager.default.changeCurrentDirectoryPath(restorePath)
+            }
+            // Re-activate user bookmark scope only for non-bundle session dirs.
+            if !restorePath.isEmpty, !forth.pathIsInsideAppBundle(restorePath) {
                 activateLastDirectoryScope(parent: URL(fileURLWithPath: restorePath))
             }
+        }
+
+        let preParent = url.deletingLastPathComponent()
+
+        // App-bundle sources (Resources/AutoLoad, Library, docs, …) are always readable by
+        // this process — no security-scoped bookmark. Nested FLOAD from AutoLoad boot must
+        // not demand "bare FLOAD to authorize" for files next to autoload.fth.
+        if forth.pathIsInsideAppBundle(url.path) || forth.pathIsInsideAppBundle(preParent.path) {
+            var target = url
+            let leaf = url.lastPathComponent
+            if let real = realURLForLeaf(leaf, inDirectory: preParent.path) {
+                target = real
+            } else if !leaf.contains(".") {
+                if let realFth = realURLForLeaf(leaf + ".fth", inDirectory: preParent.path) {
+                    target = realFth
+                }
+            }
+            let parent = target.deletingLastPathComponent()
+            forth.logicalCurrentDirectory = parent.path
+            _ = FileManager.default.changeCurrentDirectoryPath(parent.path)
+            let loaded = forth.loadFile(target)
+            return loaded && !forth.errorFlag
         }
 
         // Activate the (bookmarked) dir scope first. This makes subsequent access (including
         // Data for load, and later EDIT handoff) work for files inside the dir.
         // Note: we pass the pre-correction parent for activate's path set (it will use bookmark anyway).
-        let preParent = url.deletingLastPathComponent()
         activateLastDirectoryScope(parent: preParent)
 
         // The URL from the engine was resolved using cwd at the exact time the "fload <name>"

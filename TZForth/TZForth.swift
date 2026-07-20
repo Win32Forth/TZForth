@@ -2113,7 +2113,11 @@ public final class TZForth {
         let msg = "? FLOAD could not read '\(reportURL.lastPathComponent)' (not found or unreadable)"
         self.throwFileNotFound(msg)
         if self.exceptionFrames.isEmpty {
-            tell("  (If the file is in your current directory, type bare `fload` and pick any file in that folder once to authorize it. Then named FLOAD and CHDIR will stick across launches.)\n")
+            if self.pathIsInsideAppBundle(reportURL.path) {
+                tell("  (Path is inside the app bundle. Check the filename and that the file was copied into Resources/AutoLoad or Library at build time.)\n")
+            } else {
+                tell("  (If the file is in your current directory, type bare `fload` and pick any file in that folder once to authorize it. Then named FLOAD and CHDIR will stick across launches.)\n")
+            }
         }
         return false
     }

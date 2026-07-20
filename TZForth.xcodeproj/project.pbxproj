@@ -15,13 +15,14 @@
 			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
 			membershipExceptions = (
 				"ANS-VALIDATE.txt",
+				"AutoLoad/ANEW.fth",
 				"AutoLoad/AutoLoad-Sample.fth",
 				AutoLoad/autoload.fth,
 				AutoLoad/README.txt,
-				"Docs/ANS_COMPLIANCE.rtf",
+				Docs/ANS_COMPLIANCE.rtf,
 				Docs/README.rtf,
 				Docs/README.txt,
-				"Docs/THROW_CODES.rtf",
+				Docs/THROW_CODES.rtf,
 				"Library/bi-test.fth",
 				"Library/big-int.fth",
 				Library/HayesTest.fth,
@@ -231,27 +232,6 @@
 			shellPath = /bin/sh;
 			shellScript = "set -e\nSRC=\"${SRCROOT}/TZForth/AutoLoad\"\nDEST=\"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/AutoLoad\"\n# Copy everything in TZForth/AutoLoad → Contents/Resources/AutoLoad/\n# (ENABLE_USER_SCRIPT_SANDBOXING is OFF so the whole folder is readable.)\nrm -rf \"${DEST}\"\nmkdir -p \"${DEST}\"\nif [ -d \"${SRC}\" ]; then\n  # Files only at top level; skip junk; preserve names (autoload.fth must be exact for boot).\n  for f in \"${SRC}\"/* \"${SRC}\"/.[!.]* \"${SRC}\"/..?*; do\n    [ -e \"$f\" ] || continue\n    base=$(basename \"$f\")\n    case \"$base\" in\n      .DS_Store|*.swp|*~) continue ;;\n    esac\n    if [ -f \"$f\" ]; then\n      cp -f \"$f\" \"${DEST}/\"\n    elif [ -d \"$f\" ]; then\n      cp -R \"$f\" \"${DEST}/\"\n    fi\n  done\nfi\n";
 		};
-		29A09F22 /* Copy Docs */ = {
-			isa = PBXShellScriptBuildPhase;
-			alwaysOutOfDate = 1;
-			buildActionMask = 2147483647;
-			files = (
-			);
-			inputFileListPaths = (
-			);
-			inputPaths = (
-				"$(SRCROOT)/TZForth/Docs",
-			);
-			name = "Copy Docs";
-			outputFileListPaths = (
-			);
-			outputPaths = (
-				"$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/docs",
-			);
-			runOnlyForDeploymentPostprocessing = 0;
-			shellPath = /bin/sh;
-			shellScript = "set -e\nSRC=\"${SRCROOT}/TZForth/Docs\"\nDEST=\"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/docs\"\nrm -rf \"${DEST}\"\nmkdir -p \"${DEST}\"\nif [ -d \"${SRC}\" ]; then\n  for f in \"${SRC}\"/* \"${SRC}\"/.[!.]* \"${SRC}\"/..?*; do\n    [ -e \"$f\" ] || continue\n    base=$(basename \"$f\")\n    case \"$base\" in\n      .DS_Store|*.swp|*~) continue ;;\n    esac\n    if [ -f \"$f\" ]; then\n      cp -f \"$f\" \"${DEST}/\"\n    elif [ -d \"$f\" ]; then\n      cp -R \"$f\" \"${DEST}/\"\n    fi\n  done\nfi\n";
-		};
 		29A09F21 /* Copy Library */ = {
 			isa = PBXShellScriptBuildPhase;
 			alwaysOutOfDate = 1;
@@ -272,6 +252,27 @@
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
 			shellScript = "set -e\nSRC=\"${SRCROOT}/TZForth/Library\"\nDEST=\"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/Library\"\nrm -rf \"${DEST}\"\nmkdir -p \"${DEST}\"\nif [ -d \"${SRC}\" ]; then\n  for f in \"${SRC}\"/* \"${SRC}\"/.[!.]* \"${SRC}\"/..?*; do\n    [ -e \"$f\" ] || continue\n    base=$(basename \"$f\")\n    case \"$base\" in\n      .DS_Store|*.swp|*~) continue ;;\n    esac\n    if [ -f \"$f\" ]; then\n      cp -f \"$f\" \"${DEST}/\"\n    elif [ -d \"$f\" ]; then\n      cp -R \"$f\" \"${DEST}/\"\n    fi\n  done\nfi\n";
+		};
+		29A09F22 /* Copy Docs */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+				"$(SRCROOT)/TZForth/Docs",
+			);
+			name = "Copy Docs";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+				"$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/docs",
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "set -e\nSRC=\"${SRCROOT}/TZForth/Docs\"\nDEST=\"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/docs\"\nrm -rf \"${DEST}\"\nmkdir -p \"${DEST}\"\nif [ -d \"${SRC}\" ]; then\n  for f in \"${SRC}\"/* \"${SRC}\"/.[!.]* \"${SRC}\"/..?*; do\n    [ -e \"$f\" ] || continue\n    base=$(basename \"$f\")\n    case \"$base\" in\n      .DS_Store|*.swp|*~) continue ;;\n    esac\n    if [ -f \"$f\" ]; then\n      cp -f \"$f\" \"${DEST}/\"\n    elif [ -d \"$f\" ]; then\n      cp -R \"$f\" \"${DEST}/\"\n    fi\n  done\nfi\n";
 		};
 /* End PBXShellScriptBuildPhase section */
 
@@ -419,7 +420,7 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 4;
+				CURRENT_PROJECT_VERSION = 5;
 				DEAD_CODE_STRIPPING = YES;
 				DEVELOPMENT_TEAM = X5YCJL3LJ8;
 				ENABLE_APP_SANDBOX = YES;
@@ -436,7 +437,7 @@
 					"@executable_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 26.6;
-				MARKETING_VERSION = 1.1.1;
+				MARKETING_VERSION = 1.1.2;
 				PRODUCT_BUNDLE_IDENTIFIER = TZForth.TZForth;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				REGISTER_APP_GROUPS = YES;
@@ -459,7 +460,7 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 4;
+				CURRENT_PROJECT_VERSION = 5;
 				DEAD_CODE_STRIPPING = YES;
 				DEVELOPMENT_TEAM = X5YCJL3LJ8;
 				ENABLE_APP_SANDBOX = YES;
@@ -476,7 +477,7 @@
 					"@executable_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 26.6;
-				MARKETING_VERSION = 1.1.1;
+				MARKETING_VERSION = 1.1.2;
 				PRODUCT_BUNDLE_IDENTIFIER = TZForth.TZForth;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				REGISTER_APP_GROUPS = YES;

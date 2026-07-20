@@ -39,7 +39,7 @@ The REPL console is fully working (see TZForth/ConsoleView.swift + TZForth.swift
 - Classic load semantics (shared by `FLOAD`, `INCLUDE`, `INCLUDE-FILE`): `FILE-ECHO ON` at top of a file takes effect for that load; `\S` aborts remainder of *that* file only; compile errors mid-load abort the rest of the file and leave REPL clean/interpreting; no per-line OK spam during loads.
 - **Exception handling:** kernel faults are **CATCH-able** (standard ANS throw codes). **`.ERROR`** prints a spaced message for a code on the stack. Named **`fload`** completes synchronously so you can write `: safe-fload  ['] fload catch ?dup if  ." load failed:" .error  else  drop  then ;` — see **`THROW_CODES.md`** for the full code map.
 
-Automated tests (`FTEST=1`; see `TestTZForth.swift` header) cover load/comment harnesses plus **430** ANS spot-checks (Core, Core Ext, File-Access, String, **Facility** (structures, terminal, `EKEY*`/`MS`/`TIME&DATE`), Exception, Memory, Double, Locals, Programming-Tools (**CODE**/`;CODE`/`RET`), **Extended-Character** (UTF-8), **Float** Tier A/B/C (IEEE 64-bit separate F stack, `REPRESENT`, `FS.`/`FE.`), **Block** + TZ `.blk` extensions, etc.). In-app: **`ANS-VALIDATE`** (same core suite, **427/427**; writes `ANS-VALIDATE.txt` to logical cwd when writable, otherwise **`Application Support/TZForth/ANS-VALIDATE.txt`** if cwd is inside the app bundle — console prints the full path; tracked baseline: `TZForth/ANS-VALIDATE.txt`). After `ANS-VALIDATE` or `fload test`, the REPL restores dictionary and interpret-session state so normal commands still print **`OK`**. Hayes **forth2012-test-suite** (Block + Float `fp/` included): **0 errors** on all executed word sets — preferred in-app run: **`FROMLIB FLOAD HayesTest.fth`** (ships as `Resources/Library/HayesTest.fth` → `HayesTest/src/test.fth`); baseline transcript: `TZForth/Library/HayesTest/src/HAYES-RESULTS.txt`. Details: **`ANS_COMPLIANCE.md`**.
+Automated tests (`FTEST=1`; see `TestTZForth.swift` header) cover load/comment harnesses plus **430** ANS spot-checks (Core, Core Ext, File-Access, String, **Facility** (structures, terminal, `EKEY*`/`MS`/`TIME&DATE`), Exception, Memory, Double, Locals, Programming-Tools (**CODE**/`;CODE`/`RET`), **Extended-Character** (UTF-8), **Float** Tier A/B/C (IEEE 64-bit separate F stack, `REPRESENT`, `FS.`/`FE.`), **Block** + TZ `.blk` extensions, etc.). In-app: **`ANS-VALIDATE`** (same core suite, **427/427**; writes `ANS-VALIDATE.txt` to logical cwd when writable, otherwise **`Application Support/TZForth/ANS-VALIDATE.txt`** if cwd is inside the app bundle — console prints the full path; tracked baseline: `TZForth/ANS-VALIDATE.txt`). After `ANS-VALIDATE` or `fload test`, the REPL restores dictionary and interpret-session state so normal commands still print **`OK`**. Hayes **forth2012-test-suite** (Block + Float `fp/` included): **0 errors** on all executed word sets — preferred in-app run: **`FROMLIB FLOAD HayesTest/HayesTest.fth`** (ships as `Resources/Library/HayesTest/HayesTest.fth` → `HayesTest/src/test.fth`); baseline transcript: `TZForth/Library/HayesTest/src/HAYES-RESULTS.txt`. Details: **`ANS_COMPLIANCE.md`**.
 
 ## Sandbox and FLOAD (important for loading your own Forthing.fth etc.)
 
@@ -245,7 +245,7 @@ This is **implementation-defined host policy**, not an ANS word and **not** a di
 **What to expect**
 
 ```forth
-FROMLIB FLOAD HayesTest.fth
+FROMLIB FLOAD HayesTest/HayesTest.fth
 \ During filetest, S" fatest1.txt" CREATE-FILE does *not* write into
 \ Resources/Library/HayesTest/src/ — it creates Application Support/TZForth/fatest1.txt
 ```
@@ -275,7 +275,7 @@ TZForth includes an optional **`BIG-INTEGER`** vocabulary for base-10⁹ multipr
 | **`Library/PI/pi-test.fth`** | Demo π to 20/50/100 (recorded results in file) |
 | **`Library/BigInteger/bi-test.fth`** | Unit tests for big-int (+ π smoke) |
 | **`Library/Editor/`** | SZ-EDITOR port (`SZ-EDITOR.fth` + `sz-*.fth`) |
-| **`Library/HayesTest.fth`** + **`HayesTest/`** | John Hayes forth2012 full suite (Block + Float) |
+| **`Library/HayesTest/HayesTest.fth`** + suite tree | John Hayes forth2012 full suite (Block + Float) |
 | **`STEP-LIMIT`** | Inner-interpreter step budget; demos set `0` for large π |
 
 ```forth
@@ -284,7 +284,7 @@ ALSO BIG-INTEGER
 FROMLIB FLOAD PI/pi-test.fth              \ demo
 FROMLIB FLOAD BigInteger/bi-test.fth      \ unit tests
 FROMLIB FLOAD Editor/SZ-EDITOR.fth        \ text editor
-FROMLIB FLOAD HayesTest.fth               \ full ANS Hayes suite (long run)
+FROMLIB FLOAD HayesTest/HayesTest.fth     \ full ANS Hayes suite (long run)
 ```
 
 Layout and word list: header of **`TZForth/Library/BigInteger/big-int.fth`**.

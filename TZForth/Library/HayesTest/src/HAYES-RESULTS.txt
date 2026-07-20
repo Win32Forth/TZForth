@@ -1,7 +1,7 @@
 
  Running ANS Forth tests for TZForth 
 ( Hayes forth2012 + FP suite — TZForth 3508bd4 — 2026-07-15 — 0 T{ errors; paranoia END OF TEST )
-( Reproduce: TZForth app → FROMLIB FLOAD HayesTest.fth )
+( Reproduce: TZForth app → FROMLIB FLOAD HayesTest/HayesTest.fth )
 ( Block volume: Application Support/TZForth/hayes-blocks.blk — not bundle Resources )
 ( Pass: all per-suite #ERRORS @ = 0; summary FPERRORS/#ERRORS = 0; ends File-echo on, \s, OK )
 OK

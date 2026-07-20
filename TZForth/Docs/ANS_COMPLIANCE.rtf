@@ -188,7 +188,7 @@ Unhandled `THROW` with no active `CATCH`: `-1` \uc0\u8594  print `Aborted!`, res
 \
 FTEST / `ANS-VALIDATE` cover `ABORT`/`ABORT"` with and without `CATCH`, standard kernel codes, compile `STATE` preservation, file faults, nested `CATCH`, `['] fload catch` (safe-fload), mid-file `INCLUDE-FILE`, user **-40**, and `.ERROR` for file codes. Colon definitions that compile `CATCH` then `>R` (Hayes `exceptiontest` `C6`) resume correctly after `EXIT` and nested `deliverThrow`.\
 \
-John Hayes **forth2012-test-suite** (Block + Float `fp/` included): **0 errors** on all executed word sets (Block SAVE-INPUT/RESTORE/REFILL, EMPTY-BUFFERS, pictured-string `TCSIRIR2`/`TCSIRIR4`, REFILL spill, FP paranoia **END OF TEST** all pass). **Canonical run:** TZForth app \uc0\u8594  **`FROMLIB FLOAD HayesTest.fth`** (bundled `Resources/Library/HayesTest.fth` \u8594  `HayesTest/src/test.fth`). CLI `HAYES=1 swift /tmp/combined.swift` runs a smaller non-FP subset only. Results: **`TZForth/Library/HayesTest/src/HAYES-RESULTS.txt`**.\
+John Hayes **forth2012-test-suite** (Block + Float `fp/` included): **0 errors** on all executed word sets (Block SAVE-INPUT/RESTORE/REFILL, EMPTY-BUFFERS, pictured-string `TCSIRIR2`/`TCSIRIR4`, REFILL spill, FP paranoia **END OF TEST** all pass). **Canonical run:** TZForth app \uc0\u8594  **`FROMLIB FLOAD HayesTest/HayesTest.fth`** (bundled `Resources/Library/HayesTest/HayesTest.fth` \u8594  `HayesTest/src/test.fth`). CLI `HAYES=1 swift /tmp/combined.swift` runs a smaller non-FP subset only. Results: **`TZForth/Library/HayesTest/src/HAYES-RESULTS.txt`**.\
 \
 ## Block (10) \'97 Implemented (file-backed `.blk`)\
 \
@@ -421,6 +421,6 @@ Not implemented (no current plan unless requested):\
 ## Recommendations\
 \
 - TZForth is ready for distribution packaging: classic Forth sources, REPL, sandboxed `FLOAD`/`EDIT`/`CHDIR`, Hayes forth2012 validation (**0 errors**, Block + Float `fp/` via `test.fth`), FTEST **430/430**, in-app `ANS-VALIDATE` **427/427**, file-backed Block (`.blk`), UTF-8 Extended-Character, minimal threaded `CODE`, Float Tier A/B/C, and ANS File-Access file I/O / `INCLUDED`.\
-- Hayes reproduction: **`FROMLIB FLOAD HayesTest.fth`**; transcript baseline **`TZForth/Library/HayesTest/src/HAYES-RESULTS.txt`**.\
+- Hayes reproduction: **`FROMLIB FLOAD HayesTest/HayesTest.fth`**; transcript baseline **`TZForth/Library/HayesTest/src/HAYES-RESULTS.txt`**.\
 \
 For full standard details, see the official 2012 ANS Forth document (sections 6.1, 6.2, and optional word sets in chapters 7\'9618).}

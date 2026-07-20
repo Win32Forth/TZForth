@@ -7,13 +7,15 @@ This suite ships inside the TZForth app as:
 
 ```text
 YourApp.app/Contents/Resources/Library/HayesTest/   (this tree)
-YourApp.app/Contents/Resources/Library/HayesTest.fth
+  HayesTest.fth   suite driver
+  src/            suite sources
+  doc/            docs
 ```
 
 **In-app run (preferred):**
 
 ```forth
-FROMLIB FLOAD HayesTest.fth
+FROMLIB FLOAD HayesTest/HayesTest.fth
 ```
 
 That:

@@ -12,8 +12,7 @@ Layout
   Editor/             SZ-EDITOR port (SZ-EDITOR.fth + sz-*.fth)
   BigInteger/         Multiprecision integers (big-int.fth, bi-test.fth)
   PI/                 High-precision π (pi-chudnovsky.fth, pi-test.fth)
-  HayesTest.fth       John Hayes forth2012 full suite driver
-  HayesTest/          Suite sources (src/), docs (doc/), README.md
+  HayesTest/          Hayes suite driver + sources (src/), docs (doc/)
   README.txt          This note
 
 Usage
@@ -24,12 +23,13 @@ Usage
   FROMLIB FLOAD PI/pi-test.fth              \ full π demo
   FROMLIB FLOAD BigInteger/bi-test.fth      \ unit tests
   FROMLIB FLOAD Editor/SZ-EDITOR.fth        \ text editor
-  FROMLIB FLOAD HayesTest.fth               \ full Hayes ANS suite
+  FROMLIB FLOAD HayesTest/HayesTest.fth     \ full Hayes ANS suite
   FROMLIB EDIT PI/pi-test.fth               \ open library file in TextEdit
   FROMLIB DIR                               \ list Resources/Library
   FROMLIB DIR Editor                        \ list editor modules
   FROMLIB DIR BigInteger
   FROMLIB DIR PI
+  FROMLIB DIR HayesTest
   FROMLIB DIR HayesTest/src
 
   VIEW-LIBRARY                              \ Finder on Resources/Library

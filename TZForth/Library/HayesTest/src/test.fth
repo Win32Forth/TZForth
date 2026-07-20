@@ -1,7 +1,7 @@
 \ TZForth Hayes / forth2012-test-suite driver (full word sets + fp/ suite).
 \
 \ Preferred (app-bundled Library — no CHDIR required):
-\   FROMLIB FLOAD HayesTest.fth
+\   FROMLIB FLOAD HayesTest/HayesTest.fth
 \     → loads this file via Resources/Library/HayesTest/src/test.fth
 \
 \ Manual (cwd = this folder):

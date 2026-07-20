@@ -2,9 +2,9 @@
 \ bi-test.fth — BIG-INTEGER unit tests for TZForth (not ANS / not Hayes)
 \ =============================================================================
 \
-\ Run:  FROMLIB FLOAD bi-test.fth
+\ Run:  FROMLIB FLOAD BigInteger/bi-test.fth
 \
-\ Loads big-int and pi-chudnovsky via FROMLIB from Resources/Library.
+\ Loads BigInteger/big-int and PI/pi-chudnovsky via FROMLIB from Resources/Library.
 \ Leaves search order as ONLY FORTH ALSO DEFINITIONS.
 \ =============================================================================
 
@@ -26,7 +26,7 @@ VARIABLE #BI-FAIL
 
 \ ---- load library ------------------------------------------------------------
 
-FROMLIB REQUIRE big-int.fth
+FROMLIB REQUIRE BigInteger/big-int.fth
 ALSO BIG-INTEGER
 
 .( === BIG-INTEGER unit tests ===) CR
@@ -123,7 +123,7 @@ C @ BI-SGN -1 =  S" BI* sign" BI-ASSERT
 
 \ π to 20 places (loads Chudnovsky)
 .( --- pi 20 places ---) CR
-FROMLIB REQUIRE pi-chudnovsky.fth
+FROMLIB REQUIRE PI/pi-chudnovsky.fth
 0 STEP-LIMIT !
 20 PI. CR
 \ Cannot easily capture TYPE output; smoke-test only that PI. completed.

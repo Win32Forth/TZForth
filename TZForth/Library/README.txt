@@ -7,38 +7,45 @@ At build time this folder is copied to:
 
   YourApp.app/Contents/Resources/Library/
 
-Modules (current)
------------------
-  big-int.fth         Multiprecision integers (BIG-INTEGER vocabulary)
-  pi-chudnovsky.fth   High-precision π (needs big-int + ALSO BIG-INTEGER)
-  pi-test.fth         Demo: π to 20/50/100 places
-  bi-test.fth         Unit tests for big-int + π smoke test
+Layout
+------
+  Editor/             SZ-EDITOR port (SZ-EDITOR.fth + sz-*.fth)
+  BigInteger/         Multiprecision integers (big-int.fth, bi-test.fth)
+  PI/                 High-precision π (pi-chudnovsky.fth, pi-test.fth)
   HayesTest.fth       John Hayes forth2012 full suite driver
   HayesTest/          Suite sources (src/), docs (doc/), README.md
-                      (prepare-blocks.fth → writable App Support .blk)
   README.txt          This note
 
 Usage
 -----
-  FROMLIB FLOAD big-int.fth
+  FROMLIB FLOAD BigInteger/big-int.fth
   ALSO BIG-INTEGER
 
-  FROMLIB FLOAD pi-test.fth     \ full π demo
-  FROMLIB FLOAD bi-test.fth     \ unit tests
-  FROMLIB FLOAD HayesTest.fth   \ full Hayes ANS suite (Block + Float)
-  FROMLIB EDIT pi-test.fth      \ open library file in TextEdit
-  FROMLIB DIR                   \ list Resources/Library
-  FROMLIB DIR *.fth             \ filtered list
-  FROMLIB DIR HayesTest/src     \ list Hayes sources
+  FROMLIB FLOAD PI/pi-test.fth              \ full π demo
+  FROMLIB FLOAD BigInteger/bi-test.fth      \ unit tests
+  FROMLIB FLOAD Editor/SZ-EDITOR.fth        \ text editor
+  FROMLIB FLOAD HayesTest.fth               \ full Hayes ANS suite
+  FROMLIB EDIT PI/pi-test.fth               \ open library file in TextEdit
+  FROMLIB DIR                               \ list Resources/Library
+  FROMLIB DIR Editor                        \ list editor modules
+  FROMLIB DIR BigInteger
+  FROMLIB DIR PI
+  FROMLIB DIR HayesTest/src
 
-  VIEW-LIBRARY                  \ Finder on Resources/Library
+  VIEW-LIBRARY                              \ Finder on Resources/Library
   Tools → LIBRARY → VIEW Library Folder
 
 In a *file*, multi-line is allowed:
   FROMLIB
-  FLOAD big-int.fth
+  FLOAD BigInteger/big-int.fth
 
 In the *console*, keep FROMLIB on the same line as the load/EDIT/DIR word.
+
+Nested FLOAD / REQUIRE paths are relative to Resources/Library/ (not the
+subfolder of the file that is currently loading). Example from pi-test.fth:
+
+  FROMLIB REQUIRE BigInteger/big-int.fth
+  FROMLIB REQUIRE PI/pi-chudnovsky.fth
 
 Read-only bundle / writable data
 --------------------------------

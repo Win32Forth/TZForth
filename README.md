@@ -22,8 +22,8 @@ This project aims to bring the powerful, traditional Forth kernel sources into a
   - `TZForth.swift` — core kernel and interpreter
   - `TZForthBlock.swift`, `TZForthXChar.swift`, `TZForthAssembler.swift`, `TZForthFloat.swift` — optional word-set extensions
   - `TZForthTests.swift`, `TestTZForth.swift` — `ANS-VALIDATE` / FTEST harness
-  - `AutoLoad/` — product boot + SZ-EDITOR (copied into Resources/AutoLoad)
-  - `Library/` — FROMLIB library sources (copied into Resources/Library)
+  - `AutoLoad/` — product boot + ANEW (copied into Resources/AutoLoad)
+  - `Library/` — FROMLIB modules: `Editor/`, `BigInteger/`, `PI/`, `HayesTest/` (Resources/Library)
   - `Docs/` — bundled documentation (copied into Resources/docs)
   - `Legacy/` — original Small Zimmer Editor (read-only reference; Resources/Legacy)
 
@@ -192,16 +192,19 @@ When a file word starts (**`FLOAD` / `INCLUDE` / `INCLUDED` / `REQUIRE` / `REQUI
 
 ```forth
 FROMLIB
-FLOAD big-int.fth
+FLOAD BigInteger/big-int.fth
 ```
 
 **In the console**, put them on one line:
 
 ```forth
-FROMLIB FLOAD big-int.fth
-FROMLIB EDIT pi-test.fth
+FROMLIB FLOAD BigInteger/big-int.fth
+FROMLIB FLOAD Editor/SZ-EDITOR.fth
+FROMLIB EDIT PI/pi-test.fth
 FROMLIB DIR
-FROMLIB DIR *.fth
+FROMLIB DIR Editor
+FROMLIB DIR BigInteger
+FROMLIB DIR PI
 FROMLIB CHDIR            \ picker at Library; cancel = keep cwd, pick = adopt folder
 FROMLIB CHDIR .          \ permanently enter Resources/Library
 ```
@@ -267,22 +270,24 @@ TZForth includes an optional **`BIG-INTEGER`** vocabulary for base-10⁹ multipr
 | Piece | Role |
 |--------|------|
 | Vocabulary **`BIG-INTEGER`** | Kernel vocab; host **`BI-MUL`**, **`BI-DIVMOD`**, **`BI-ISQRT`** |
-| **`Library/big-int.fth`** | Full library (alloc, add/sub, `BI*`, print, …) |
-| **`Library/pi-chudnovsky.fth`** | Chudnovsky π |
-| **`Library/pi-test.fth`** | Demo π to 20/50/100 (recorded results in file) |
-| **`Library/bi-test.fth`** | Unit tests for big-int (+ π smoke) |
+| **`Library/BigInteger/big-int.fth`** | Full library (alloc, add/sub, `BI*`, print, …) |
+| **`Library/PI/pi-chudnovsky.fth`** | Chudnovsky π |
+| **`Library/PI/pi-test.fth`** | Demo π to 20/50/100 (recorded results in file) |
+| **`Library/BigInteger/bi-test.fth`** | Unit tests for big-int (+ π smoke) |
+| **`Library/Editor/`** | SZ-EDITOR port (`SZ-EDITOR.fth` + `sz-*.fth`) |
 | **`Library/HayesTest.fth`** + **`HayesTest/`** | John Hayes forth2012 full suite (Block + Float) |
 | **`STEP-LIMIT`** | Inner-interpreter step budget; demos set `0` for large π |
 
 ```forth
-FROMLIB FLOAD big-int.fth
+FROMLIB FLOAD BigInteger/big-int.fth
 ALSO BIG-INTEGER
-FROMLIB FLOAD pi-test.fth     \ demo
-FROMLIB FLOAD bi-test.fth     \ unit tests
-FROMLIB FLOAD HayesTest.fth   \ full ANS Hayes suite (long run)
+FROMLIB FLOAD PI/pi-test.fth              \ demo
+FROMLIB FLOAD BigInteger/bi-test.fth      \ unit tests
+FROMLIB FLOAD Editor/SZ-EDITOR.fth        \ text editor
+FROMLIB FLOAD HayesTest.fth               \ full ANS Hayes suite (long run)
 ```
 
-Layout and word list: header of **`TZForth/Library/big-int.fth`**.
+Layout and word list: header of **`TZForth/Library/BigInteger/big-int.fth`**.
 
 ## License / Attribution
 

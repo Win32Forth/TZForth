@@ -15,6 +15,13 @@ SmallZimmerEditor.fth
   Kept for reference while porting to TZForth as SZ-EDITOR.
 
   DO NOT MODIFY this file for the port — work only in the new SZ-* modules
-  under TZForth/AutoLoad/ (later Library/).
+  under TZForth/Library/Editor/.
 
-The active editor is TZForth/AutoLoad/SZ-EDITOR.fth (and sz-*.fth modules).
+The active editor is:
+
+  TZForth/Library/Editor/SZ-EDITOR.fth
+  (and sibling sz-host / sz-buffer / sz-screen / sz-edit modules)
+
+Load at runtime:
+
+  FROMLIB FLOAD Editor/SZ-EDITOR.fth

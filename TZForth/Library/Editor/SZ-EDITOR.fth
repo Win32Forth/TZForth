@@ -3,9 +3,8 @@
 \ Phases 1-4: host, buffer, mono screen, minimal interactive edit.
 \ Reference (read-only): Legacy/SmallZimmerEditor.fth
 \
-\ Load:
-\   FLOAD ANEW.fth
-\   FLOAD SZ-EDITOR.fth
+\ Load (from Resources/Library):
+\   FROMLIB FLOAD Editor/SZ-EDITOR.fth
 \
 \ Try:
 \   SZ-HOST-SMOKE
@@ -16,13 +15,15 @@
 \
 \ Keys in editor: ^S save  ^Q quit  ^B^F left/right  ^P^N up/down
 \                 type to insert  Enter newline  BS delete
+\
+\ Nested modules are under Editor/ relative to Library (FROMLIB cwd).
 
 ANEW SZ-EDITOR
 
-FLOAD sz-host.fth
-FLOAD sz-buffer.fth
-FLOAD sz-screen.fth
-FLOAD sz-edit.fth
+FLOAD Editor/sz-host.fth
+FLOAD Editor/sz-buffer.fth
+FLOAD Editor/sz-screen.fth
+FLOAD Editor/sz-edit.fth
 
 : SZ-BANNER  ( -- )
    CR

@@ -2,7 +2,7 @@
 \ pi-chudnovsky.fth — High-precision π via the Chudnovsky algorithm
 \ =============================================================================
 \
-\ Requires: big-int.fth (BIG-INTEGER vocabulary; ALSO BIG-INTEGER before use)
+\ Requires: BigInteger/big-int.fth (BIG-INTEGER vocabulary; ALSO BIG-INTEGER before use)
 \
 \ Formula (Chudnovsky series, fixed-point integer form):
 \
@@ -22,12 +22,12 @@
 \   N = prec/14 + 10  is ample.
 \
 \ Usage:
-\   FROMLIB FLOAD big-int.fth
+\   FROMLIB FLOAD BigInteger/big-int.fth
 \   ALSO BIG-INTEGER
-\   FROMLIB FLOAD pi-chudnovsky.fth
+\   FROMLIB FLOAD PI/pi-chudnovsky.fth
 \   100 PI.          \ print π to 100 decimal places
 \
-\ Or:  FROMLIB FLOAD pi-test.fth
+\ Or:  FROMLIB FLOAD PI/pi-test.fth
 \
 \ =============================================================================
 

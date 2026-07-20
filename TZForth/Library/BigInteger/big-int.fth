@@ -23,7 +23,7 @@
 \ by the host path.
 \
 \ Load via FROMLIB (Resources/Library):
-\   FROMLIB FLOAD big-int.fth
+\   FROMLIB FLOAD BigInteger/big-int.fth
 \ Use:  ALSO BIG-INTEGER   (or execute BIG-INTEGER) so BI words are visible.
 \       ONLY FORTH ALSO BIG-INTEGER WORDS   — list this word set only
 \
@@ -32,9 +32,10 @@
 \   end:   ONLY FORTH ALSO DEFINITIONS
 \
 \ Demos:
-\   FROMLIB FLOAD pi-test.fth  — π demo 20/50/100
-\   FROMLIB FLOAD bi-test.fth  — unit tests
+\   FROMLIB FLOAD PI/pi-test.fth           — π demo 20/50/100
+\   FROMLIB FLOAD BigInteger/bi-test.fth   — unit tests
 \   
+
 \
 \ Word set (summary)
 \   Layout / alloc:  BI-CAP BI-LEN BI-LEN! BI-SGN BI-SGN! BI-DATA BI-LIMB

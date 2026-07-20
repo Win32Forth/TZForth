@@ -1,6 +1,11 @@
 SZ-EDITOR — TZForth port of Small Zimmer's Editor
 =================================================
 
+Location
+--------
+  Project:  TZForth/Library/Editor/
+  Runtime:  Resources/Library/Editor/  (via Copy Library)
+
 Status
 ------
   Phase 0  Scaffolding                 done
@@ -22,17 +27,17 @@ Reference: Legacy/SmallZimmerEditor.fth — DO NOT MODIFY
 
 How to load
 -----------
-  FLOAD ANEW.fth
-  FLOAD SZ-EDITOR.fth     \ full path to Resources/AutoLoad if needed
+  FROMLIB FLOAD Editor/SZ-EDITOR.fth
 
-  Reload after source edits: FLOAD SZ-EDITOR.fth again
+  (ANEW is optional if already loaded at boot via AutoLoad/autoload.fth.)
+  Reload after source edits: FROMLIB FLOAD Editor/SZ-EDITOR.fth again
 
 Quick test
 ----------
   CHDIR to a writable folder if needed, then:
   SZ-BUFFER-SMOKE
   SZ-EDIT-SMOKE
-    - type text, move with Ctrl-B/F/P/N
+    - type text, move with Ctrl-B/F/P/N or arrows
     - Ctrl-S save, Ctrl-Q quit
 
   Or:

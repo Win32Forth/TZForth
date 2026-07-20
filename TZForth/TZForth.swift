@@ -1128,7 +1128,7 @@ public final class TZForth {
 
         // Library (Resources/Library; FROMLIB + existing FLOAD/INCLUDE/REQUIRE)
         ("FROM-LIBRARY","( -- addr )",    "variable: if non-zero, next FLOAD/INCLUDE/REQUIRE/EDIT/DIR/CHDIR uses Resources/Library"),
-        ("FROMLIB", "( -- )",             "set FROM-LIBRARY; next FLOAD/INCLUDE/REQUIRE/EDIT/DIR/CHDIR uses Resources/Library"),
+        ("FROMLIB", "( -- )",             "set FROM-LIBRARY; next FLOAD/INCLUDE/REQUIRE/EDIT/DIR/CHDIR/OPEN-FILE uses Resources/Library"),
         ("VIEW-LIBRARY","( -- )",         "open Contents/Resources/Library in Finder"),
 
         // BIG-INTEGER vocabulary (TZForth host multiprecision; not ANS — see lib/big-int.fth)
@@ -2316,7 +2316,7 @@ public final class TZForth {
         guard self.loadNesting == 0, self.evaluateNesting == 0 else { return }
         guard self.isFromLibraryFlagSet() else { return }
         self.clearFromLibraryFlag()
-        self.tell("? FROMLIB: use on the same line as FLOAD/INCLUDE/REQUIRE/EDIT/DIR/CHDIR (console)\n")
+        self.tell("? FROMLIB: use on the same line as FLOAD/INCLUDE/REQUIRE/EDIT/DIR/CHDIR/OPEN-FILE (console)\n")
     }
 
     /// Push a 64-bit file offset as a double-cell (high = 0).
@@ -8472,7 +8472,16 @@ public final class TZForth {
             let fam = self.pop()
             let u = Int(self.pop())
             let caddr = Int(self.pop())
-            let url = self.pathURLFromCounted(caddr, u)
+            let spec = self.stringFromAddr(caddr, u)
+            // Honor FROMLIB (e.g. FROMLIB SZEDIT Editor/SZ-EDITOR-README.txt → OPEN-FILE under Library).
+            let frame = self.beginFromLibraryLoad(forNormalizedSpec: spec)
+            defer { self.endFromLibraryLoad(frame) }
+            let resolved = self.resolvedURL(for: spec)
+            // R/O may open real bundle Library sources. Write-capable fams still remap
+            // bundle targets to Application Support (read-only package policy).
+            let url = self.famAllowsWrite(fam)
+                ? self.writableScratchURL(preferred: resolved)
+                : resolved
             let (fid, ior) = self.openFileAtPath(url.path, fam: fam, create: false)
             self.push(fid)
             self.push(ior)
@@ -8482,7 +8491,11 @@ public final class TZForth {
             let fam = self.pop()
             let u = Int(self.pop())
             let caddr = Int(self.pop())
-            let url = self.pathURLFromCounted(caddr, u)
+            let spec = self.stringFromAddr(caddr, u)
+            let frame = self.beginFromLibraryLoad(forNormalizedSpec: spec)
+            defer { self.endFromLibraryLoad(frame) }
+            // CREATE always uses writableScratch when the resolve would hit the bundle.
+            let url = self.writableScratchURL(preferred: self.resolvedURL(for: spec))
             let (fid, ior) = self.openFileAtPath(url.path, fam: fam, create: true)
             self.push(fid)
             self.push(ior)

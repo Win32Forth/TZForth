@@ -175,15 +175,16 @@ YourApp.app/Contents/Resources/Library/
 | **`FROM-LIBRARY`** | Variable; `ON` / `OFF` or set by `FROMLIB` |
 | **`VIEW-LIBRARY`** | Open `Resources/Library` in Finder |
 
-When a file word starts (**`FLOAD` / `INCLUDE` / `INCLUDED` / `REQUIRE` / `REQUIRED` / `EDIT` / `DIR` / `CHDIR`**):
+When a file word starts (**`FLOAD` / `INCLUDE` / `INCLUDED` / `REQUIRE` / `REQUIRED` / `EDIT` / `DIR` / `CHDIR` / `OPEN-FILE` / `CREATE-FILE`**):
 
 1. If **`FROM-LIBRARY`** is set, it is **cleared immediately**.
 2. For a **relative** path (or bare **`DIR`**), cwd is switched to **`Resources/Library/`** for that operation (saved/restored on a stack — nesting-safe), except **`CHDIR`** (see below).
-3. Leaf names **without an extension** get **`.fth`** early for load/edit (so `big-int` and `big-int.fth` match). Not applied to `DIR` wildcards or `CHDIR`.
+3. Leaf names **without an extension** get **`.fth`** early for load/edit (so `big-int` and `big-int.fth` match). Not applied to `DIR` wildcards, `CHDIR`, or File-Access open/create.
 4. Absolute / `~` paths ignore Library. Bare **`FLOAD`** / **`EDIT`** (dialog) after **`FROMLIB`** start the open panel at **`Resources/Library/`** (session CHDIR is unchanged).
 5. **REQUIRED** identity uses the **resolved absolute path** after the above.
 6. **`EDIT`** opens the resolved file in TextEdit; **`DIR`** lists Library (or a subpath/filter under it).
-7. **`FROMLIB CHDIR`** (unlike load/edit):
+7. **`OPEN-FILE` R/O** may read real Library sources (e.g. **`FROMLIB SZEDIT Editor/…`**). Write-capable opens / **`CREATE-FILE`** still remap bundle targets to Application Support.
+8. **`FROMLIB CHDIR`** (unlike load/edit):
    - **Bare:** folder picker starts at **`Resources/Library/`**. **Cancel** leaves the session cwd unchanged. **Choose** permanently sets cwd to the selected folder (wherever you navigated).
    - **Named relative:** resolve under Library and **permanently** `CHDIR` there (e.g. `FROMLIB CHDIR .` → Library).
    - Absolute / `~` paths still change normally (flag is consumed only).
@@ -201,6 +202,7 @@ FLOAD BigInteger/big-int.fth
 FROMLIB FLOAD BigInteger/big-int.fth
 FROMLIB FLOAD Editor/SZ-EDITOR.fth
 FROMLIB EDIT PI/pi-test.fth
+FROMLIB SZEDIT Editor/SZ-EDITOR-README.txt   \ in-app editor (OPEN-FILE + FROMLIB)
 FROMLIB DIR
 FROMLIB DIR Editor
 FROMLIB DIR BigInteger

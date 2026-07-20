@@ -37,12 +37,13 @@ Quick test
 ----------
   CHDIR to a writable folder if needed, then:
   SZ-BUFFER-SMOKE
-  SZ-EDIT-SMOKE
     - type text, move with Ctrl-B/F/P/N or arrows
     - Ctrl-S save, Ctrl-Q quit
 
   Or:
   S" /path/to/file.txt" SZ-EDIT-FILE
+  SZEDIT /path/to/file.txt
+  FROMLIB SZEDIT Editor/SZ-EDITOR-README.txt   \ open a Library file
 
 Editor keys
 -----------

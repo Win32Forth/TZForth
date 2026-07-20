@@ -10,8 +10,8 @@
 \   SZ-HOST-SMOKE
 \   SZ-BUFFER-SMOKE
 \   SZ-SCREEN-SMOKE
-\   SZ-EDIT-SMOKE
 \   S" my.txt" SZ-EDIT-FILE
+\   SZEDIT my.txt <return>
 \
 \ Keys in editor: ^S save  ^Q quit  ^B^F left/right  ^P^N up/down
 \                 type to insert  Enter newline  BS delete
@@ -30,7 +30,7 @@ FLOAD sz-edit.fth
    CR
    .( === SZ-EDITOR TZForth port ===) CR
    .( Phases 1-5: edit + navigation + framed screen) CR
-   .( SZ-BUFFER-SMOKE  SZ-EDIT-SMOKE  or  S" file" SZ-EDIT-FILE) CR
+   .( SZ-BUFFER-SMOKE  or  S" file" SZ-EDIT-FILE  or  SZEDIT file <return>) CR
    .( Keys: ^S save ^Q quit  arrows  Home/End  ^Home/^End  PgUp/Dn  BS Del type) CR
    .( Note: use Control key, not Command/Apple key) CR
    CR

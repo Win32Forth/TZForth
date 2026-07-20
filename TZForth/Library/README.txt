@@ -23,6 +23,7 @@ Usage
   FROMLIB FLOAD PI/pi-test.fth              \ full π demo
   FROMLIB FLOAD BigInteger/bi-test.fth      \ unit tests
   FROMLIB FLOAD Editor/SZ-EDITOR.fth        \ text editor
+  FROMLIB SZEDIT Editor/SZ-EDITOR-README.txt \ edit a Library file in SZ-EDITOR
   FROMLIB FLOAD HayesTest/HayesTest.fth     \ full Hayes ANS suite
   FROMLIB EDIT PI/pi-test.fth               \ open library file in TextEdit
   FROMLIB DIR                               \ list Resources/Library

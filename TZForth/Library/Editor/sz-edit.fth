@@ -250,4 +250,7 @@ VARIABLE SZ-DONE
    SZ-EDIT-LOOP
 ;
 
+\ Parse a path and edit. With FROMLIB on the same console line, relative
+\ names resolve under Resources/Library (OPEN-FILE honors FROM-LIBRARY):
+\   FROMLIB SZEDIT Editor/SZ-EDITOR-README.txt
 : SZEDIT  ( -- )  BL WORD COUNT SZ-EDIT-FILE ;

@@ -16,14 +16,15 @@
 \ Keys in editor: ^S save  ^Q quit  ^B^F left/right  ^P^N up/down
 \                 type to insert  Enter newline  BS delete
 \
-\ Nested modules are under Editor/ relative to Library (FROMLIB cwd).
+\ Nested modules: named FLOAD chdirs to this file's folder (Editor/), so
+\ sibling names need no Editor/ prefix.
 
 ANEW SZ-EDITOR
 
-FLOAD Editor/sz-host.fth
-FLOAD Editor/sz-buffer.fth
-FLOAD Editor/sz-screen.fth
-FLOAD Editor/sz-edit.fth
+FLOAD sz-host.fth
+FLOAD sz-buffer.fth
+FLOAD sz-screen.fth
+FLOAD sz-edit.fth
 
 : SZ-BANNER  ( -- )
    CR

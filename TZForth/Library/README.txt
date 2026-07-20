@@ -41,11 +41,19 @@ In a *file*, multi-line is allowed:
 
 In the *console*, keep FROMLIB on the same line as the load/EDIT/DIR word.
 
-Nested FLOAD / REQUIRE paths are relative to Resources/Library/ (not the
-subfolder of the file that is currently loading). Example from pi-test.fth:
+Path resolution notes
+---------------------
+  Console / top-level under FROMLIB: paths are relative to Resources/Library/:
 
-  FROMLIB REQUIRE BigInteger/big-int.fth
-  FROMLIB REQUIRE PI/pi-chudnovsky.fth
+    FROMLIB FLOAD Editor/SZ-EDITOR.fth
+    FROMLIB REQUIRE BigInteger/big-int.fth
+    FROMLIB REQUIRE PI/pi-chudnovsky.fth
+
+  Nested FLOAD of a *named* file chdirs to that file's folder for the load,
+  so siblings can use bare names (e.g. SZ-EDITOR.fth does FLOAD sz-host.fth).
+
+  Cross-folder loads still need a Library-relative path (or FROMLIB + path),
+  e.g. pi-test.fth uses FROMLIB REQUIRE BigInteger/big-int.fth.
 
 Read-only bundle / writable data
 --------------------------------

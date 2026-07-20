@@ -28,11 +28,24 @@ Files in this project folder
   autoload.fth          Product boot (optional; omit for pure REPL)
   AutoLoad-Sample.fth   Example MAIN + CATCH pattern (not auto-loaded)
   ANEW.fth              Classic ANEW reload marker (optional FLOAD from autoload)
+  SZ-EDITOR.fth         Editor port driver (ANEW + modules; not auto-started)
+  sz-host.fth           Editor host shims (Phase 1)
+  sz-buffer.fth         Editor buffer load/save (Phase 2)
+  sz-screen.fth         Editor display (Phase 3 stub)
+  sz-edit.fth           Editor interactive loop (Phase 4 stub)
+  SZ-EDITOR-README.txt  Editor port notes
   README.txt            This note
   (any other .fth)      Copied into the app; include from autoload.fth as needed
 
 Example in autoload.fth (optional):
   FLOAD ANEW.fth
+
+Editor (manual load — not in default MAIN):
+  FLOAD ANEW.fth
+  FLOAD SZ-EDITOR.fth
+  SZ-BUFFER-SMOKE  SZ-EDIT-SMOKE
+  Keys: ^S save  ^Q quit  ^B^F^P^N move
+  See SZ-EDITOR-README.txt
 
 Tools menu
 ----------

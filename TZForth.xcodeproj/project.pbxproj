@@ -15,10 +15,16 @@
 			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
 			membershipExceptions = (
 				"ANS-VALIDATE.txt",
-				"AutoLoad/ANEW.fth",
+				AutoLoad/ANEW.fth,
 				"AutoLoad/AutoLoad-Sample.fth",
+				"AutoLoad/SZ-EDITOR-README.txt",
+				"AutoLoad/SZ-EDITOR.fth",
 				AutoLoad/autoload.fth,
 				AutoLoad/README.txt,
+				"AutoLoad/sz-buffer.fth",
+				"AutoLoad/sz-edit.fth",
+				"AutoLoad/sz-host.fth",
+				"AutoLoad/sz-screen.fth",
 				Docs/ANS_COMPLIANCE.rtf,
 				Docs/README.rtf,
 				Docs/README.txt,

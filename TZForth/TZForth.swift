@@ -168,6 +168,8 @@ public final class TZForth {
     /// Facility terminal screen refresh (80×25 buffer from PAGE / AT-XY / EMIT). Host replaces
     /// or overlays console content when this fires.
     public var onTerminalRefresh: ((String) -> Void)?
+    /// Host should wipe the console view immediately (CLS). Distinct from facility PAGE refresh.
+    public var onClearScreen: (() -> Void)?
     /// True when PAGE or AT-XY has activated the facility terminal buffer.
     public var isFacilityTerminalActive: Bool { facilityTerminal.isActive }
 
@@ -187,6 +189,10 @@ public final class TZForth {
 
     /// True when MS is waiting for an asynchronous host delay (see onMsDelayRequested).
     public var waitingForMs = false
+
+    /// Prevent nested provideKey/provideExtendedKey while a resume is still running
+    /// (e.g. host onChange reacting to onTerminalRefresh mid-redraw).
+    private var isResumingBlockingPrimitive = false
 
     /// True when XKEY is assembling a multi-byte UTF-8 sequence via repeated KEY reads.
     internal var waitingForXKey = false
@@ -787,8 +793,8 @@ public final class TZForth {
         ("FILL",    "( addr u b -- )",    "fill u bytes at addr with b"),
         ("MOVE",    "( addr1 addr2 u -- )", "copy u bytes"),
         ("BLANK",   "( c-addr u -- )",    "fill u bytes with blanks (BL)"),
-        ("CMOVE",   "( c-addr1 c-addr2 u -- )", "copy u characters c-addr2 -> c-addr1"),
-        ("CMOVE>",  "( c-addr1 c-addr2 u -- )", "copy u characters high-to-low"),
+        ("CMOVE",   "( c-addr1 c-addr2 u -- )", "copy u chars from c-addr1 to c-addr2 (low→high)"),
+        ("CMOVE>",  "( c-addr1 c-addr2 u -- )", "copy u chars from c-addr1 to c-addr2 (high→low)"),
         ("COMPARE", "( c-addr1 u1 c-addr2 u2 -- n )", "compare strings (-1/0/1)"),
         ("/STRING", "( c-addr u n -- c-addr' u' )", "adjust string by n characters"),
         ("-TRAILING","( c-addr u -- c-addr' u' )", "remove trailing spaces"),
@@ -1591,7 +1597,20 @@ public final class TZForth {
 
     func tell(_ s: String) {
         guard !s.isEmpty else { return }
-        onOutput?(s)
+        // When PAGE/AT-XY facility mode is active, all output must go into that
+        // buffer (same as EMIT) so host refresh stays consistent.
+        if self.facilityTerminal.isActive {
+            for b in s.utf8 {
+                if b == 10 {
+                    self.facilityTerminal.newline()
+                } else {
+                    self.facilityTerminal.emit(b)
+                }
+            }
+            self.terminalRefreshPending = true
+        } else {
+            onOutput?(s)
+        }
     }
 
     private func fileDisplayName(forFileId fileId: Int) -> String {
@@ -1794,6 +1813,8 @@ public final class TZForth {
     }
 
     private func resumeBlockingPrimitive(pushValue: Int? = nil) {
+        self.isResumingBlockingPrimitive = true
+        defer { self.isResumingBlockingPrimitive = false }
         if let v = pushValue {
             self.push(v)
         }
@@ -1802,12 +1823,16 @@ public final class TZForth {
             self.innerThread()
         }
         self.runInterpreter()
+        // KEY/EKEY/MS resume mid-loop (e.g. SZ-EDIT redraw); push facility screen now.
+        self.flushTerminalRefreshIfNeeded()
     }
 
     /// Called by the host UI (ConsoleView) when the user types a character while
     /// a KEY is waiting (waitingForKey == true). This supplies the character to the
     /// pending KEY and resumes interpretation (outer or threaded) from the suspension point.
     public func provideKey(_ char: Int) {
+        // Ignore nested delivery while a prior key is still being processed (redraw/refresh).
+        if self.isResumingBlockingPrimitive { return }
         if !self.waitingForKey { return }
         if self.waitingForXKey {
             self.xkeyAssembly.append(UInt8(char & 0xff))
@@ -1828,6 +1853,7 @@ public final class TZForth {
 
     /// Called by the host when EKEY is waiting. Supplies an extended keyboard event.
     public func provideExtendedKey(_ event: Int) {
+        if self.isResumingBlockingPrimitive { return }
         if !self.waitingForExtendedKey { return }
         self.waitingForExtendedKey = false
         self.resumeBlockingPrimitive(pushValue: event)
@@ -1835,6 +1861,7 @@ public final class TZForth {
 
     /// Resume after an asynchronous MS delay (invoked from onMsDelayRequested completion).
     public func resumeAfterMs() {
+        if self.isResumingBlockingPrimitive { return }
         if !self.waitingForMs { return }
         self.waitingForMs = false
         self.resumeBlockingPrimitive()
@@ -6991,6 +7018,22 @@ public final class TZForth {
             self.facilityTerminal.deactivate()
             self.terminalRefreshPending = false
             self.clearScreenRequested = true
+            // Immediate host wipe (don't wait for end of feedLine) so editors can CLS mid-KEY loop.
+            self.onClearScreen?()
+        }
+
+        /// Leave ANS Facility terminal mode (PAGE/AT-XY buffer) and return output to the console.
+        /// Does not clear the console text by itself — pair with CLS if a full wipe is wanted.
+        _ = register("FACILITY-OFF") {
+            self.facilityTerminal.deactivate()
+            self.terminalRefreshPending = false
+            self.clearScreenRequested = false
+        }
+
+        /// Push pending Facility terminal buffer to the host now (after PAGE + AT-XY + EMIT).
+        _ = register("TERMINAL-REFRESH") {
+            self.terminalRefreshPending = true
+            self.flushTerminalRefreshIfNeeded()
         }
 
         _ = register("WORDS") {
@@ -7106,7 +7149,6 @@ public final class TZForth {
 
             let listHead = self.readCell(self.CURRENT)
             var link = self.readCell(listHead)
-            var prev: Cell = 0
             var safety = 0
             while link != 0 && safety < 10000 {
                 safety += 1
@@ -7126,30 +7168,21 @@ public final class TZForth {
                         return
                     }
 
-                    // Truncate the dictionary: everything from this header onward is forgotten.
-                    // Because all dictionary walkers now use only alignment + buffer-bounds checks
-                    // (plus kernelLatest guard and iteration limits), it is now safe to also
-                    // restore HERE. This reclaims the memory used by the forgotten word(s).
-                    //
-                    // Headers are allocated at increasing addresses. The header at 'link'
-                    // is the first thing we want to reclaim, so new HERE = link.
-                    let newLatest: Cell
-                    if prev == 0 {
-                        // The word being forgotten is the current head of the dictionary.
-                        // Its link field already points at the previous (older) word.
-                        newLatest = self.readCell(link)
-                    } else {
-                        newLatest = prev
-                    }
-                    self.writeCell(listHead, newLatest)
-                    self.writeCell(self.DP_ADDR, link)   // reclaim memory from this header forward (set the DP value back)
+                    // Classic FORGET: remove this word and every word defined *after* it
+                    // (higher dictionary addresses / toward LATEST). Headers grow upward, so
+                    // HERE is rewound to this header. LATEST becomes the *older* neighbor
+                    // (this header's link) — never a more recent word, which would leave
+                    // LATEST pointing into reclaimed space and break FIND (ANEW/CREATE saw
+                    // "isn't unique" and later FLOAD looked undefined).
+                    let older = self.readCell(link)
+                    self.writeCell(listHead, older)
+                    self.writeCell(self.DP_ADDR, link)
                     self.dictionaryHighWater = link
 
                     // Extra defensive repair after modifying critical system variables.
                     self.validateAndRepairSystemState()
                     return
                 }
-                prev = link
                 link = self.readCell(link)
             }
             self.kernelThrow(StdThrow.undefinedWord, message: "? \(name) ?")
@@ -8289,10 +8322,17 @@ public final class TZForth {
         }
 
         _ = register("PAGE") {
+            // Clear facility buffer and mark for host refresh, but do *not* flush
+            // immediately: callers (e.g. SZ-REDRAW) emit status/text after PAGE.
+            // Flushing here would paint a blank 80×25 frame and drop the real draw
+            // until the next outer feedLine — editor looked frozen after the first KEY.
+            //
+            // Do *not* set clearScreenRequested: that flag means "wipe the host console"
+            // (CLS). PAGE only updates the facility buffer; host paint is via
+            // onTerminalRefresh. Leaving clearScreenRequested set caused the next REPL
+            // line after the editor to blank the window.
             self.facilityTerminal.page()
-            self.clearScreenRequested = true
             self.terminalRefreshPending = true
-            self.flushTerminalRefreshIfNeeded()
         }
 
         _ = register("AT-XY") {
@@ -8300,6 +8340,7 @@ public final class TZForth {
             let col = Int(self.pop())
             if self.throwActive { return }
             self.facilityTerminal.atXY(col: col, row: row)
+            self.terminalRefreshPending = true
         }
 
         _ = register("MS") {

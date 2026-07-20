@@ -84,6 +84,9 @@ struct ConsoleView: View {
     /// Prevents duplicate Return handling when both AppKit and SwiftUI key paths fire.
     @State private var isHandlingReturn = false
 
+    /// Prevents nested/duplicate KEY delivery when both SwiftUI and AppKit see the same key.
+    @State private var isDeliveringBlockingKey = false
+
     /// Incremented to request moving the caret to end-of-document (after commit/output).
     @State private var pinCaretRequest = 0
 
@@ -94,12 +97,27 @@ struct ConsoleView: View {
             pinCaretRequest: $pinCaretRequest,
             // UTF-16 index of first user-editable character (same boundary as backspace protect).
             editableStartUTF16: (protectedSnapshot as NSString).length,
+            // While KEY/EKEY is blocking, refuse all NSTextView text mutations — keys are
+            // delivered only via onBlockingKeyDown / handleReturnKey (never via typing into
+            // the console string, which used to strip facility-screen characters).
+            isBlockingKeyboardInput: { forth.waitingForKey || forth.waitingForExtendedKey },
             onReturnPressed: { handleReturnKey() },
             onFacilityKeyDown: { event in
                 guard forth.waitingForExtendedKey else { return false }
                 guard let fkeyId = Self.facilityFKeyId(from: event) else { return false }
                 forth.provideExtendedKey(TZForth.makeFKeyEvent(fkeyId))
                 return true
+            },
+            onBlockingKeyDown: { event in
+                // While KEY is waiting (e.g. SZ-EDITOR loop), deliver keys exclusively here.
+                guard forth.waitingForKey else { return false }
+                // Let Cmd- shortcuts (Quit, Copy, …) reach the system.
+                if event.modifierFlags.contains(.command) { return false }
+                guard let code = Self.blockingKeyCode(from: event) else {
+                    // Swallow unknown keys so NSTextView cannot edit the facility paint.
+                    return true
+                }
+                return deliverBlockingKey(code)
             }
         ) { textView in
             DispatchQueue.main.async {
@@ -118,9 +136,18 @@ struct ConsoleView: View {
                     isRevertingProtectedEdit = false
                     return
                 }
-                // Engine/startup output must not be treated as illegal edits of protected text.
+                // Engine/startup/facility output must not be treated as user keystrokes
+                // or as illegal edits of the protected prefix.
                 if isProgrammaticConsoleAppend {
-                    checkForCommandExecution(newValue)
+                    keepCursorVisible()
+                    return
+                }
+                // Facility PAGE/AT-XY paint replaces the whole console body each frame.
+                // It does *not* preserve the previous protectedSnapshot prefix, so the
+                // normal "revert protected edit" logic must not run — that was undoing
+                // every SZ-REDRAW after the first (typed chars in the buffer + "*" on
+                // the status line, but the painted screen never showed the new text).
+                if forth.isFacilityTerminalActive {
                     keepCursorVisible()
                     return
                 }
@@ -134,6 +161,10 @@ struct ConsoleView: View {
                 keepCursorVisible()
             }
             .onKeyPress(.upArrow) {
+                if forth.waitingForKey {
+                    _ = deliverBlockingKey(16) // Ctrl-P
+                    return .handled
+                }
                 if forth.waitingForExtendedKey {
                     forth.provideExtendedKey(TZForth.makeFKeyEvent(TZForth.FacilityFKey.up))
                     return .handled
@@ -142,6 +173,10 @@ struct ConsoleView: View {
                 return .handled
             }
             .onKeyPress(.downArrow) {
+                if forth.waitingForKey {
+                    _ = deliverBlockingKey(14) // Ctrl-N
+                    return .handled
+                }
                 if forth.waitingForExtendedKey {
                     forth.provideExtendedKey(TZForth.makeFKeyEvent(TZForth.FacilityFKey.down))
                     return .handled
@@ -150,6 +185,10 @@ struct ConsoleView: View {
                 return .handled
             }
             .onKeyPress(.leftArrow) {
+                if forth.waitingForKey {
+                    _ = deliverBlockingKey(2) // Ctrl-B
+                    return .handled
+                }
                 if forth.waitingForExtendedKey {
                     forth.provideExtendedKey(TZForth.makeFKeyEvent(TZForth.FacilityFKey.left))
                     return .handled
@@ -159,6 +198,10 @@ struct ConsoleView: View {
                 return .ignored
             }
             .onKeyPress(.rightArrow) {
+                if forth.waitingForKey {
+                    _ = deliverBlockingKey(6) // Ctrl-F
+                    return .handled
+                }
                 guard forth.waitingForExtendedKey else { return .ignored }
                 forth.provideExtendedKey(TZForth.makeFKeyEvent(TZForth.FacilityFKey.right))
                 return .handled
@@ -192,6 +235,10 @@ struct ConsoleView: View {
                 return .ignored
             }
             .onKeyPress(.delete) {
+                if forth.waitingForKey {
+                    _ = deliverBlockingKey(8) // BS for editor / KEY consumers
+                    return .handled
+                }
                 if handleDelete() {
                     return .handled
                 }
@@ -283,17 +330,43 @@ struct ConsoleView: View {
 
                 forth.onTerminalRefresh = { screen in
                     let applyTerminal = {
+                        self.isProgrammaticConsoleAppend = true
                         self.consoleText = consoleMessage + screen
                         if !screen.hasSuffix("\n") {
                             self.consoleText += "\n"
                         }
                         self.markProtectedThroughEndOfText()
+                        self.lastKeyConsumedUserLength = 0
                         self.keepCursorVisible(followPrompt: true)
+                        // Keep the flag set until the next turn so any deferred
+                        // SwiftUI onChange still treats this as engine output.
+                        DispatchQueue.main.async {
+                            self.isProgrammaticConsoleAppend = false
+                        }
                     }
                     if Thread.isMainThread {
                         applyTerminal()
                     } else {
                         DispatchQueue.main.async(execute: applyTerminal)
+                    }
+                }
+
+                forth.onClearScreen = {
+                    let applyClear = {
+                        self.isProgrammaticConsoleAppend = true
+                        self.consoleText = ""
+                        self.markProtectedThroughEndOfText()
+                        self.lastKeyConsumedUserLength = 0
+                        self.forth.clearScreenRequested = false
+                        self.keepCursorVisible(followPrompt: true)
+                        DispatchQueue.main.async {
+                            self.isProgrammaticConsoleAppend = false
+                        }
+                    }
+                    if Thread.isMainThread {
+                        applyClear()
+                    } else {
+                        DispatchQueue.main.async(execute: applyClear)
                     }
                 }
 
@@ -360,6 +433,24 @@ struct ConsoleView: View {
         }
     }
 
+    /// Deliver one KEY value while the engine is waiting. Nested/duplicate callers (SwiftUI
+    /// + AppKit for the same physical key) are collapsed so the editor sees a single stroke.
+    @discardableResult
+    private func deliverBlockingKey(_ code: Int) -> Bool {
+        guard forth.waitingForKey else { return false }
+        if isDeliveringBlockingKey { return true }
+        isDeliveringBlockingKey = true
+        forth.provideKey(code)
+        lastKeyConsumedUserLength = 0
+        // Keep the gate closed until the next turn so a second path for the *same*
+        // physical key (e.g. onKeyPress + keyDown) does not insert twice. Key repeat
+        // and the next distinct key arrive on a later turn after this clears.
+        DispatchQueue.main.async {
+            isDeliveringBlockingKey = false
+        }
+        return true
+    }
+
     /// REPL Return: always submit the full current input, never split the line at the caret.
     @discardableResult
     private func handleReturnKey() -> Bool {
@@ -372,26 +463,16 @@ struct ConsoleView: View {
         }
 
         if forth.waitingForKey {
-            forth.provideKey(10)
-            lastKeyConsumedUserLength = 0
-            if consoleText.last == "\n" {
-                isConsumingKeyChar = true
-                consoleText.removeLast()
-                markProtectedThroughEndOfText()
-                lastKeyConsumedUserLength = 0
-            }
+            // Enter → CR (13). Do *not* mutate consoleText: provideKey runs SZ-REDRAW and
+            // onTerminalRefresh owns the paint. Stripping a trailing newline here deleted a
+            // character from the facility screen on every Return.
+            _ = deliverBlockingKey(13)
             return true
         }
 
         if forth.waitingForExtendedKey {
-            forth.provideExtendedKey(TZForth.makeCharKeyEvent(10, mods: 0))
+            forth.provideExtendedKey(TZForth.makeCharKeyEvent(13, mods: 0))
             lastKeyConsumedUserLength = 0
-            if consoleText.last == "\n" {
-                isConsumingKeyChar = true
-                consoleText.removeLast()
-                markProtectedThroughEndOfText()
-                lastKeyConsumedUserLength = 0
-            }
             return true
         }
 
@@ -536,54 +617,11 @@ struct ConsoleView: View {
         guard fullText.count > protectedLength else { return }
         let userPortion = String(fullText.dropFirst(protectedLength))
         
-        // Special per-keystroke handling for blocking KEY: feed individual characters
-        // (including Return) as soon as they are typed, without waiting for a line commit.
-        // This allows KEY to truly wait for a single key (not a whole line), and lets
-        // the user press Return itself as the key value.
-        if forth.waitingForKey {
-            if isConsumingKeyChar {
-                isConsumingKeyChar = false
-                return
-            }
-            if userPortion.count > lastKeyConsumedUserLength {
-                let newPart = String(userPortion.dropFirst(lastKeyConsumedUserLength))
-                if let keyChar = newPart.last {
-                    let scalar = keyChar.unicodeScalars.first?.value ?? 0
-                    forth.provideKey(Int(scalar))
-                    lastKeyConsumedUserLength = userPortion.count
-                    // Eat the newly typed chars from the visible text so they don't sit as
-                    // a pending command line that would later trigger the empty-last-line feed.
-                    if consoleText.count >= newPart.count {
-                        isConsumingKeyChar = true
-                        consoleText.removeLast(newPart.count)
-                        markProtectedThroughEndOfText()
-                        lastKeyConsumedUserLength = 0
-                    }
-                }
-            }
-            // We handled the key input; no need to run the normal line-commit logic for this change.
-            return
-        }
-
-        if forth.waitingForExtendedKey {
-            if isConsumingKeyChar {
-                isConsumingKeyChar = false
-                return
-            }
-            if userPortion.count > lastKeyConsumedUserLength {
-                let newPart = String(userPortion.dropFirst(lastKeyConsumedUserLength))
-                if let keyChar = newPart.last {
-                    let scalar = keyChar.unicodeScalars.first?.value ?? 0
-                    forth.provideExtendedKey(TZForth.makeCharKeyEvent(Int(scalar), mods: 0))
-                    lastKeyConsumedUserLength = userPortion.count
-                    if consoleText.count >= newPart.count {
-                        isConsumingKeyChar = true
-                        consoleText.removeLast(newPart.count)
-                        markProtectedThroughEndOfText()
-                        lastKeyConsumedUserLength = 0
-                    }
-                }
-            }
+        // Blocking KEY/EKEY are delivered only via keyDown / handleReturnKey / onKeyPress.
+        // Never treat console text mutations as keystrokes: after provideKey the facility
+        // screen is rewritten, and removeLast on that paint was deleting display characters
+        // and re-feeding garbage (same letter repeating, Enter "deletes", etc.).
+        if forth.waitingForKey || forth.waitingForExtendedKey {
             return
         }
         
@@ -1557,15 +1595,31 @@ struct ConsoleView: View {
     }
 }
 
-/// NSTextView that can intercept function keys for EKEY while the Forth engine is waiting.
+/// NSTextView that can intercept function keys for EKEY while the Forth engine is waiting,
+/// and raw keyDown for blocking KEY (editor / KEY loops).
 private final class FacilityConsoleTextView: NSTextView {
     var onFacilityKeyDown: ((NSEvent) -> Bool)?
+    var onBlockingKeyDown: ((NSEvent) -> Bool)?
 
     override func keyDown(with event: NSEvent) {
         if onFacilityKeyDown?(event) == true {
             return
         }
+        if onBlockingKeyDown?(event) == true {
+            return
+        }
         super.keyDown(with: event)
+    }
+
+    /// Capture Ctrl-S / Ctrl-Q before the system or text system consumes them.
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        if onBlockingKeyDown?(event) == true {
+            return true
+        }
+        if onFacilityKeyDown?(event) == true {
+            return true
+        }
+        return super.performKeyEquivalent(with: event)
     }
 
     /// TextKit maps keyboard navigation to the extra end-of-document line fragment, but mouse
@@ -1618,8 +1672,12 @@ private struct ConsoleTextView: NSViewRepresentable {
     @Binding var pinCaretRequest: Int
     /// First UTF-16 index the user may place the caret in (engine/protected output is before this).
     var editableStartUTF16: Int
+    /// When true, refuse all text mutations (KEY/EKEY loops own the keyboard).
+    var isBlockingKeyboardInput: () -> Bool = { false }
     var onReturnPressed: () -> Bool
     var onFacilityKeyDown: ((NSEvent) -> Bool)?
+    /// When KEY is blocking, raw NSEvent → provideKey (Ctrl/BS/printable).
+    var onBlockingKeyDown: ((NSEvent) -> Bool)?
     var onTextViewReady: (NSTextView) -> Void
 
     func makeCoordinator() -> Coordinator {
@@ -1638,6 +1696,9 @@ private struct ConsoleTextView: NSViewRepresentable {
         let textView = FacilityConsoleTextView()
         textView.onFacilityKeyDown = { event in
             context.coordinator.parent.onFacilityKeyDown?(event) ?? false
+        }
+        textView.onBlockingKeyDown = { event in
+            context.coordinator.parent.onBlockingKeyDown?(event) ?? false
         }
         textView.isVerticallyResizable = true
         textView.isHorizontallyResizable = false
@@ -1685,6 +1746,9 @@ private struct ConsoleTextView: NSViewRepresentable {
         context.coordinator.parent = self
         textView.onFacilityKeyDown = { event in
             context.coordinator.parent.onFacilityKeyDown?(event) ?? false
+        }
+        textView.onBlockingKeyDown = { event in
+            context.coordinator.parent.onBlockingKeyDown?(event) ?? false
         }
 
         var shouldScroll = false
@@ -1838,8 +1902,6 @@ private struct ConsoleTextView: NSViewRepresentable {
         weak var textView: NSTextView?
         var isProgrammaticUpdate = false
         var lastHandledPinCaretRequest = 0
-        /// Avoid re-entrancy when we clamp the selection after navigation.
-        private var isClampingSelection = false
 
         init(parent: ConsoleTextView) {
             self.parent = parent
@@ -1850,116 +1912,111 @@ private struct ConsoleTextView: NSViewRepresentable {
             parent.text = textView.string
         }
 
-        func textViewDidChangeSelection(_ notification: Notification) {
-            guard !isProgrammaticUpdate, !isClampingSelection, let textView else { return }
-            clampSelectionToEditableRegion(textView)
-        }
-
-        /// Keep caret/selection out of protected engine output (same idea as backspace guard).
-        func clampSelectionToEditableRegion(_ textView: NSTextView) {
-            let docLen = (textView.string as NSString).length
-            let minLoc = min(max(0, parent.editableStartUTF16), docLen)
-            var sel = textView.selectedRange()
-            let selEnd = sel.location + sel.length
-            guard sel.location < minLoc else { return }
-
-            if selEnd <= minLoc {
-                sel = NSRange(location: minLoc, length: 0)
-            } else {
-                sel = NSRange(location: minLoc, length: selEnd - minLoc)
+        /// Allow free selection anywhere (so Copy works on history). Only refuse edits
+        /// that would change the protected engine-output prefix — and refuse *all* edits
+        /// while KEY/EKEY is blocking (editor owns the keyboard).
+        func textView(_ textView: NSTextView, shouldChangeTextIn affectedCharRange: NSRange, replacementString: String?) -> Bool {
+            if parent.isBlockingKeyboardInput() {
+                return false
             }
-            isClampingSelection = true
-            textView.setSelectedRange(sel)
-            isClampingSelection = false
+            let minLoc = min(max(0, parent.editableStartUTF16), (textView.string as NSString).length)
+            if affectedCharRange.location < minLoc {
+                return false
+            }
+            return true
         }
 
         func textView(_ textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
+            // Return is owned by onReturnPressed (and blocking keyDown for KEY loops).
             if commandSelector == #selector(NSResponder.insertNewline(_:)) {
                 return parent.onReturnPressed()
             }
 
-            // Swallow leftward / upward navigation that would leave the current input
-            // (into protected history). Selection clamp alone can leave the caret mid-history
-            // briefly; intercept common selectors and pin to the editable start instead.
+            // While KEY/EKEY waits, do not let NSTextView Emacs bindings steal arrows/up/down.
+            // (keyDown → onBlockingKeyDown should already have consumed them; this is backup.)
+            if parent.isBlockingKeyboardInput() {
+                return true
+            }
+
+            // While the caret is on the *input* line (at/after editableStart), do not let
+            // left/up navigation walk into protected history. Free movement is allowed when
+            // the user has clicked into history to select text for Copy.
             let minLoc = min(max(0, parent.editableStartUTF16), (textView.string as NSString).length)
             let sel = textView.selectedRange()
+            let caretInInputLine = sel.length == 0 && sel.location >= minLoc
 
-            let leftOrUp: Set<Selector> = [
-                #selector(NSResponder.moveLeft(_:)),
-                #selector(NSResponder.moveLeftAndModifySelection(_:)),
-                #selector(NSResponder.moveBackward(_:)),
-                #selector(NSResponder.moveBackwardAndModifySelection(_:)),
-                #selector(NSResponder.moveWordLeft(_:)),
-                #selector(NSResponder.moveWordLeftAndModifySelection(_:)),
-                #selector(NSResponder.moveWordBackward(_:)),
-                #selector(NSResponder.moveWordBackwardAndModifySelection(_:)),
-                #selector(NSResponder.moveToBeginningOfLine(_:)),
-                #selector(NSResponder.moveToBeginningOfLineAndModifySelection(_:)),
-                #selector(NSResponder.moveToLeftEndOfLine(_:)),
-                #selector(NSResponder.moveToLeftEndOfLineAndModifySelection(_:)),
-                #selector(NSResponder.moveToBeginningOfParagraph(_:)),
-                #selector(NSResponder.moveToBeginningOfParagraphAndModifySelection(_:)),
-                #selector(NSResponder.moveToBeginningOfDocument(_:)),
-                #selector(NSResponder.moveToBeginningOfDocumentAndModifySelection(_:)),
-                #selector(NSResponder.moveUp(_:)),
-                #selector(NSResponder.moveUpAndModifySelection(_:)),
-                #selector(NSResponder.pageUp(_:)),
-                #selector(NSResponder.pageUpAndModifySelection(_:)),
-            ]
-
-            if leftOrUp.contains(commandSelector) {
-                // Already at the start of user input: do not move into protected text / prior line.
-                if sel.location <= minLoc && sel.length == 0 {
-                    textView.setSelectedRange(NSRange(location: minLoc, length: 0))
-                    return true
-                }
-                // Single-step left/back: clamp one position at a time to the boundary.
+            if caretInInputLine {
                 if commandSelector == #selector(NSResponder.moveLeft(_:))
                     || commandSelector == #selector(NSResponder.moveBackward(_:)) {
-                    if sel.length > 0 {
-                        // Collapse selection toward the left, but not past editable start.
-                        let newLoc = max(minLoc, sel.location)
-                        textView.setSelectedRange(NSRange(location: newLoc, length: 0))
-                        return true
+                    if sel.location <= minLoc {
+                        return true // stay at start of input
                     }
-                    if sel.location > minLoc {
-                        textView.setSelectedRange(NSRange(location: sel.location - 1, length: 0))
-                    } else {
-                        textView.setSelectedRange(NSRange(location: minLoc, length: 0))
-                    }
+                    textView.setSelectedRange(NSRange(location: sel.location - 1, length: 0))
                     return true
                 }
-                // Word/line/doc/up: jump to editable start instead of entering history.
                 if commandSelector == #selector(NSResponder.moveWordLeft(_:))
                     || commandSelector == #selector(NSResponder.moveWordBackward(_:))
                     || commandSelector == #selector(NSResponder.moveToBeginningOfLine(_:))
                     || commandSelector == #selector(NSResponder.moveToLeftEndOfLine(_:))
                     || commandSelector == #selector(NSResponder.moveToBeginningOfParagraph(_:))
-                    || commandSelector == #selector(NSResponder.moveToBeginningOfDocument(_:))
                     || commandSelector == #selector(NSResponder.moveUp(_:))
-                    || commandSelector == #selector(NSResponder.pageUp(_:)) {
+                    || commandSelector == #selector(NSResponder.pageUp(_:))
+                    || commandSelector == #selector(NSResponder.moveToBeginningOfDocument(_:)) {
                     textView.setSelectedRange(NSRange(location: minLoc, length: 0))
                     return true
                 }
-                // Shift-modified selection left/up: grow selection only within editable region.
-                if commandSelector == #selector(NSResponder.moveLeftAndModifySelection(_:))
-                    || commandSelector == #selector(NSResponder.moveBackwardAndModifySelection(_:)) {
-                    if sel.location <= minLoc {
-                        return true
-                    }
-                    let newLoc = max(minLoc, sel.location - 1)
-                    let newLen = sel.length + (sel.location - newLoc)
-                    textView.setSelectedRange(NSRange(location: newLoc, length: newLen))
-                    return true
-                }
-                // Other extend-selection leftward/upward: clamp to editable start.
-                let end = max(sel.location + sel.length, minLoc)
-                textView.setSelectedRange(NSRange(location: minLoc, length: max(0, end - minLoc)))
-                return true
             }
 
             return false
         }
+    }
+}
+
+// MARK: - Blocking KEY event mapping (SZ-EDITOR / KEY loops)
+
+extension ConsoleView {
+    /// Map an NSEvent to a KEY code while waitingForKey. Returns nil to pass through.
+    fileprivate static func blockingKeyCode(from event: NSEvent) -> Int? {
+        // Never treat Command as Control — Cmd-Q must still quit the app if user chooses.
+        if event.modifierFlags.contains(.command) {
+            return nil
+        }
+
+        // Prefer arrows by keyCode (reliable on macOS).
+        switch event.keyCode {
+        case 123: return 2    // Left  → Ctrl-B code
+        case 124: return 6    // Right → Ctrl-F
+        case 125: return 14   // Down  → Ctrl-N
+        case 126: return 16   // Up    → Ctrl-P
+        case 51:  return 8    // Backspace
+        case 117: return 127  // Forward delete
+        case 36, 76: return 13 // Return / Enter
+        default: break
+        }
+
+        // Control+letter → ASCII control 1..26 (before raw characters, which may be empty).
+        let mods = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        if mods.contains(.control),
+           let ch = event.charactersIgnoringModifiers?.lowercased().unicodeScalars.first {
+            let v = Int(ch.value)
+            if v >= 97 && v <= 122 {
+                return v - 96
+            }
+        }
+
+        // Plain characters (no Command). Ignore Option-only specials for now.
+        if let s = event.charactersIgnoringModifiers ?? event.characters,
+           let ch = s.unicodeScalars.first {
+            let v = Int(ch.value)
+            if mods.contains(.control) {
+                // Already handled letters; other control combos
+                if v > 0 && v < 32 { return v }
+                return nil
+            }
+            if v == 8 || v == 127 || v == 9 || v == 10 || v == 13 { return v }
+            if v >= 32 && v < 127 { return v }
+        }
+        return nil
     }
 }
 

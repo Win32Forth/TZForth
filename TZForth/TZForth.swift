@@ -58,8 +58,8 @@ public final class TZForth {
 
     // MARK: - Configuration
 
-    private static let DEFAULT_MEMORY_BYTES = 1024 * 1024   // 1 MB default dictionary / heap region
-    private static let MAX_MEMORY_BYTES = 64 * 1024 * 1024  // 64 MB cap for GROWMEMORYMB
+    private static let DEFAULT_MEMORY_BYTES = 2 * 1024 * 1024   // 2 MB default (SZ-EDITOR 1 MB buffer + dict/heap; buffer grows via RESIZE)
+    private static let MAX_MEMORY_BYTES = 64 * 1024 * 1024  // 64 MB cap for GROWMEMORYMB / auto-grow
     private static let HEAP_HEADER_BYTES = 8
     private let STACK_SIZE = 256         // data stack depth (cells)
     private let RSTACK_SIZE = 256        // return stack depth (cells)
@@ -169,13 +169,18 @@ public final class TZForth {
 
     // Output
     public var onOutput: ((String) -> Void)?
-    /// Facility terminal screen refresh (80×25 buffer from PAGE / AT-XY / EMIT). Host replaces
-    /// or overlays console content when this fires.
+    /// Facility terminal screen refresh (PAGE / AT-XY / EMIT buffer). Host replaces
+    /// or overlays console content when this fires. Geometry: `facilityCols` × `facilityRows`
+    /// (default 108×25 so SZ-EDITOR can show 100 text columns plus a line-number gutter).
     public var onTerminalRefresh: ((String) -> Void)?
     /// Host should wipe the console view immediately (CLS). Distinct from facility PAGE refresh.
     public var onClearScreen: (() -> Void)?
     /// True when PAGE or AT-XY has activated the facility terminal buffer.
     public var isFacilityTerminalActive: Bool { facilityTerminal.isActive }
+
+    /// Facility terminal geometry (host cursor highlight must match `render()` line width).
+    public var facilityCols: Int { facilityTerminal.cols }
+    public var facilityRows: Int { facilityTerminal.rows }
 
     /// Facility cursor (0-based col/row) after the last PAGE/AT-XY/EMIT sequence.
     /// Host uses this to reverse-video the editor insert point in the console.
@@ -8367,7 +8372,8 @@ public final class TZForth {
     // MARK: - Facility terminal buffer (ANS 10.6.1 PAGE / AT-XY)
 
     private struct FacilityTerminal {
-        static let defaultCols = 80
+        /// Wide enough for SZ-EDITOR: |gutter5|text100| + borders = 108 columns.
+        static let defaultCols = 108
         static let defaultRows = 25
 
         var cols: Int = defaultCols
@@ -8450,7 +8456,11 @@ public final class TZForth {
             for r in 0..<self.rows {
                 let start = r * self.cols
                 let slice = self.cells[start..<(start + self.cols)]
-                lines.append(String(bytes: slice, encoding: .ascii) ?? String(repeating: " ", count: self.cols))
+                // Byte grid, not UTF-8: use Latin-1 so any 0x80-0xFF cell still paints.
+                // .ascii returns nil if any byte is non-ASCII, which used to blank an
+                // entire row (e.g. help line with a middle-dot "·" in source).
+                lines.append(String(bytes: slice, encoding: .isoLatin1)
+                    ?? String(repeating: " ", count: self.cols))
             }
             return lines.joined(separator: "\n")
         }
@@ -8572,7 +8582,7 @@ public final class TZForth {
         _ = register("PAGE") {
             // Clear facility buffer and mark for host refresh, but do *not* flush
             // immediately: callers (e.g. SZ-REDRAW) emit status/text after PAGE.
-            // Flushing here would paint a blank 80×25 frame and drop the real draw
+            // Flushing here would paint a blank facility frame and drop the real draw
             // until the next outer feedLine — editor looked frozen after the first KEY.
             //
             // Do *not* set clearScreenRequested: that flag means "wipe the host console"

@@ -45,8 +45,9 @@ VARIABLE SZ-DONE
 \ -----------------------------------------------------------------------------
 
 : SZ-OPEN-HOLE  ( u -- flag )
-   DUP SZ-FREE-BYTES > IF  DROP 0 EXIT  THEN
    DUP 0= IF  DROP -1 EXIT  THEN
+   \ Grow capacity if needed (1 MB initial; doubles / expands for paste-sized inserts).
+   DUP SZ-TLEN @ + SZ-ENSURE-CAP 0= IF  DROP 0 EXIT  THEN
    >R
    SZ-TEND SZ-CUR @ -
    DUP 0> IF

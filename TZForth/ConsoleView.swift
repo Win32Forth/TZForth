@@ -494,7 +494,7 @@ struct ConsoleView: View {
     }
 
     /// Reverse-video the Facility cursor cell so the editor insert point is obvious.
-    /// Facility rows are fixed 80-column lines joined by newlines after the banner.
+    /// Facility rows are fixed-width lines (`forth.facilityCols`) joined by newlines after the banner.
     ///
     /// Always clear prior highlights first: when the cursor moves without scrolling,
     /// the painted screen string is often identical, so NSTextView does not replace
@@ -512,7 +512,7 @@ struct ConsoleView: View {
         guard forth.isFacilityTerminalActive else { return }
 
         let bannerLen = (consoleMessage as NSString).length
-        let cols = 80
+        let cols = max(1, forth.facilityCols)
         let row = forth.facilityCursorRow
         let col = min(max(0, forth.facilityCursorCol), cols - 1)
         // Each rendered line is `cols` ASCII bytes + '\n' (except we may have added a trailing \n).

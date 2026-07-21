@@ -58,12 +58,13 @@ DECIMAL
 
 \ -----------------------------------------------------------------------------
 \ Memory notes
-\   Editor buffer is a fixed CREATE allot in sz-buffer (simple, no FREE).
-\   These words exist for later dynamic growth if needed.
+\   Editor text buffer lives on the ANS ALLOCATE heap (see sz-buffer.fth):
+\   1 MB initial, RESIZE to grow. These are thin aliases.
 \ -----------------------------------------------------------------------------
 
 : SZ-ALLOC      ( u -- a-addr ior )  ALLOCATE ;
 : SZ-FREE       ( a-addr -- ior )    FREE ;
+: SZ-RESIZE     ( a-addr u -- a-addr ior )  RESIZE ;
 
 \ -----------------------------------------------------------------------------
 \ File I/O thin wrappers (ANS File-Access)

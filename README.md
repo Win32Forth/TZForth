@@ -13,7 +13,7 @@ This project aims to bring the powerful, traditional Forth kernel sources into a
 - Basic SwiftUI macOS/iOS app structure (`TZForthApp.swift` + `ContentView.swift`)
 - The core is a modern Swift re-implementation of Leif Bruder's lbForth token-threaded model (TZForth.swift; file/class externally renamed from LBForth.swift to reflect TZForth)
 - Full support for structured programming (IF/ELSE/THEN, BEGIN loops, DO/LOOP, CREATE DOES>), FLOAD, EDIT (opens in system TextEditor + updates cwd), CHDIR/DIR, file echo, comments (\ single-line to EOL, \\ block to next { for compatibility), \S stop load, etc.
-- TZForth 1.1.3 is targeted for MacOS 26.6, which is the current release of MacOS. 
+- TZForth 1.2.0 is targeted for MacOS 26.6, which is the current release of MacOS. 
 
 ## Structure
 

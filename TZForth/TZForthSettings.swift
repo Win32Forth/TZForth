@@ -11,7 +11,7 @@ public struct TZForthSettings: Codable, Equatable {
     public var blockSize: Int = 1024
     public var blockBufferCount: Int = 4
     public var defaultBlockCount: Int = 32
-    public var defaultMemoryMB: Int = 1
+    public var defaultMemoryMB: Int = 2
     public var defaultBlocksFileName: String = "blocks.blk"
     /// Max inner-interpreter steps per run; 0 = unlimited (no runaway guard).
     public var stepLimit: Int = 2_000_000
@@ -22,7 +22,7 @@ public struct TZForthSettings: Codable, Equatable {
         blockSize: Int = 1024,
         blockBufferCount: Int = 4,
         defaultBlockCount: Int = 32,
-        defaultMemoryMB: Int = 1,
+        defaultMemoryMB: Int = 2,
         defaultBlocksFileName: String = "blocks.blk",
         stepLimit: Int = 2_000_000
     ) {
@@ -40,7 +40,7 @@ public struct TZForthSettings: Codable, Equatable {
         blockSize = try c.decodeIfPresent(Int.self, forKey: .blockSize) ?? 1024
         blockBufferCount = try c.decodeIfPresent(Int.self, forKey: .blockBufferCount) ?? 4
         defaultBlockCount = try c.decodeIfPresent(Int.self, forKey: .defaultBlockCount) ?? 32
-        defaultMemoryMB = try c.decodeIfPresent(Int.self, forKey: .defaultMemoryMB) ?? 1
+        defaultMemoryMB = try c.decodeIfPresent(Int.self, forKey: .defaultMemoryMB) ?? 2
         defaultBlocksFileName = try c.decodeIfPresent(String.self, forKey: .defaultBlocksFileName) ?? "blocks.blk"
         stepLimit = try c.decodeIfPresent(Int.self, forKey: .stepLimit) ?? 2_000_000
     }

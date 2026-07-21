@@ -59,6 +59,17 @@ Vocabulary
   To reach body words from the REPL:  ALSO EDITOR  ...  PREVIOUS
   Host File menu (⌘N / ⌘O) temporarily searches EDITOR when starting New/Open.
 
+Display
+-------
+  Status bar: name, modified flag, L (line), C (column), bytes used/capacity.
+  Text body: exactly 100 columns (facility width 108 with line-number gutter).
+  Text rows:  |NNNN|text body (100 cols)...|
+
+Buffer
+------
+  Heap-backed (ALLOCATE), initial 1 MB, grows as needed for inserts / large loads
+  (and future copy-paste). Engine auto-grows linear memory if the heap is tight.
+
 Editor keys (while editing)
 ---------------------------
   Arrow keys   move

@@ -126,7 +126,7 @@ VARIABLE SZ-CUR
 : SZ-SHOW-HELP  ( -- )
    SZ-TEXT-BOT 2 + SZ-BLANK-ROW
    0 SZ-TEXT-BOT 2 + AT-XY
-   .( ^S save ^Q quit  arrows  Home/End  ^Home/^End  PgUp/Dn  BS Del  type)
+   .( Cmd-S save  Cmd-O open  Cmd-W close  ·  arrows  Home/End  PgUp/Dn  BS Del)
 ;
 
 \ Place Facility cursor on the insert cell (host reverse-videos it).

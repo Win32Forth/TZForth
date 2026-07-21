@@ -717,6 +717,20 @@ fload \(fnInnerLate.lastPathComponent)
         ansTest("ENVIRONMENT? SEARCH-ORDER", "S\" SEARCH-ORDER\" ENVIRONMENT? .", "-1")
         ansTest(".ENVIRONMENT", ".ENVIRONMENT", "WORDLISTS 8")
 
+        // FORGET must prune every wordlist (not only CURRENT / FORTH).
+        // Marker in FORTH, body word in EDITOR after the marker → both go away.
+        ansTest("FORGET prunes EDITOR",
+                "CREATE fgm-ed EDITOR DEFINITIONS : fged-w 1 ; FORTH DEFINITIONS FORGET fgm-ed ONLY FORTH ALSO EDITOR fged-w .",
+                "? fged-w")
+        // Word in EDITOR before the marker survives; word after is unlinked.
+        ansTest("FORGET keeps earlier EDITOR",
+                "EDITOR DEFINITIONS : fgkeep-w 7 ; FORTH DEFINITIONS CREATE fgm-ed2 EDITOR DEFINITIONS : fgdrop-w 8 ; FORTH DEFINITIONS FORGET fgm-ed2 ONLY FORTH ALSO EDITOR fgkeep-w .",
+                "7")
+        // Same for a raw WORDLIST (not only VOCABULARY EDITOR).
+        ansTest("FORGET prunes WORDLIST",
+                "WORDLIST CONSTANT fgwl GET-CURRENT fgwl SET-CURRENT : fgwl-a 3 ; FORTH-WORDLIST SET-CURRENT CREATE fgm-wl fgwl SET-CURRENT : fgwl-b 4 ; FORTH-WORDLIST SET-CURRENT FORGET fgm-wl fgwl SET-CURRENT fgwl-a .",
+                "3")
+
         // String word set (17): COMPARE SEARCH SLITERAL /STRING -TRAILING BLANK CMOVE
         ansTest("COMPARE equal", "S\" abc\" S\" abc\" COMPARE .", "0")
         ansTest("COMPARE less", "S\" ab\" S\" abc\" COMPARE .", "-1")

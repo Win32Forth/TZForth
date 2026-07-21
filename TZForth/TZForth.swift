@@ -112,6 +112,10 @@ public final class TZForth {
     internal let MAX_VOCABS = 8
     internal var searchOrder: [Cell] = []  // array of wl head-cell-addrs; [0] is top (first searched)
 
+    /// Every wordlist head-cell address created via WORDLIST (plus FORTH-WORDLIST at LATEST).
+    /// FORGET prunes all of these so vocabularies other than CURRENT do not keep dangling links.
+    private var wordlistRegistry: [Cell] = []
+
     private var stackBase: Int
     private var rstackBase: Int
     internal var fstackBase: Int         // TZForthFloat.swift
@@ -183,6 +187,47 @@ public final class TZForth {
         self.facilityTerminal.deactivate()
         self.terminalRefreshPending = false
         self.clearScreenRequested = false
+    }
+
+    /// True while SZ-EDIT-LOOP is running (File menu Save/Close enablement).
+    public var szEditorSessionActive = false
+
+    /// Absolute path for the next SZ-HOST-TAKE-PATH / menu Open.
+    public var pendingEditorPath: String = ""
+
+    /// True if SZ-MODIFIED is non-zero (editor buffer dirty).
+    /// SZ-MODIFIED lives in EDITOR, which is often not on the search order.
+    public func isSZEditorDirty() -> Bool {
+        guard let addr = self.valueStorageAddrIncludingEditor(named: "SZ-MODIFIED") else { return false }
+        return self.readCell(addr) != 0
+    }
+
+    /// True if SZ-EDITOR words are loaded (after AutoLoad).
+    /// Editor body words live in EDITOR; only SZEDIT remains in FORTH.
+    public func isSZEditorLoaded() -> Bool {
+        let hdr = self.findWordIncludingEditor("SZ-EDIT-LOOP")
+        return hdr != 0 && hdr != Cell(-1)
+    }
+
+    /// Interpret a REPL line with EDITOR temporarily first in the search order.
+    /// Used by File menu New/Open when the entry words are not visible in FORTH alone.
+    public func feedLineInEditorVocabulary(_ line: String) {
+        guard let wid = self.vocabularyWid(named: "EDITOR") else {
+            self.feedLine(line)
+            return
+        }
+        let saved = self.searchOrder
+        if self.searchOrder.first != wid {
+            if self.searchOrder.count >= self.MAX_VOCABS {
+                // Drop the least-important (last) slot so we can still prepend the editor vocab.
+                if !self.searchOrder.isEmpty {
+                    self.searchOrder.removeLast()
+                }
+            }
+            self.searchOrder.insert(wid, at: 0)
+        }
+        defer { self.searchOrder = saved }
+        self.feedLine(line)
     }
 
     /// Set by the BYE word. The host app (ConsoleView) should observe this and terminate.
@@ -288,6 +333,10 @@ public final class TZForth {
 
     /// Optional callback invoked when EDIT needs a filename dialog (for hosts other than the main app).
     public var onFileEditRequested: (() -> Void)?
+
+    /// Set by bare SZEDIT (no path) / SZ-HOST-REQUEST-OPEN. Host shows the SZ-EDITOR open panel
+    /// (same as File → Open). FROMLIB may set fileDialogStartDirectoryOverride to Library first.
+    public var szEditorOpenRequested = false
 
     /// When EDIT <name> (named form) resolves a file, this URL is set by the engine.
     /// The host (after feedLine returns, in its post-processing) performs the NSWorkspace.open,
@@ -885,7 +934,7 @@ public final class TZForth {
         (".ENVIRONMENT","( -- )",           "display all supported ENVIRONMENT? query strings and values"),
         (">NUMBER", "( ud1 c-addr1 u1 -- ud2 c-addr2 u2 )", "convert string digits to number accumulating in ud"),
         ("FIND",    "( c-addr -- c-addr 0 | xt 1 | xt -1 )", "find word from counted string (from WORD)"),
-        ("FORGET",  "( -- ) name",        "forget name and all words defined after it"),
+        ("FORGET",  "( -- ) name",        "forget name and all later words; prune every wordlist"),
         ("FORGET-WORD", "( xt -- )",      "forget using xt ( ' NAME FORGET-WORD )"),
         (">HEADER", "( cfa -- header )",  "find header for word with this code-field address"),
         (">LFA",    "( cfa -- lfa )",     "convert cfa to link field (alias for >HEADER)"),
@@ -1253,6 +1302,7 @@ public final class TZForth {
         writeCell(IN, 0)
         searchOrder = [LATEST]
         writeCell(CURRENT, LATEST)
+        wordlistRegistry = [Cell(LATEST)]
 
         // Live stack depths live in Swift vars (corruption-proof).
         // We still write the old fixed locations for any future raw memory inspection or "SP @" compatibility.
@@ -2316,7 +2366,7 @@ public final class TZForth {
         guard self.loadNesting == 0, self.evaluateNesting == 0 else { return }
         guard self.isFromLibraryFlagSet() else { return }
         self.clearFromLibraryFlag()
-        self.tell("? FROMLIB: use on the same line as FLOAD/INCLUDE/REQUIRE/EDIT/DIR/CHDIR/OPEN-FILE (console)\n")
+        self.tell("? FROMLIB: use on the same line as FLOAD/INCLUDE/REQUIRE/EDIT/DIR/CHDIR/OPEN-FILE/SZEDIT (console)\n")
     }
 
     /// Push a 64-bit file offset as a double-cell (high = 0).
@@ -3384,6 +3434,118 @@ public final class TZForth {
         return 0
     }
 
+    /// Remember a wordlist head-cell so FORGET can prune it later.
+    private func registerWordlist(_ wid: Cell) {
+        if wid < 0 { return }
+        if !self.wordlistRegistry.contains(wid) {
+            self.wordlistRegistry.append(wid)
+        }
+    }
+
+    /// Data-field wid for a VOCABULARY (DOES>) header, if this header is one.
+    private func vocabularyWidFromHeader(_ hdr: Cell) -> Cell? {
+        if hdr == 0 || !self.isValidDictionaryLink(hdr) { return nil }
+        let cfa = Int(self.getCFA(hdr))
+        if cfa < 0 || cfa + 16 > self.memory.count { return nil }
+        let first = self.readCell(cfa)
+        if first == self.dodoesID {
+            // VOCABULARY: CREATE WORDLIST DROP DOES> PUSH-ORDER — wid is data field at cfa+16.
+            return Cell(cfa + 16)
+        }
+        return nil
+    }
+
+    /// All wordlist heads we know about: registry, CURRENT, search order, plus VOCABULARY
+    /// data fields discovered by walking those lists.
+    private func allKnownWordlistWids() -> [Cell] {
+        var seen = Set<Cell>()
+        var queue: [Cell] = []
+        func add(_ wid: Cell) {
+            if wid < 0 { return }
+            if seen.insert(wid).inserted {
+                queue.append(wid)
+            }
+        }
+        add(Cell(self.LATEST))
+        add(self.readCell(self.CURRENT))
+        for wl in self.searchOrder { add(wl) }
+        for wl in self.wordlistRegistry { add(wl) }
+
+        var i = 0
+        while i < queue.count {
+            let wid = queue[i]
+            i += 1
+            if Int(wid) < 0 || Int(wid) + self.CELL_SIZE > self.memory.count { continue }
+            var link = self.readCell(Int(wid))
+            var safety = 0
+            while link != 0 && safety < 10000 {
+                safety += 1
+                if !self.isValidDictionaryLink(link) { break }
+                if let child = self.vocabularyWidFromHeader(link) {
+                    add(child)
+                }
+                link = self.readCell(Int(link))
+            }
+        }
+        return Array(seen)
+    }
+
+    /// Unlink every dictionary header with address `>= cut` from wordlist `wid`.
+    /// Survivors keep relative order; the chain is terminated with 0.
+    private func pruneWordlist(_ wid: Cell, cutAt cut: Cell) {
+        // Head cell itself was reclaimed with the forgotten region — nothing to do.
+        if wid != 0 && wid >= cut { return }
+        if wid < 0 || Int(wid) + self.CELL_SIZE > self.memory.count { return }
+
+        var linkCell = Int(wid)
+        var cur = self.readCell(Int(wid))
+        var safety = 0
+        while cur != 0 && safety < 10000 {
+            safety += 1
+            if !self.isValidDictionaryLink(cur) {
+                self.writeCell(linkCell, 0)
+                return
+            }
+            if cur >= cut {
+                // Drop this header; follow its older link without installing it yet.
+                cur = self.readCell(Int(cur))
+            } else {
+                self.writeCell(linkCell, cur)
+                linkCell = Int(cur) // header LFA is the first cell
+                cur = self.readCell(Int(cur))
+            }
+        }
+        self.writeCell(linkCell, 0)
+    }
+
+    /// After dictionary cut at `cut`, prune every known wordlist and drop reclaimed wids
+    /// from the search order, CURRENT, and the wordlist registry.
+    private func forgetDictionaryFrom(cut: Cell) {
+        self.writeCell(self.DP_ADDR, cut)
+        self.dictionaryHighWater = cut
+
+        let wids = self.allKnownWordlistWids()
+        for wid in wids {
+            self.pruneWordlist(wid, cutAt: cut)
+        }
+
+        // Drop wordlists whose head cell lived in the reclaimed region.
+        self.wordlistRegistry = self.wordlistRegistry.filter { $0 == Cell(self.LATEST) || $0 < cut }
+        if !self.wordlistRegistry.contains(Cell(self.LATEST)) {
+            self.wordlistRegistry.insert(Cell(self.LATEST), at: 0)
+        }
+
+        let cur = self.readCell(self.CURRENT)
+        if cur != 0 && cur >= cut {
+            self.writeCell(self.CURRENT, Cell(self.LATEST))
+        }
+
+        self.searchOrder = self.searchOrder.filter { $0 == Cell(self.LATEST) || $0 < cut }
+        if self.searchOrder.isEmpty {
+            self.searchOrder = [Cell(self.LATEST)]
+        }
+    }
+
     internal func findWord(_ name: String) -> Cell {  // TZForthBlock.swift
         if self.readCell(self.STATE) != 0, self.localIndexDuringCompile(name) != nil {
             return Cell(-1)  // sentinel: compiling local reference (not a real header)
@@ -3393,6 +3555,48 @@ public final class TZForth {
             if hdr != 0 { return hdr }
         }
         return 0
+    }
+
+    /// Wordlist id (wid) for a VOCABULARY name (`CREATE WORDLIST DROP DOES> PUSH-ORDER`).
+    /// For DOES> children the wid is the data field at cfa+16; for plain CREATE it is the
+    /// stored data-field address at cfa+8.
+    private func vocabularyWid(named name: String) -> Cell? {
+        let hdr = self.findWord(name)
+        if hdr == 0 || hdr == Cell(-1) { return nil }
+        let cfa = Int(self.getCFA(hdr))
+        let first = self.readCell(cfa)
+        if first == self.dodoesID {
+            return Cell(cfa + 16)
+        }
+        if first == self.createRuntimeID {
+            return self.readCell(cfa + 8)
+        }
+        return nil
+    }
+
+    /// Search the current order, then EDITOR if it is not already visible.
+    /// Host File-menu code uses this after the editor body was moved out of FORTH.
+    internal func findWordIncludingEditor(_ name: String) -> Cell {
+        let hdr = self.findWord(name)
+        if hdr != 0 { return hdr }
+        guard let wid = self.vocabularyWid(named: "EDITOR") else { return 0 }
+        if self.searchOrder.contains(wid) { return 0 }
+        return self.findWordInWordlist(wid, name: name)
+    }
+
+    /// VALUE/VARIABLE storage for a name, preferring EDITOR when needed.
+    private func valueStorageAddrIncludingEditor(named name: String) -> Int? {
+        let hdr = self.findWordIncludingEditor(name)
+        if hdr == 0 || hdr == Cell(-1) { return nil }
+        let cfa = Int(self.getCFA(hdr))
+        let first = self.readCell(cfa)
+        if first == self.docolID, self.readCell(cfa + 8) == self.litID {
+            return Int(self.readCell(cfa + 16))
+        }
+        if first == self.createRuntimeID {
+            return Int(self.readCell(cfa + 8))
+        }
+        return nil
     }
 
     /// CFA and action-storage address for a DEFER / VALUE (docol+LIT) or CREATE/DOES> defer.
@@ -4638,6 +4842,7 @@ public final class TZForth {
             self.writeCellHere(0)
             self.alignHere()
             self.push(head)
+            self.registerWordlist(head)
         }
 
         _ = register("FORTH-WORDLIST") {
@@ -7057,6 +7262,41 @@ public final class TZForth {
             self.flushTerminalRefreshIfNeeded()
         }
 
+        /// ( flag -- )  Host: SZ-EDIT-LOOP session active (File menu Save/Close).
+        _ = register("SZ-HOST-EDITOR-ACTIVE!") {
+            self.szEditorSessionActive = self.pop() != 0
+        }
+
+        /// ( -- )  Host: bare SZEDIT — show SZ-EDITOR open panel after this line.
+        /// If FROMLIB is armed, start the panel at Resources/Library (session cwd unchanged).
+        _ = register("SZ-HOST-REQUEST-OPEN") {
+            if self.isFromLibraryFlagSet(), let lib = Self.bundleLibraryDirectoryURL() {
+                self.clearFromLibraryFlag()
+                self.fileDialogStartDirectoryOverride = lib.path
+            } else {
+                self.clearFromLibraryFlag()
+            }
+            self.szEditorOpenRequested = true
+        }
+
+        /// ( -- c-addr u )  Host: take pending editor open path (empty if none).
+        _ = register("SZ-HOST-TAKE-PATH") {
+            let path = self.pendingEditorPath
+            self.pendingEditorPath = ""
+            if path.isEmpty {
+                self.push(0)
+                self.push(0)
+                return
+            }
+            let bytes = Array(path.utf8)
+            let slot = self.allocateStringBufferSlot()
+            for (i, b) in bytes.enumerated() {
+                self.writeByte(slot + i, b)
+            }
+            self.push(Cell(slot))
+            self.push(Cell(bytes.count))
+        }
+
         _ = register("WORDS") {
             self.validateAndRepairSystemState()
 
@@ -7158,8 +7398,11 @@ public final class TZForth {
         }
 
         _ = register("FORGET") {
-            // The user-facing, classic "FORGET NAME" parsing word.
-            // (The high-level >LFA-based version is available as FORGET-WORD for teaching.)
+            // Classic "FORGET NAME": reclaim dictionary from that header forward, and prune
+            // *every* wordlist (not only CURRENT) so EDITOR / user VOCABULARY chains cannot
+            // keep dangling links into reclaimed headers. Name is found via the search order
+            // (same as FIND), so ANEW markers and words defined in other vocabs are visible.
+            // (The high-level >LFA-based FORGET-WORD remains a teaching-only LATEST poke.)
             self.validateAndRepairSystemState()
 
             let name = self.parseWord().uppercased()
@@ -7168,45 +7411,29 @@ public final class TZForth {
                 return
             }
 
-            let listHead = self.readCell(self.CURRENT)
-            var link = self.readCell(listHead)
-            var safety = 0
-            while link != 0 && safety < 10000 {
-                safety += 1
-                if !self.isValidDictionaryLink(link) { break }
-
-                let flagsLen = self.readByte(Int(link) + 8)
-                let len = Int(flagsLen & self.MASK_NAMELENGTH)
-                var nameBytes: [UInt8] = []
-                for i in 0..<len {
-                    nameBytes.append(self.readByte(Int(link) + 9 + i))
-                }
-                let wname = String(bytes: nameBytes, encoding: .utf8) ?? ""
-                if wname.uppercased() == name {
-                    // Safety: do not allow FORGET to remove kernel primitives.
-                    if link <= self.kernelLatest {
-                        self.throwIllegalArgument("? Cannot FORGET kernel word '\(name)'")
-                        return
-                    }
-
-                    // Classic FORGET: remove this word and every word defined *after* it
-                    // (higher dictionary addresses / toward LATEST). Headers grow upward, so
-                    // HERE is rewound to this header. LATEST becomes the *older* neighbor
-                    // (this header's link) — never a more recent word, which would leave
-                    // LATEST pointing into reclaimed space and break FIND (ANEW/CREATE saw
-                    // "isn't unique" and later FLOAD looked undefined).
-                    let older = self.readCell(link)
-                    self.writeCell(listHead, older)
-                    self.writeCell(self.DP_ADDR, link)
-                    self.dictionaryHighWater = link
-
-                    // Extra defensive repair after modifying critical system variables.
-                    self.validateAndRepairSystemState()
-                    return
-                }
-                link = self.readCell(link)
+            // Prefer search-order (FIND semantics); also try CURRENT so words remain
+            // forgettable after PREVIOUS while CURRENT still points at their wordlist.
+            var hdr = self.findWord(name)
+            if hdr == 0 || hdr == Cell(-1) {
+                hdr = self.findWordInWordlist(self.readCell(self.CURRENT), name: name)
             }
-            self.kernelThrow(StdThrow.undefinedWord, message: "? \(name) ?")
+            if hdr == 0 || hdr == Cell(-1) {
+                self.kernelThrow(StdThrow.undefinedWord, message: "? \(name) ?")
+                return
+            }
+            // Safety: do not allow FORGET into kernel / bootstrap space (HERE at end of boot).
+            // Prefer kernelHere so words installed into EDITOR/ASSEMBLER during bootstrap are
+            // protected even when their headers sit past the last FORTH LATEST link.
+            let kernelFloor = self.kernelHere != 0 ? self.kernelHere : (self.kernelLatest + 1)
+            if hdr < kernelFloor {
+                self.throwIllegalArgument("? Cannot FORGET kernel word '\(name)'")
+                return
+            }
+
+            // Headers grow upward: cut at this header removes it and every later definition
+            // in any wordlist whose header address is >= cut.
+            self.forgetDictionaryFrom(cut: hdr)
+            self.validateAndRepairSystemState()
         }
 
         _ = register("HELP") {
@@ -9647,17 +9874,33 @@ public final class TZForth {
             self.throwIllegalArgument("? MARKER cannot restore past kernel")
             return
         }
+        // First prune *all* wordlists at the cut (including vocabs not on the search
+        // order when MARKER ran), then reinstall the heads MARKER explicitly saved.
+        self.forgetDictionaryFrom(cut: savedHere)
+
         let headsBase = storage + 24
         let wlsBase = headsBase + n * self.CELL_SIZE
         var newOrder: [Cell] = []
         for i in 0..<n {
             let head = self.readCell(headsBase + i * self.CELL_SIZE)
             let wl = self.readCell(wlsBase + i * self.CELL_SIZE)
-            self.writeCell(Int(wl), head)
-            newOrder.append(wl)
+            // Only rewrite heads whose head-cell still lives below the cut.
+            if wl == 0 || wl < savedHere {
+                self.writeCell(Int(wl), head)
+            }
+            if wl == 0 || wl < savedHere {
+                newOrder.append(wl)
+            }
+        }
+        if newOrder.isEmpty {
+            newOrder = [Cell(self.LATEST)]
         }
         self.searchOrder = newOrder
-        self.writeCell(self.CURRENT, savedCurrent)
+        if savedCurrent == 0 || savedCurrent < savedHere {
+            self.writeCell(self.CURRENT, savedCurrent)
+        } else {
+            self.writeCell(self.CURRENT, Cell(self.LATEST))
+        }
         self.writeCell(self.DP_ADDR, savedHere)
         self.dictionaryHighWater = savedHere
         self.validateAndRepairSystemState()
@@ -10396,6 +10639,11 @@ public final class TZForth {
     /// user-defined words (and reclaiming their memory). Also re-captures
     /// fileEchoAddr from the (still-present) kernel FILE-ECHO word.
     private func restoreKernelDictionary() {
+        // Prune every wordlist (EDITOR, ASSEMBLER, user WORDLISTs, …) of post-kernel
+        // headers, then pin FORTH's head and HERE to the bootstrap boundary.
+        if kernelHere != 0 {
+            self.forgetDictionaryFrom(cut: kernelHere)
+        }
         if kernelLatest != 0 {
             writeCell(LATEST, kernelLatest)
         }
@@ -10598,6 +10846,9 @@ public final class TZForth {
         waitingForMs = false
         waitingForXKey = false
         isResumingBlockingPrimitive = false
+        szEditorSessionActive = false
+        pendingEditorPath = ""
+        szEditorOpenRequested = false
         xkeyAssembly.removeAll(keepingCapacity: true)
         extendedKeyQueue.removeAll(keepingCapacity: true)
         fileLoadRequested = false
@@ -10719,6 +10970,7 @@ public final class TZForth {
         xkeyAssembly.removeAll(keepingCapacity: true)
         fileLoadRequested = false
         fileEditRequested = false
+        szEditorOpenRequested = false
         pendingEditURL = nil
         pendingLoadURL = nil
         loopControlStack.removeAll()

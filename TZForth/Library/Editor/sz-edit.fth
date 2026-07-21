@@ -34,6 +34,8 @@ DECIMAL
  24 CONSTANT SZ-PGDN
  28 CONSTANT SZ-HOME-FILE      \ Ctrl-Home
  29 CONSTANT SZ-END-FILE       \ Ctrl-End
+ 30 CONSTANT SZ-CMD-OPEN       \ host File→Open while KEY waiting
+ 31 CONSTANT SZ-CMD-NEW        \ host File→New while KEY waiting
 127 CONSTANT SZ-DEL            \ also delete-forward (legacy)
 
 VARIABLE SZ-DONE
@@ -201,14 +203,34 @@ VARIABLE SZ-DONE
    SZ-CONFIRM-QUIT IF  -1 SZ-DONE !  THEN
 ;
 
+\ Host menu / session flags (see TZForth host primitives SZ-HOST-EDITOR-ACTIVE!)
+: SZ-EDITOR-ENTER  ( -- )  -1 SZ-HOST-EDITOR-ACTIVE! ;
+: SZ-EDITOR-LEAVE  ( -- )   0 SZ-HOST-EDITOR-ACTIVE! ;
+
+\ Menu-injected commands (host provideKey while KEY is waiting; path via SZ-HOST-TAKE-PATH)
+: SZ-DO-MENU-OPEN  ( -- )
+   SZ-HOST-TAKE-PATH
+   DUP 0= IF  2DROP EXIT  THEN
+   SZ-LOAD IF  .( SZ-EDITOR: open failed) CR EXIT  THEN
+   SZ-VIEW-RESET
+;
+
+: SZ-DO-MENU-NEW  ( -- )
+   SZ-CLEAR-BUF
+   0 SZ-FNAME C!
+   SZ-VIEW-RESET
+;
+
 \ -----------------------------------------------------------------------------
 \ Dispatch
 \ -----------------------------------------------------------------------------
 
 : SZ-HANDLE-KEY  ( c -- )
    255 AND
-   DUP SZ-CTRL-Q = IF  DROP SZ-DO-QUIT EXIT  THEN
-   DUP SZ-CTRL-S = IF  DROP SZ-DO-SAVE EXIT  THEN
+   DUP SZ-CTRL-Q = IF  DROP SZ-DO-QUIT EXIT  THEN   \ also File→Close / Cmd-W via host
+   DUP SZ-CTRL-S = IF  DROP SZ-DO-SAVE EXIT  THEN   \ also File→Save / Cmd-S via host
+   DUP SZ-CMD-OPEN = IF  DROP SZ-DO-MENU-OPEN EXIT  THEN
+   DUP SZ-CMD-NEW = IF  DROP SZ-DO-MENU-NEW EXIT  THEN
    DUP SZ-LEFT = IF  DROP SZ-GO-LEFT EXIT  THEN
    DUP SZ-RIGHT = IF  DROP SZ-GO-RIGHT EXIT  THEN
    DUP SZ-UP = IF  DROP SZ-GO-UP EXIT  THEN
@@ -232,12 +254,14 @@ VARIABLE SZ-DONE
 : SZ-EDIT-LOOP  ( -- )
    0 SZ-DONE !
    SZ-VIEW-RESET
+   SZ-EDITOR-ENTER
    BEGIN
       SZ-DONE @ 0=
    WHILE
       SZ-REDRAW
       KEY SZ-HANDLE-KEY
    REPEAT
+   SZ-EDITOR-LEAVE
    FACILITY-OFF
    CLS
    .( SZ-EDITOR: done) CR
@@ -250,7 +274,21 @@ VARIABLE SZ-DONE
    SZ-EDIT-LOOP
 ;
 
+\ Empty untitled buffer and enter the editor (File → New / ⌘N).
+: SZ-EDIT-NEW  ( -- )
+   SZ-CLEAR-BUF
+   0 SZ-FNAME C!
+   SZ-EDIT-LOOP
+;
+
+\ Host set path, then: SZ-HOST-OPEN-EDIT (File → Open when not already editing).
+: SZ-HOST-OPEN-EDIT  ( -- )
+   SZ-HOST-TAKE-PATH
+   DUP 0= IF  2DROP EXIT  THEN
+   SZ-EDIT-FILE
+;
+
 \ Parse a path and edit. With FROMLIB on the same console line, relative
 \ names resolve under Resources/Library (OPEN-FILE honors FROM-LIBRARY):
 \   FROMLIB SZEDIT Editor/SZ-EDITOR-README.txt
-: SZEDIT  ( -- )  BL WORD COUNT SZ-EDIT-FILE ;
+\ : SZEDIT  ( -- )  BL WORD COUNT SZ-EDIT-FILE ;

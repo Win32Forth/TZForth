@@ -25,7 +25,6 @@ import SwiftUI
 import AppKit
 
 /// Quit when the user closes the last console window (typical single-window tool behavior).
-/// Multiple windows remain possible via File → New Window for now, but closing the last one ends the app.
 final class TZForthAppDelegate: NSObject, NSApplicationDelegate {
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
         true
@@ -41,6 +40,30 @@ struct TZForthApp: App {
             ContentView()
         }
         .commands {
+            // Replace File → New Window with document-style New / Open.
+            CommandGroup(replacing: .newItem) {
+                Button("New") {
+                    NotificationCenter.default.post(name: .fileNew, object: nil)
+                }
+                .keyboardShortcut("n", modifiers: .command)
+                Button("Open…") {
+                    NotificationCenter.default.post(name: .fileOpen, object: nil)
+                }
+                .keyboardShortcut("o", modifiers: .command)
+            }
+            CommandGroup(replacing: .saveItem) {
+                Button("Save") {
+                    NotificationCenter.default.post(name: .fileSave, object: nil)
+                }
+                .keyboardShortcut("s", modifiers: .command)
+            }
+            CommandGroup(after: .saveItem) {
+                Button("Close") {
+                    NotificationCenter.default.post(name: .fileClose, object: nil)
+                }
+                .keyboardShortcut("w", modifiers: .command)
+            }
+
             CommandMenu("Tools") {
                 Button("CLS") {
                     NotificationCenter.default.post(name: .clearConsole, object: nil)

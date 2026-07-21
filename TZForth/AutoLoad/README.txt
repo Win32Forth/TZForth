@@ -31,12 +31,11 @@ Files in this project folder
   README.txt            This note
   (any other .fth)      Copied into the app; include from autoload.fth as needed
 
-Default autoload.fth loads ANEW.fth so ANEW is available at the REPL.
+Default autoload.fth loads ANEW.fth and FROMLIB FLOAD Editor/SZ-EDITOR.fth
+so the in-app editor is always available (File menu / SZEDIT).
 
-Editor, big-integer, and π modules live under Resources/Library/ (see
-TZForth/Library/ and Library/README.txt), not AutoLoad:
+Other Library modules (see TZForth/Library/ and Library/README.txt):
 
-  FROMLIB FLOAD Editor/SZ-EDITOR.fth
   FROMLIB FLOAD BigInteger/big-int.fth
   FROMLIB FLOAD PI/pi-test.fth
 

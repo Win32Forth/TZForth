@@ -273,7 +273,7 @@ ANS words implemented from 15.6.1 / extensions:
 | `DUMP` | `( addr u -- )` — hex dump of **u address units (bytes)**; 16 per line, uppercase hex, ASCII gutter |
 | `SEE` | Decompile / list word |
 | `WORDS` | List dictionary (optional vocab filter) |
-| `FORGET` | Parse name; truncate dictionary from that word forward |
+| `FORGET` | Parse name (search order, then CURRENT); truncate dictionary from that header forward and prune **every** wordlist so other vocabularies cannot keep dangling links |
 | `NAME>STRING` | `( nt -- c-addr u )` — **nt** = header address (link field); transient buffer |
 | `NAME>INTERPRET` | `( nt -- xt )` — xt is cfa |
 | `NAME>COMPILE` | `( nt -- xt )` — immediate → cfa; non-immediate → hidden compile stub |

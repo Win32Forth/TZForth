@@ -28,30 +28,39 @@ Reference: Legacy/SmallZimmerEditor.fth — DO NOT MODIFY
 
 How to load
 -----------
-  FROMLIB FLOAD Editor/SZ-EDITOR.fth
+  Product boot (autoload.fth) already does:
+    FROMLIB FLOAD Editor/SZ-EDITOR.fth
+  so the editor is available at the REPL after launch.
 
-  (ANEW is optional if already loaded at boot via AutoLoad/autoload.fth.)
   Reload after source edits: FROMLIB FLOAD Editor/SZ-EDITOR.fth again
 
-Quick test
-----------
-  CHDIR to a writable folder if needed, then:
-  SZ-BUFFER-SMOKE
-    - type text, move with Ctrl-B/F/P/N or arrows
-    - Ctrl-S save, Ctrl-Q quit
+File menu (macOS)
+-----------------
+  ⌘N / File → New     empty untitled buffer and enter the editor
+  ⌘O / File → Open…   open a file in the editor
+  ⌘S / File → Save    save (while editing)
+  ⌘W / File → Close   leave the editor (dirty prompt if modified)
+  ⌘Q                  quit TZForth (application)
 
-  Or:
+Console / Forth
+---------------
   S" /path/to/file.txt" SZ-EDIT-FILE
   SZEDIT /path/to/file.txt
-  FROMLIB SZEDIT Editor/SZ-EDITOR-README.txt   \ open a Library file
+  SZEDIT                 \ open panel (same as File → Open)
+  FROMLIB SZEDIT Editor/SZ-EDITOR-README.txt
+  FROMLIB SZEDIT         \ open panel starting at Resources/Library
+  SZ-EDIT-NEW
+  SZ-BUFFER-SMOKE     sample file for quick tests
 
-Editor keys
------------
-  Use the Control key (⌃), NOT the Command/Apple key (⌘).
-  ⌘Q quits the whole macOS app; editor quit is ⌃Q.
+Vocabulary
+----------
+  Body words live in the standard EDITOR vocabulary (boot VOCABULARY EDITOR).
+  SZEDIT is defined in FORTH so the console entry point needs no ALSO EDITOR.
+  To reach body words from the REPL:  ALSO EDITOR  ...  PREVIOUS
+  Host File menu (⌘N / ⌘O) temporarily searches EDITOR when starting New/Open.
 
-  Ctrl-S       save to current name
-  Ctrl-Q       quit (asks if modified)
+Editor keys (while editing)
+---------------------------
   Arrow keys   move
   Home / ^A    start of line
   End  / ^E    end of line

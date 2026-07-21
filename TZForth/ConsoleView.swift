@@ -32,6 +32,14 @@ extension Notification.Name {
     static let toolsViewLibraryFolder = Notification.Name("ToolsViewLibraryFolder")
     /// Tools menu: DOCS → VIEW Documents Folder (Finder on Resources/docs)
     static let toolsViewDocsFolder = Notification.Name("ToolsViewDocsFolder")
+    /// File menu / ⌘N — new untitled editor buffer.
+    static let fileNew = Notification.Name("FileNew")
+    /// File menu / ⌘O — open file in SZ-EDITOR.
+    static let fileOpen = Notification.Name("FileOpen")
+    /// File menu / ⌘S — save (while editor session active).
+    static let fileSave = Notification.Name("FileSave")
+    /// File menu / ⌘W — close editor session (not quit app).
+    static let fileClose = Notification.Name("FileClose")
 }
 
 let consoleMessage = "=== TZForth (based on Leif Bruder's lbForth) ===\n\n"
@@ -91,6 +99,24 @@ struct ConsoleView: View {
     @State private var pinCaretRequest = 0
 
     var body: some View {
+        consoleRoot
+            .onReceive(NotificationCenter.default.publisher(for: .fileNew)) { _ in
+                handleFileNew()
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .fileOpen)) { _ in
+                handleFileOpen()
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .fileSave)) { _ in
+                handleFileSave()
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .fileClose)) { _ in
+                handleFileClose()
+            }
+    }
+
+    /// Split from `body` so the Swift type checker can finish (menu + KEY modifiers are heavy).
+    @ViewBuilder
+    private var consoleRoot: some View {
         ConsoleTextView(
             text: $consoleText,
             isFocused: $isFocused,
@@ -975,6 +1001,180 @@ struct ConsoleView: View {
         }
     }
 
+    // MARK: - File menu (New / Open / Save / Close → SZ-EDITOR)
+
+    /// ⌘S / File → Save. While the edit KEY loop is waiting, inject save (code 19).
+    private func handleFileSave() {
+        guard forth.isSZEditorLoaded() else {
+            appendHostNote("? SZ-EDITOR not loaded (check AutoLoad)\n")
+            return
+        }
+        if forth.waitingForKey && forth.szEditorSessionActive {
+            _ = deliverBlockingKey(19) // SZ-CTRL-S / save
+            return
+        }
+        appendHostNote("? Save: open a file in SZ-EDITOR first (File → Open or SZEDIT)\n")
+    }
+
+    /// ⌘W / File → Close. Leaves the editor (not the app). Inject quit-editor (code 17).
+    private func handleFileClose() {
+        if forth.waitingForKey && forth.szEditorSessionActive {
+            _ = deliverBlockingKey(17) // SZ-DO-QUIT path
+            return
+        }
+        // Not in editor: ignore (⌘W must not quit the app; ⌘Q does that).
+    }
+
+    /// ⌘N / File → New. Empty untitled buffer; starts editor if needed.
+    private func handleFileNew() {
+        guard forth.isSZEditorLoaded() else {
+            appendHostNote("? SZ-EDITOR not loaded (check AutoLoad)\n")
+            return
+        }
+        if forth.waitingForKey && forth.szEditorSessionActive {
+            if !confirmDiscardOrSaveIfDirty(action: "create a new file") { return }
+            _ = deliverBlockingKey(31) // SZ-CMD-NEW
+            return
+        }
+        if forth.waitingForKey {
+            appendHostNote("? New: finish the current KEY wait first\n")
+            return
+        }
+        DispatchQueue.main.async {
+            // Body words live in EDITOR (only SZEDIT is in FORTH).
+            self.forth.feedLineInEditorVocabulary("SZ-EDIT-NEW")
+            self.markProtectedThroughEndOfText()
+            self.keepCursorVisible(followPrompt: true)
+        }
+    }
+
+    /// ⌘O / File → Open…. Panel, then edit (or reload buffer if already editing).
+    private func handleFileOpen() {
+        guard forth.isSZEditorLoaded() else {
+            appendHostNote("? SZ-EDITOR not loaded (check AutoLoad)\n")
+            return
+        }
+        if forth.waitingForKey && forth.szEditorSessionActive {
+            if !confirmDiscardOrSaveIfDirty(action: "open another file") { return }
+            presentEditorOpenPanel { url in
+                self.forth.pendingEditorPath = url.path
+                _ = self.deliverBlockingKey(30) // SZ-CMD-OPEN
+            }
+            return
+        }
+        if forth.waitingForKey {
+            appendHostNote("? Open: finish the current KEY wait first\n")
+            return
+        }
+        presentEditorOpenPanel { url in
+            self.forth.pendingEditorPath = url.path
+            DispatchQueue.main.async {
+                // Body words live in EDITOR (only SZEDIT is in FORTH).
+                self.forth.feedLineInEditorVocabulary("SZ-HOST-OPEN-EDIT")
+                self.markProtectedThroughEndOfText()
+                self.keepCursorVisible(followPrompt: true)
+            }
+        }
+    }
+
+    private func appendHostNote(_ s: String) {
+        isProgrammaticConsoleAppend = true
+        consoleText += s
+        markProtectedThroughEndOfText()
+        isProgrammaticConsoleAppend = false
+        keepCursorVisible(followPrompt: true)
+    }
+
+    /// If dirty, ask Save / Don't Save / Cancel. Returns false if Cancel or if Save was chosen
+    /// (save is injected via KEY; user should invoke Open/New again after save completes).
+    private func confirmDiscardOrSaveIfDirty(action: String) -> Bool {
+        guard forth.isSZEditorDirty() else { return true }
+        let alert = NSAlert()
+        alert.messageText = "The buffer has unsaved changes."
+        alert.informativeText = "Do you want to save before you \(action)?"
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "Save")
+        alert.addButton(withTitle: "Don't Save")
+        alert.addButton(withTitle: "Cancel")
+        let response = alert.runModal()
+        switch response {
+        case .alertFirstButtonReturn:
+            // Inject save into the KEY loop; do not continue open/new in the same gesture.
+            if forth.waitingForKey && forth.szEditorSessionActive {
+                _ = deliverBlockingKey(19)
+            }
+            return false
+        case .alertSecondButtonReturn:
+            return true
+        default:
+            return false
+        }
+    }
+
+    private func presentEditorOpenPanel(onPick: @escaping (URL) -> Void) {
+        // FROMLIB SZEDIT / host may set fileDialogStartDirectoryOverride (e.g. Library).
+        let startDirPath: String
+        if let override = forth.fileDialogStartDirectoryOverride, !override.isEmpty {
+            forth.fileDialogStartDirectoryOverride = nil
+            startDirPath = override
+        } else if !forth.logicalCurrentDirectory.isEmpty {
+            startDirPath = forth.logicalCurrentDirectory
+        } else {
+            startDirPath = FileManager.default.currentDirectoryPath
+        }
+        let startDir = URL(fileURLWithPath: startDirPath)
+        activateLastDirectoryScope(parent: startDir)
+
+        let panel = NSOpenPanel()
+        panel.title = "Open — SZ-EDITOR"
+        panel.message = "Choose a text file to edit."
+        panel.prompt = "Open"
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = false
+        panel.directoryURL = startDir
+        panel.allowedContentTypes = [
+            UTType(filenameExtension: "fth") ?? .plainText,
+            UTType(filenameExtension: "txt") ?? .plainText,
+            UTType(filenameExtension: "fs") ?? .plainText,
+            .plainText,
+        ]
+        panel.begin { result in
+            guard result == .OK, let url = panel.url else { return }
+            let accessing = url.startAccessingSecurityScopedResource()
+            DispatchQueue.main.async {
+                onPick(url)
+                if accessing {
+                    url.stopAccessingSecurityScopedResource()
+                }
+            }
+        }
+    }
+
+    /// Bare SZEDIT / SZ-HOST-REQUEST-OPEN → same open panel as File → Open.
+    private func handleSZEditorOpenRequestIfNeeded() {
+        guard forth.szEditorOpenRequested else { return }
+        forth.szEditorOpenRequested = false
+        guard forth.isSZEditorLoaded() else {
+            appendHostNote("? SZ-EDITOR not loaded (check AutoLoad)\n")
+            forth.fileDialogStartDirectoryOverride = nil
+            return
+        }
+        if forth.waitingForKey {
+            appendHostNote("? SZEDIT: finish the current KEY wait first\n")
+            forth.fileDialogStartDirectoryOverride = nil
+            return
+        }
+        presentEditorOpenPanel { url in
+            self.forth.pendingEditorPath = url.path
+            DispatchQueue.main.async {
+                self.forth.feedLineInEditorVocabulary("SZ-HOST-OPEN-EDIT")
+                self.markProtectedThroughEndOfText()
+                self.keepCursorVisible(followPrompt: true)
+            }
+        }
+    }
+
     private func handlePostFeedActions() {
         // Defer host dialogs until the outermost FLOAD/INCLUDED finishes. onOutput fires on
         // every tell() during a long load; without this guard a stray bare FLOAD at the end of
@@ -985,6 +1185,7 @@ struct ConsoleView: View {
         // that were executed during interpretation get serviced promptly. This covers:
         // - bare "fload" / "edit" / "chdir" (set *Requested flag -> show dialog)
         // - "fload foo" / "edit foo" (named; sets pendingLoadURL / pendingEditURL)
+        // - bare "szedit" / "fromlib szedit" (szEditorOpenRequested → SZ-EDITOR panel)
         // - same when executed from inside colon defs or loaded source.
         if forth.directoryPickRequested {
             showDirectoryPickDialog()
@@ -1001,6 +1202,7 @@ struct ConsoleView: View {
         if forth.fileEditRequested {
             showFileEditDialog()
         }
+        handleSZEditorOpenRequestIfNeeded()
     }
 
     private func handlePendingEditIfNeeded() {

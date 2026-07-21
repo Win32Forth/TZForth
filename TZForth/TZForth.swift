@@ -220,12 +220,40 @@ public final class TZForth {
 
     /// Start of line containing `addr` (byte after previous EOL sequence, or buffer start).
     /// EOL is CR, LF, or CRLF — never leaves a phantom empty line between CR and LF.
+    ///
+    /// EOL bytes belong to the line they terminate. That matters for PREV-LINE:
+    /// `LineStart(ls - 1)` lands on the previous line’s last EOL byte; for CRLF that
+    /// is the LF. Treating LF as “start of next line” made PREV-LINE a no-op, so Up
+    /// never moved on CRLF files (e.g. Legacy/SmallZimmerEditor.fth) while LF-only
+    /// files (ANS-VALIDATE) worked.
     private func szEditorLineStart(at addr: Int) -> Int {
         guard let (base, _, tend) = self.szEditorBufferRange() else { return addr }
         var p = min(max(addr, base), tend)
         if p <= base { return base }
-        // Examine the last byte strictly before addr.
-        p -= 1
+
+        // If `addr` sits on an EOL byte, step to the last body byte before the full
+        // EOL sequence so the backward scan finds *this* line’s start, not the next.
+        if p < tend {
+            let b = self.readByte(p)
+            if b == 0x0A {
+                // LF alone, or LF of CRLF → move onto CR first when present.
+                if p > base && self.readByte(p - 1) == 0x0D {
+                    p -= 1
+                }
+                if p <= base { return base }
+                p -= 1
+            } else if b == 0x0D {
+                if p <= base { return base }
+                p -= 1
+            } else {
+                // Content: examine last byte strictly before addr.
+                p -= 1
+            }
+        } else {
+            // addr == tend: start from last buffer byte.
+            p -= 1
+        }
+
         // If that byte is the LF of a CRLF, step to the CR so we treat one EOL.
         if p > base && self.readByte(p) == 0x0A && self.readByte(p - 1) == 0x0D {
             p -= 1

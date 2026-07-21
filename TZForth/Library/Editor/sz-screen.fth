@@ -3,29 +3,34 @@
 \ Uses Facility PAGE/AT-XY/EMIT, then TERMINAL-REFRESH once per frame so the
 \ host paints the full screen (PAGE alone must not flush an empty buffer).
 \
-\ Layout (0-based rows, 108 cols — facility default matches):
-\   row 0        status
-\   row 1        top border  +----...----+
-\   rows 2..21   text        |NNNNN|body (100 cols)...|
-\   row 22       bottom border
-\   row 23       help
+\ Layout (0-based rows; geometry from SET-EDIT-WINDOW / EDIT-WINDOW settings):
+\   row 0              status
+\   row 1              top border  +----...----+
+\   rows 2..(1+H)      text        |NNNNN|body (W cols)...|
+\   row (2+H)          bottom border
+\   row (3+H)          help
 \
-\ Text body is exactly SZ-TEXT-WIDTH (100) columns — not reduced for the gutter.
+\ Text body is SZ-TEXT-WIDTH columns (default 80). Gutter/frame are extra.
+\ User:  width height SET-EDIT-WINDOW   (persists via settings)
+\ Query: EDIT-WINDOW  ( -- width height )
 \
 \ Depends on: sz-host.fth, sz-buffer.fth
 
 DECIMAL
 
- 108 CONSTANT SZ-COLS           \ full facility width: | gutter | text100 |
+\ Fixed chrome (not changed by SET-EDIT-WINDOW)
    1 CONSTANT SZ-FRAME-TOP
-  22 CONSTANT SZ-FRAME-BOT
    2 CONSTANT SZ-TEXT-TOP
-  21 CONSTANT SZ-TEXT-BOT
    1 CONSTANT SZ-LN-COL         \ first column of line-number gutter
    5 CONSTANT SZ-LN-WIDTH       \ digits (right-justified; blank if past EOF)
    6 CONSTANT SZ-LN-SEP         \ column of | between gutter and text
    7 CONSTANT SZ-TEXT-LEFT      \ first column of text body
- 100 CONSTANT SZ-TEXT-WIDTH     \ exact editable text columns
+
+\ Dynamic geometry (set by SZ-APPLY-EDIT-WINDOW)
+VARIABLE SZ-TEXT-WIDTH          \ editable text columns
+VARIABLE SZ-TEXT-BOT            \ last text row
+VARIABLE SZ-FRAME-BOT           \ bottom border row
+VARIABLE SZ-COLS                \ full facility width
 
 \ SZ-CUR / SZ-TOP are defined in sz-buffer.fth (needed by SZ-ENSURE-CAP).
 
@@ -33,11 +38,23 @@ VARIABLE SZ-HCOL                   \ leftmost visible text column (horizontal sc
 VARIABLE SZ-DRAW-LNO               \ running 1-based line # while painting (not on R stack)
 VARIABLE SZ-SAVE-BASE              \ BASE save for gutter (avoid R stack inside DO)
 
-: SZ-TEXT-ROWS  ( -- n )  SZ-TEXT-BOT SZ-TEXT-TOP - 1+ ;
+\ ( width height -- )  apply text-body size to layout variables (host has clamped).
+: SZ-APPLY-EDIT-WINDOW  ( width height -- )
+   SWAP SZ-TEXT-WIDTH !
+   SZ-TEXT-TOP + 1- SZ-TEXT-BOT !
+   SZ-TEXT-BOT @ 1+ SZ-FRAME-BOT !
+   \ cols = TEXT-LEFT + width + 1 (right border) = width + 8
+   SZ-TEXT-WIDTH @ SZ-TEXT-LEFT + 1+ SZ-COLS !
+;
+
+: SZ-TEXT-ROWS  ( -- n )  SZ-TEXT-BOT @ SZ-TEXT-TOP - 1+ ;
+
+VARIABLE SZ-PREF-COL               \ sticky column for Up/Down (like most editors)
 
 : SZ-VIEW-RESET  ( -- )
    SZ-TBUF DUP SZ-CUR !  SZ-TOP !
    0 SZ-HCOL !
+   0 SZ-PREF-COL !
 ;
 
 : SZ-CUR-COL  ( -- col )
@@ -46,95 +63,82 @@ VARIABLE SZ-SAVE-BASE              \ BASE save for gutter (avoid R stack inside 
 : SZ-CUR-LINE  ( -- addr )
    SZ-CUR @ SZ-LINE-START ;
 
-\ Count line starts from addr `from` up to (not past) `to`. Must precede SZ-LINE-NO.
-\ Uses a variable — must not nest on R inside callers that also use R.
-VARIABLE SZ-STEP-N
+\ Length of the logical line containing the cursor (excludes EOL bytes).
+: SZ-CUR-LINE-LEN  ( -- n )
+   SZ-CUR-LINE SZ-PARSE-LINE NIP ;
+
+
 : SZ-LINE-STEPS  ( from to -- n )
-   0 SZ-STEP-N !
-   BEGIN
-      OVER OVER U<
-   WHILE
-      SWAP SZ-NEXTLF 1+ SWAP
-      1 SZ-STEP-N +!
-   REPEAT
-   2DROP SZ-STEP-N @
+   SZ-HOST-LINE-STEPS
 ;
 
-\ 1-based line number of a line-start address (empty buffer => 1).
+\ 1-based line number — host scan (not STEP-LIMIT-bound Forth loops).
 : SZ-LINE-NO  ( line-addr -- n )
-   SZ-TBUF SWAP SZ-LINE-STEPS 1+ ;
+   SZ-HOST-LINE-NO ;
 
 : SZ-CUR-LINE-NO  ( -- n )
-   SZ-CUR-LINE SZ-LINE-NO ;
+   SZ-CUR @ SZ-HOST-LINE-NO ;
 
 : SZ-SCROLL-UP  ( -- )
    SZ-TOP @ SZ-TBUF = IF  EXIT  THEN
-   SZ-TOP @ 1- SZ-LINE-START SZ-TOP !
+   SZ-TOP @ SZ-PREV-LINE SZ-TOP !
 ;
 
 : SZ-SCROLL-DOWN  ( -- )
-   SZ-TOP @ SZ-NEXTLF
-   DUP SZ-TEND = IF  DROP EXIT  THEN
-   1+ DUP SZ-TEND SZ-U>= IF  DROP EXIT  THEN
+   SZ-TOP @ SZ-NEXT-LINE
+   DUP SZ-TEND SZ-U>= IF  DROP EXIT  THEN
    SZ-TOP !
 ;
 
-\ Keep cursor column inside the horizontal window [SZ-HCOL, SZ-HCOL+WIDTH).
+\ Keep HCOL coherent with the *current* line and caret.
+\ Critical: after leaving a very long scrolled line, HCOL can exceed the new
+\ line length — then every caret position paints at visual column 0 and motion
+\ looks "stuck". Short lines that fit the window always force HCOL = 0.
 : SZ-ENSURE-HVISIBLE  ( -- )
-   SZ-CUR-COL
-   DUP SZ-HCOL @ < IF
+   \ ( len width -- flag ) via > 0=  is  len<=width; > consumes both, only flag remains
+   SZ-CUR-LINE-LEN  SZ-TEXT-WIDTH @ > 0= IF
+      0 SZ-HCOL !  EXIT                 \ whole line fits — no leftover HCOL
+   THEN
+   SZ-CUR-COL                           \ p
+   DUP SZ-HCOL @ < IF                   \ left of window
       SZ-HCOL !  EXIT
    THEN
-   \ past right edge → scroll so cursor sits on last visible column
-   DUP SZ-HCOL @ SZ-TEXT-WIDTH + 1- > IF
-      SZ-TEXT-WIDTH - 1+  0 MAX  SZ-HCOL !
+   \ p is past the last visible column (p - HCOL > WIDTH-1)
+   DUP SZ-HCOL @ -  SZ-TEXT-WIDTH @ 1- > IF
+      SZ-TEXT-WIDTH @ 1- -  0 MAX  SZ-HCOL !   \ HCOL = p - (WIDTH-1)
    ELSE
       DROP
    THEN
 ;
 
-\ Keep SZ-CUR's line in the text window without O(n²) scroll-down walks.
-\ Jumping to end of a large file used to call SZ-SCROLL-DOWN + SZ-LINE-STEPS
-\ once per line and hit STEP-LIMIT, aborting the editor (looked like Ctrl-End quit).
-\ Vertical position uses a data-stack copy — never R@ inside DO (R is the loop frame).
+\ Keep SZ-CUR's line in the text window. Host computes top so we only scroll
+\ when the cursor line is actually outside the [TOP, TOP+ROWS) range — not on
+\ every Down (old walk-back logic scrolled too early and broke Up).
 : SZ-ENSURE-VISIBLE  ( -- )
-   SZ-CUR-LINE                      \ ( line-start )
-   \ Cursor above window → snap top to that line
-   DUP SZ-TOP @ U< IF  DUP SZ-TOP !  THEN
-   \ Cursor too far below top → put it on the last visible row
-   SZ-TOP @ OVER SZ-LINE-STEPS
-   SZ-TEXT-ROWS 1- > IF
-      \ walk back TEXT-ROWS-1 line starts from cursor line
-      SZ-TEXT-ROWS 1- 0 ?DO
-         DUP SZ-TBUF = IF  LEAVE  THEN
-         1- SZ-LINE-START
-      LOOP
-      SZ-TOP !
-   ELSE
-      DROP
-   THEN
+   SZ-CUR @  SZ-TOP @  SZ-TEXT-ROWS  SZ-HOST-ENSURE-TOP
+   SZ-TOP !
    SZ-ENSURE-HVISIBLE
 ;
 
 : SZ-BLANK-ROW  ( row -- )
    0 SWAP AT-XY
-   SZ-COLS 0 DO  BL EMIT  LOOP ;
+   SZ-COLS @ 0 DO  BL EMIT  LOOP ;
 
 \ Horizontal rule: +----...----+  (width SZ-COLS)
 : SZ-DRAW-HBAR  ( row -- )
    0 SWAP AT-XY
    [CHAR] + EMIT
-   SZ-COLS 2 - 0 DO  [CHAR] - EMIT  LOOP
+   SZ-COLS @ 2 - 0 DO  [CHAR] - EMIT  LOOP
    [CHAR] + EMIT
 ;
 
 : SZ-DRAW-FRAME  ( -- )
    SZ-FRAME-TOP SZ-DRAW-HBAR
-   SZ-FRAME-BOT SZ-DRAW-HBAR
-   SZ-TEXT-BOT 1+ SZ-TEXT-TOP DO
+   SZ-FRAME-BOT @ SZ-DRAW-HBAR
+   SZ-TEXT-BOT @ 1+ SZ-TEXT-TOP DO
       0 I AT-XY  [CHAR] | EMIT
       SZ-LN-SEP I AT-XY  [CHAR] | EMIT
-      SZ-COLS 1- I AT-XY  [CHAR] | EMIT
+      SZ-COLS @ 1- I AT-XY  [CHAR] | EMIT
    LOOP
 ;
 
@@ -151,55 +155,115 @@ VARIABLE SZ-STEP-N
    SZ-SAVE-BASE @ BASE !
 ;
 
-\ Paint one text row with horizontal scroll (SZ-HCOL = first visible column).
-: SZ-SHOW-LINE  ( line-addr row -- )
-   SZ-TEXT-LEFT SWAP AT-XY
-   SZ-PARSE-LINE                    ( a u )
-   \ skip scrolled-off prefix
-   SZ-HCOL @ OVER MIN >R            ( a u ) ( R: skip )
-   R@ - 0 MAX                       ( a u' )
-   SWAP R> + SWAP                   ( a' u' )
-   SZ-TEXT-WIDTH MIN
-   DUP 0= IF  2DROP EXIT  THEN
-   0 DO
-      DUP I + C@
-      DUP SZ-CH-CR = IF  DROP BL  THEN
-      EMIT
-   LOOP
-   DROP
+\ Map buffer byte to a single-column glyph (TAB/controls must not reach the host;
+\ NSTextView expands TAB and shifts the right border left on long lines).
+: SZ-GLYPH  ( c -- c' )
+   DUP BL 1- > OVER 127 < AND IF  EXIT  THEN   \ 32..126 keep
+   DROP [CHAR] .
 ;
 
+\ Clear text field + redraw right border for one row (prevents leftover glyphs).
+: SZ-CLEAR-TEXT-ROW  ( row -- )
+   SZ-TEXT-LEFT OVER AT-XY
+   SZ-TEXT-WIDTH @ 0 DO  BL EMIT  LOOP
+   SZ-COLS @ 1- SWAP AT-XY  [CHAR] | EMIT
+;
+
+\ Paint one text row with horizontal scroll (SZ-HCOL = first visible column).
+\ No >R here — REDRAW is inside DO and must not nest return-stack temps.
+VARIABLE SZ-SKIP
+VARIABLE SZ-PAINTED
+: SZ-SHOW-LINE  ( line-addr row -- )
+   DUP SZ-CLEAR-TEXT-ROW
+   SZ-TEXT-LEFT SWAP AT-XY
+   SZ-PARSE-LINE                    ( a u )
+   SZ-HCOL @ OVER MIN SZ-SKIP !     ( a u )
+   SZ-SKIP @ - 0 MAX                ( a u' )
+   SWAP SZ-SKIP @ + SWAP            ( a' u' )
+   SZ-TEXT-WIDTH @ MIN
+   DUP SZ-PAINTED !
+   DUP 0= IF  2DROP EXIT  THEN
+   0 DO
+      DUP I + C@ SZ-GLYPH EMIT
+   LOOP
+   DROP
+   \ Pad to full TEXT-WIDTH so the border never rides on leftover content
+   SZ-TEXT-WIDTH @ SZ-PAINTED @ - 0 MAX 0 ?DO  BL EMIT  LOOP
+;
+
+\ Status must fit on one facility row (no wrap). Long paths used to wrap past
+\ cols, scroll the facility buffer, wipe the status, and shift the caret down.
 : SZ-SHOW-STATUS  ( -- )
    0 SZ-BLANK-ROW
    0 0 AT-XY
    .( SZ-EDITOR )
-   SZ-HAS-NAME? IF  SZ-GET-NAME TYPE  ELSE  .( untitled)  THEN
-   SZ-MODIFIED @ IF  .(  *)  THEN
+   SZ-HAS-NAME? IF
+      SZ-GET-NAME
+      \ keep name short: leave room for " L… C… b/… WxH"
+      DUP 28 > IF  DROP 28  THEN
+      TYPE
+   ELSE
+      .( untitled)
+   THEN
+   SZ-MODIFIED @ IF  .( *)  THEN
    .(  L) SZ-CUR-LINE-NO 0 .R
-   .(  C) SZ-CUR-COL 1+ 0 .R
+   .( C) SZ-CUR-COL 1+ 0 .R
    .(  ) SZ-TLEN @ 0 .R .( b)
    .( /) SZ-TBUF-CAP @ 0 .R
+   .(  ) SZ-TEXT-WIDTH @ 0 .R .( x) SZ-TEXT-ROWS 0 .R
 ;
 
 : SZ-SHOW-HELP  ( -- )
-   SZ-TEXT-BOT 2 + SZ-BLANK-ROW
-   0 SZ-TEXT-BOT 2 + AT-XY
+   SZ-TEXT-BOT @ 2 + SZ-BLANK-ROW
+   0 SZ-TEXT-BOT @ 2 + AT-XY
    \ ASCII only (facility is a byte grid; non-ASCII used to blank the whole help row).
    .( Cmd-S save  Cmd-O open  Cmd-W close | arrows Home/End PgUp/Dn BS Del)
 ;
 
-\ Place Facility cursor on the insert cell (host reverse-videos it).
-\ Column is relative to SZ-HCOL so End on a long line can sit at the true end.
+\ True if SZ-CUR lies on the logical line starting at `ls`.
+\ No return stack — safe to call from inside DO (I is the loop index on R).
+VARIABLE SZ-TMP-CUR
+: SZ-CUR-ON-LINE  ( ls -- flag )
+   SZ-CUR @ SZ-TMP-CUR !
+   DUP SZ-NEXT-LINE                     ( ls nx )
+   OVER SZ-TMP-CUR @ U> IF  2DROP 0 EXIT  THEN   \ cur < ls
+   DUP SZ-TMP-CUR @ U> IF  2DROP -1 EXIT  THEN   \ cur < nx
+   \ nx <= cur: still on line if both at TEND
+   DUP SZ-TEND =  SZ-TMP-CUR @ SZ-TEND =  AND IF  2DROP -1 EXIT  THEN
+   2DROP 0
+;
+
+VARIABLE SZ-AT-COL
+VARIABLE SZ-AT-ROW
+VARIABLE SZ-HAVE-AT
+
+\ Record screen cell for CUR while painting this line (matches what the user sees).
+: SZ-NOTE-CUR  ( line-start row -- )
+   OVER SZ-CUR-ON-LINE 0= IF  2DROP EXIT  THEN
+   ( ls row )
+   SWAP  SZ-CUR @ SWAP -                ( row col )  \ col = cur - ls
+   SZ-HCOL @ -  0 MAX  SZ-TEXT-WIDTH @ 1- MIN
+   SZ-TEXT-LEFT +  SZ-AT-COL !
+   SZ-AT-ROW !
+   -1 SZ-HAVE-AT !
+;
+
 : SZ-PLACE-CURSOR  ( -- )
-   SZ-CUR-COL SZ-HCOL @ -  0 MAX  SZ-TEXT-WIDTH 1- MIN
-   SZ-TEXT-LEFT +
-   SZ-TOP @ SZ-CUR-LINE SZ-LINE-STEPS SZ-TEXT-TOP +
-   SZ-TEXT-BOT MIN
-   AT-XY
+   SZ-HAVE-AT @ IF
+      SZ-AT-COL @ SZ-AT-ROW @ AT-XY
+   ELSE
+      \ Fallback if CUR not in the window (should be rare after ENSURE-VISIBLE)
+      SZ-CUR-COL SZ-HCOL @ -  0 MAX  SZ-TEXT-WIDTH @ 1- MIN
+      SZ-TEXT-LEFT +
+      SZ-TOP @ SZ-CUR-LINE SZ-LINE-STEPS SZ-TEXT-TOP +
+      SZ-TEXT-BOT @ MIN
+      AT-XY
+   THEN
 ;
 
 : SZ-REDRAW  ( -- )
    SZ-ENSURE-VISIBLE
+   0 SZ-HAVE-AT !
    PAGE
    SZ-SHOW-STATUS
    SZ-DRAW-FRAME
@@ -207,15 +271,16 @@ VARIABLE SZ-STEP-N
    \ counter (old R> 1+ >R produced 2,4,6… and broke the DO frame).
    SZ-TOP @ SZ-LINE-NO SZ-DRAW-LNO !
    SZ-TOP @
-   SZ-TEXT-BOT 1+ SZ-TEXT-TOP DO
+   SZ-TEXT-BOT @ 1+ SZ-TEXT-TOP DO
       DUP SZ-TEND SZ-U>= IF
-         \ past EOF — blank gutter, empty text between frame bars
+         \ past EOF — blank gutter; still allow cursor on empty TEND line
          0 I SZ-SHOW-GUTTER
+         DUP I SZ-NOTE-CUR
       ELSE
          SZ-DRAW-LNO @ I SZ-SHOW-GUTTER
          DUP I SZ-SHOW-LINE
-         SZ-NEXTLF
-         DUP SZ-TEND <> IF  1+  THEN
+         DUP I SZ-NOTE-CUR
+         SZ-NEXT-LINE
          1 SZ-DRAW-LNO +!
       THEN
    LOOP
@@ -234,3 +299,6 @@ VARIABLE SZ-STEP-N
    CLS
    .( sz-screen: OK) CR
 ;
+
+\ Sync layout from host settings (default 80×20 text body).
+EDIT-WINDOW SZ-APPLY-EDIT-WINDOW

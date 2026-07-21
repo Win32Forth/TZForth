@@ -44,14 +44,18 @@ VARIABLE SZ-DONE
 \ Insert / delete at SZ-CUR
 \ -----------------------------------------------------------------------------
 
+\ Open a gap of u bytes at SZ-CUR (MOVE is src dest u).
 : SZ-OPEN-HOLE  ( u -- flag )
    DUP 0= IF  DROP -1 EXIT  THEN
    \ Grow capacity if needed (1 MB initial; doubles / expands for paste-sized inserts).
    DUP SZ-TLEN @ + SZ-ENSURE-CAP 0= IF  DROP 0 EXIT  THEN
-   >R
-   SZ-TEND SZ-CUR @ -
+   >R                                   \ R: gap size
+   SZ-TEND SZ-CUR @ -                   \ n = bytes after cursor
    DUP 0> IF
-      SZ-CUR @  SZ-CUR @ R@ +  ROT  MOVE
+      SZ-CUR @                          ( n src )
+      SZ-CUR @ R@ +                     ( n src dest )
+      ROT                               ( src dest n )
+      MOVE
    ELSE
       DROP
    THEN
@@ -65,6 +69,7 @@ VARIABLE SZ-DONE
    1 SZ-OPEN-HOLE 0= IF  DROP EXIT  THEN
    SZ-CUR @ C!
    1 SZ-CUR +!
+   SZ-CUR-COL SZ-PREF-COL !             \ SZ-PREF-COL lives in sz-screen
    SZ-TOUCH
 ;
 
@@ -73,6 +78,8 @@ VARIABLE SZ-DONE
    SZ-CH-CR SZ-CUR @ C!
    SZ-CH-LF SZ-CUR @ 1+ C!
    2 SZ-CUR +!
+   0 SZ-PREF-COL !
+   0 SZ-HCOL !
    SZ-TOUCH
 ;
 
@@ -119,56 +126,94 @@ VARIABLE SZ-DONE
 \ Motion only (never mutate buffer)
 \ -----------------------------------------------------------------------------
 
+\ Remember preferred column after horizontal motion (not after Up/Down).
+: SZ-REMEMBER-COL  ( -- )
+   SZ-CUR-COL SZ-PREF-COL !
+;
+
 : SZ-GO-LEFT  ( -- )
-   SZ-CUR @ SZ-TBUF > IF  -1 SZ-CUR +!  THEN ;
+   SZ-CUR @ SZ-TBUF > IF  -1 SZ-CUR +!  THEN
+   SZ-REMEMBER-COL
+;
 
 : SZ-GO-RIGHT  ( -- )
-   SZ-CUR @ SZ-TEND < IF  1 SZ-CUR +!  THEN ;
+   \ Do not walk past end-of-line into the next line with plain Right
+   SZ-CUR @ SZ-CUR-LINE SZ-PARSE-LINE +  ( cur eol-addr )
+   < IF  1 SZ-CUR +!  THEN
+   SZ-REMEMBER-COL
+;
 
+\ Up/Down keep SZ-PREF-COL (sticky column). Do *not* overwrite it with CUR-COL —
+\ after horizontal scroll CUR-COL can be huge and then MIN onto a short line is OK,
+\ but overwriting PREF from a short line destroyed the goal for the next long line.
 : SZ-GO-UP  ( -- )
-   SZ-CUR-COL >R
-   SZ-CUR-LINE DUP SZ-TBUF = IF  DROP R> DROP EXIT  THEN
-   1- SZ-LINE-START
-   DUP SZ-PARSE-LINE NIP R@ MIN +
+   SZ-CUR-LINE DUP SZ-TBUF = IF  DROP EXIT  THEN
+   SZ-PREV-LINE
+   DUP SZ-PARSE-LINE NIP SZ-PREF-COL @ MIN +
    SZ-CUR !
-   R> DROP
 ;
 
 : SZ-GO-DOWN  ( -- )
-   SZ-CUR-COL >R
-   SZ-CUR-LINE SZ-NEXTLF
-   DUP SZ-TEND = IF  DROP R> DROP EXIT  THEN
-   1+ DUP SZ-TEND SZ-U>= IF  DROP R> DROP EXIT  THEN
-   DUP SZ-PARSE-LINE NIP R@ MIN +
+   SZ-CUR-LINE SZ-NEXT-LINE
+   DUP SZ-TEND SZ-U>= IF  DROP EXIT  THEN
+   DUP SZ-PARSE-LINE NIP SZ-PREF-COL @ MIN +
    SZ-CUR !
-   R> DROP
 ;
 
 : SZ-GO-HOME-LINE  ( -- )
-   SZ-CUR-LINE SZ-CUR ! ;
+   SZ-CUR-LINE SZ-CUR !
+   0 SZ-HCOL !
+   0 SZ-PREF-COL !
+;
 
+\ Jump to true end of line and scroll horizontally so that end is visible.
 : SZ-GO-END-LINE  ( -- )
-   SZ-CUR-LINE SZ-PARSE-LINE + SZ-CUR ! ;
+   SZ-CUR-LINE SZ-PARSE-LINE + SZ-CUR !
+   SZ-REMEMBER-COL
+   SZ-ENSURE-HVISIBLE
+;
 
 : SZ-GO-HOME-FILE  ( -- )
-   SZ-TBUF SZ-CUR ! ;
+   SZ-TBUF SZ-CUR !
+   0 SZ-HCOL !
+   0 SZ-PREF-COL !
+;
 
+\ End of file = end of last *content* line (not a phantom empty row after a final EOL).
 : SZ-GO-END-FILE  ( -- )
-   SZ-TEND SZ-CUR ! ;
+   SZ-TLEN @ 0= IF  SZ-TBUF SZ-CUR !  0 SZ-HCOL !  0 SZ-PREF-COL !  EXIT  THEN
+   SZ-TEND SZ-CUR !
+   \ File ends with EOL → CUR-LINE is TEND (empty); sit on previous line's end instead.
+   SZ-CUR-LINE SZ-TEND = IF
+      SZ-TEND 1- SZ-LINE-START SZ-PARSE-LINE + SZ-CUR !
+   THEN
+   SZ-REMEMBER-COL
+   SZ-ENSURE-HVISIBLE
+;
 
+\ Page without DO+R nesting (avoids return-stack clashes with motion).
+VARIABLE SZ-PAGE-N
 : SZ-PAGE-UP  ( -- )
-   SZ-TEXT-ROWS 0 DO  SZ-GO-UP  LOOP ;
+   SZ-TEXT-ROWS SZ-PAGE-N !
+   BEGIN  SZ-PAGE-N @  WHILE
+      SZ-GO-UP  -1 SZ-PAGE-N +!
+   REPEAT
+;
 
 : SZ-PAGE-DOWN  ( -- )
-   SZ-TEXT-ROWS 0 DO  SZ-GO-DOWN  LOOP ;
+   SZ-TEXT-ROWS SZ-PAGE-N !
+   BEGIN  SZ-PAGE-N @  WHILE
+      SZ-GO-DOWN  -1 SZ-PAGE-N +!
+   REPEAT
+;
 
 \ -----------------------------------------------------------------------------
 \ Save / quit
 \ -----------------------------------------------------------------------------
 
 : SZ-MSG-LINE  ( -- )
-   SZ-TEXT-BOT 2 + SZ-BLANK-ROW
-   0 SZ-TEXT-BOT 2 + AT-XY
+   SZ-TEXT-BOT @ 2 + SZ-BLANK-ROW
+   0 SZ-TEXT-BOT @ 2 + AT-XY
 ;
 
 : SZ-DO-SAVE  ( -- )
@@ -191,13 +236,21 @@ VARIABLE SZ-DONE
    THEN
 ;
 
+\ Returns true if the editor should close.
+\ Dirty buffer: S = save then close (if save ok), D = discard and close, else stay.
 : SZ-CONFIRM-QUIT  ( -- flag )
    SZ-MODIFIED @ 0= IF  -1 EXIT  THEN
    SZ-MSG-LINE
-   .( Modified! Quit without save? y/N )
+   .( Modified! Save or Discard before Closing and Quiting? S/D )
    TERMINAL-REFRESH
-   KEY
-   DUP [CHAR] y =  SWAP [CHAR] Y =  OR
+   KEY 255 AND
+   DUP [CHAR] s = OVER [CHAR] S = OR IF
+      DROP
+      SZ-DO-SAVE
+      SZ-MODIFIED @ 0=                      \ close only if clean after save
+      EXIT
+   THEN
+   DUP [CHAR] d = SWAP [CHAR] D = OR        \ D = discard
 ;
 
 : SZ-DO-QUIT  ( -- )

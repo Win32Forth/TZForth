@@ -61,14 +61,20 @@ Vocabulary
 
 Display
 -------
-  Status bar: name, modified flag, L (line), C (column), bytes used/capacity.
-  Text body: exactly 100 columns (facility width 108 with line-number gutter).
-  Text rows:  |NNNN|text body (100 cols)...|
+  Status bar: name, modified flag, L (line), C (column), bytes used/capacity, WxH.
+  Text body: user-sized (default 80×20). Facility adds gutter/frame/help
+  (cols = width+8, rows = height+4).
+  Text rows:  |NNNN|text body...|
+
+  width height SET-EDIT-WINDOW   \ e.g. 100 30 SET-EDIT-WINDOW (live + saved)
+  EDIT-WINDOW                    \ ( -- width height )
+  .SETTINGS                      \ shows current edit window
+  SAVE-SETTINGS                  \ also persists edit window with other prefs
 
 Buffer
 ------
   Heap-backed (ALLOCATE), initial 1 MB, grows as needed for inserts / large loads
-  (and future copy-paste). Engine auto-grows linear memory if the heap is tight.
+  (and future copy-paste).
 
 Editor keys (while editing)
 ---------------------------

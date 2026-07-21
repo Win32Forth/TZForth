@@ -928,6 +928,10 @@ extension TZForth {
         self.tell("    persist: SAVE-SETTINGS  (inner-interpreter steps per run; pure multiprecision may need higher)\n")
         self.tell("  memory bytes           = \(self.memory.count) (\(memMB) MB)\n")
         self.tell("    change: n GROWMEMORYMB once per session before ALLOCATE; SAVE-SETTINGS stores MB for next boot\n")
+        self.tell("  edit window (text)     = \(self.settings.editorTextCols) cols × \(self.settings.editorTextRows) rows\n")
+        self.tell("    facility grid          \(self.settings.editorFacilityCols)×\(self.settings.editorFacilityRows) (incl. gutter/frame/help)\n")
+        self.tell("    change: width height SET-EDIT-WINDOW  (live + saved; e.g. 100 30 SET-EDIT-WINDOW)\n")
+        self.tell("    query:  EDIT-WINDOW . . \n")
         self.tell("  default blocks file    = \(self.settings.defaultBlocksFileName)\n")
         self.tell("    change: edit \"defaultBlocksFileName\" in \(settingsPath) then restart\n")
         self.tell("    (or OPEN-BLOCK-FILE / USE-BLOCK-FILE for this session only)\n")
@@ -952,12 +956,13 @@ extension TZForth {
             let v = self.readCell(self.stepLimitVarAddr)
             s.stepLimit = v <= 0 ? 0 : (v > Cell(Int.max) ? Int.max : Int(v))
         }
+        // editorTextCols / editorTextRows already live in settings (SET-EDIT-WINDOW).
         s.defaultMemoryMB = max(1, self.memory.count / (1024 * 1024))
         do {
             try s.save()
             self.settings = s
             self.tell("Settings saved. Restart TZForth for BLOCK-SIZE / BLOCK-BUFFER-COUNT / memory changes.\n")
-            self.tell("(STEP-LIMIT is already live; SAVE-SETTINGS only persists it for next boot.)\n")
+            self.tell("(STEP-LIMIT and SET-EDIT-WINDOW are already live; SAVE-SETTINGS persists them.)\n")
         } catch {
             self.tell("? SAVE-SETTINGS failed: \(error.localizedDescription)\n")
         }

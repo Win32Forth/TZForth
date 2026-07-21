@@ -117,55 +117,34 @@ CREATE SZ-FNAME  256 ALLOT         \ counted path of current file (0 = untitled)
    SZ-FNAME C@ 0<> ;
 
 \ -----------------------------------------------------------------------------
-\ Line scan (inspired by SmallZimmerEditor nextlf/prevlf/parse_line)
+\ Line scan — CR / LF / CRLF via host primitives (no Forth C@ walks)
 \ -----------------------------------------------------------------------------
 
 $0A CONSTANT SZ-CH-LF
 $0D CONSTANT SZ-CH-CR
 
-\ ( addr -- addr' )  address of LF at/after addr, or SZ-TEND if none
+\ ( addr -- addr' )  address of next CR or LF at/after addr, or SZ-TEND
 : SZ-NEXTLF  ( addr -- addr' )
-   DUP SZ-TEND SZ-U>= IF  DROP SZ-TEND EXIT  THEN
-   BEGIN
-      DUP C@ SZ-CH-LF = IF  EXIT  THEN
-      1+
-      DUP SZ-TEND SZ-U>=
-   UNTIL
-   DROP SZ-TEND ;
+   SZ-HOST-NEXT-EOL ;
 
-\ ( addr -- addr' )  start of current line (byte after previous LF, or buffer start)
+\ ( addr -- addr' )  start of line containing addr
 : SZ-LINE-START  ( addr -- addr' )
-   DUP SZ-TBUF SZ-U<= IF  DROP SZ-TBUF EXIT  THEN
-   BEGIN
-      1-  DUP SZ-TBUF U< IF  DROP SZ-TBUF EXIT  THEN
-      DUP C@ SZ-CH-LF =
-   UNTIL
-   1+ ;
+   SZ-HOST-LINE-START ;
 
-\ ( line-start -- line-start u )  length of line body (not including CR/LF)
+\ ( line-start -- line-start u )  length of line body (not including CR/LF/CRLF)
 : SZ-PARSE-LINE  ( addr -- addr u )
-   DUP SZ-NEXTLF  ( a aLF )
-   OVER -         ( a nincl-LF? )  \ distance to LF (0 if a=LF)
-   \ strip trailing CR if present
-   DUP IF
-      2DUP + 1- C@ SZ-CH-CR = IF  1-  THEN
-   THEN
-   ;
+   DUP SZ-HOST-NEXT-EOL  ( a aEOL )
+   OVER -                ( a u )
+;
 
-\ ( -- n )  number of lines (empty buffer => 0; no final LF still counts last line)
-\ Note: DO is ( limit start -- ) with start on top — not ( start limit ).
+\ ( line-start -- line-start' )  following / previous line starts (host)
+: SZ-NEXT-LINE  ( ls -- ls' )  SZ-HOST-NEXT-LINE ;
+: SZ-PREV-LINE  ( ls -- ls' )  SZ-HOST-PREV-LINE ;
+
+\ ( -- n )  line count via host (1-based index of TEND = last line #, or 0 if empty)
 : SZ-LINE-COUNT  ( -- n )
    SZ-TLEN @ 0= IF  0 EXIT  THEN
-   0  SZ-TBUF                    \ count addr
-   BEGIN
-      DUP SZ-TEND U<             \ addr still in buffer?
-   WHILE
-      DUP C@ SZ-CH-LF = IF  SWAP 1+ SWAP  THEN
-      1+
-   REPEAT
-   DROP
-   \ if buffer does not end with LF, last partial line still counts
-   SZ-TEND 1- C@ SZ-CH-LF <> IF  1+  THEN
+   SZ-TEND 1- SZ-HOST-LINE-NO
 ;
 
 \ -----------------------------------------------------------------------------

@@ -98,6 +98,10 @@ struct ConsoleView: View {
     /// Incremented to request moving the caret to end-of-document (after commit/output).
     @State private var pinCaretRequest = 0
 
+    /// True while the facility terminal (SZ-EDITOR PAGE paint) owns the console.
+    /// Disables soft word-wrap so fixed-width editor rows are not re-broken by the window.
+    @State private var facilityPaintActive = false
+
     var body: some View {
         consoleRoot
             .onReceive(NotificationCenter.default.publisher(for: .fileNew)) { _ in
@@ -123,6 +127,7 @@ struct ConsoleView: View {
             pinCaretRequest: $pinCaretRequest,
             // UTF-16 index of first user-editable character (same boundary as backspace protect).
             editableStartUTF16: (protectedSnapshot as NSString).length,
+            disableSoftWrap: facilityPaintActive,
             // While KEY/EKEY is blocking, refuse all NSTextView text mutations — keys are
             // delivered only via onBlockingKeyDown / handleReturnKey (never via typing into
             // the console string, which used to strip facility-screen characters).
@@ -367,6 +372,7 @@ struct ConsoleView: View {
 
                 forth.onTerminalRefresh = { screen in
                     let applyTerminal = {
+                        self.facilityPaintActive = true
                         self.isProgrammaticConsoleAppend = true
                         self.consoleText = consoleMessage + screen
                         if !screen.hasSuffix("\n") {
@@ -395,6 +401,7 @@ struct ConsoleView: View {
 
                 forth.onClearScreen = {
                     let applyClear = {
+                        self.facilityPaintActive = false
                         self.isProgrammaticConsoleAppend = true
                         self.consoleText = ""
                         self.markProtectedThroughEndOfText()
@@ -1925,6 +1932,9 @@ private struct ConsoleTextView: NSViewRepresentable {
     @Binding var pinCaretRequest: Int
     /// First UTF-16 index the user may place the caret in (engine/protected output is before this).
     var editableStartUTF16: Int
+    /// When true (SZ-EDITOR / PAGE facility paint), do not soft-wrap lines — each facility
+    /// row is a fixed-width string; wrapping at the window edge fakes broken line breaks.
+    var disableSoftWrap: Bool = false
     /// When true, refuse all text mutations (KEY/EKEY loops own the keyboard).
     var isBlockingKeyboardInput: () -> Bool = { false }
     var onReturnPressed: () -> Bool
@@ -1989,6 +1999,8 @@ private struct ConsoleTextView: NSViewRepresentable {
         let end = (text as NSString).length
         textView.setSelectedRange(NSRange(location: end, length: 0))
 
+        Self.applySoftWrapPolicy(disableSoftWrap, to: textView, scrollView: scrollView)
+
         context.coordinator.textView = textView
         onTextViewReady(textView)
         return scrollView
@@ -2003,6 +2015,8 @@ private struct ConsoleTextView: NSViewRepresentable {
         textView.onBlockingKeyDown = { event in
             context.coordinator.parent.onBlockingKeyDown?(event) ?? false
         }
+
+        Self.applySoftWrapPolicy(disableSoftWrap, to: textView, scrollView: scrollView)
 
         var shouldScroll = false
         let needsPinCaret = context.coordinator.lastHandledPinCaretRequest != pinCaretRequest
@@ -2052,6 +2066,38 @@ private struct ConsoleTextView: NSViewRepresentable {
         }
     }
 
+    /// Soft-wrap policy for the console:
+    /// - Facility/editor paint: no wrap (fixed-width rows; wrap fakes extra line breaks).
+    /// - Normal REPL: wrap to scroll-view width (comfortable long output).
+    fileprivate static func applySoftWrapPolicy(
+        _ disableSoftWrap: Bool,
+        to textView: NSTextView,
+        scrollView: NSScrollView
+    ) {
+        guard let container = textView.textContainer else { return }
+        if disableSoftWrap {
+            scrollView.hasHorizontalScroller = true
+            scrollView.autohidesScrollers = true
+            textView.isHorizontallyResizable = true
+            textView.autoresizingMask = [.height]
+            container.widthTracksTextView = false
+            // Huge width ⇒ each newline is one visual row (no mid-line wrap).
+            let huge = CGFloat.greatestFiniteMagnitude
+            container.containerSize = NSSize(width: huge, height: huge)
+            textView.minSize = NSSize(width: 0, height: 0)
+            textView.maxSize = NSSize(width: huge, height: huge)
+        } else {
+            scrollView.hasHorizontalScroller = false
+            textView.isHorizontallyResizable = false
+            textView.autoresizingMask = [.width]
+            container.widthTracksTextView = true
+            let w = max(scrollView.contentSize.width, 1)
+            container.containerSize = NSSize(width: w, height: .greatestFiniteMagnitude)
+            textView.minSize = NSSize(width: 0, height: scrollView.contentSize.height)
+            textView.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: .greatestFiniteMagnitude)
+        }
+    }
+
     /// Scroll after layout catches up (needed when WORDS / many OK lines grow the document).
     fileprivate static func scheduleScrollToInsertionPoint(in textView: NSTextView) {
         DispatchQueue.main.async {
@@ -2081,9 +2127,21 @@ private struct ConsoleTextView: NSViewRepresentable {
 
         let inset = textView.textContainerInset
         let targetHeight = max(contentBottom + inset.height * 2, textView.enclosingScrollView?.contentSize.height ?? 0)
-        if abs(textView.frame.height - targetHeight) > 0.5 {
-            var frame = textView.frame
+        var frame = textView.frame
+        var changed = false
+        if abs(frame.size.height - targetHeight) > 0.5 {
             frame.size.height = targetHeight
+            changed = true
+        }
+        // When soft-wrap is off, grow width to the used text so horizontal scroll works.
+        if textView.isHorizontallyResizable {
+            let targetWidth = max(usedRect.maxX + inset.width * 2, textView.enclosingScrollView?.contentSize.width ?? 0)
+            if abs(frame.size.width - targetWidth) > 0.5 {
+                frame.size.width = targetWidth
+                changed = true
+            }
+        }
+        if changed {
             textView.frame = frame
         }
     }

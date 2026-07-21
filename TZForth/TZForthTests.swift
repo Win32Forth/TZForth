@@ -741,6 +741,11 @@ fload \(fnInnerLate.lastPathComponent)
         ansTest("SEARCH found", "S\" xyzabc\" S\" abc\" SEARCH .", "-1")
         ansTest("SEARCH miss", "S\" xyz\" S\" abc\" SEARCH .", "0")
         ansTest("SEARCH empty", "S\" abc\" S\" \" SEARCH .", "-1")
+        // SCAN (common extension, Swift primitive): remainder starts at match
+        ansTest("SCAN found", "S\" abXcd\" [CHAR] X SCAN NIP .", "3")
+        ansTest("SCAN miss", "S\" abcd\" [CHAR] Z SCAN NIP 0= .", "-1")
+        ansTest("SCAN at start", "S\" Xabc\" [CHAR] X SCAN DROP C@ .", "88")
+
         self.feedLine(": t17sl [ S\" hello\" SLITERAL ] ;")
         ansTest("SLITERAL", "t17sl TYPE", "hello")
         ansTest("ENVIRONMENT? STRING", "S\" STRING\" ENVIRONMENT? .", "-1")

@@ -15,6 +15,10 @@ public struct TZForthSettings: Codable, Equatable {
     public var defaultBlocksFileName: String = "blocks.blk"
     /// Max inner-interpreter steps per run; 0 = unlimited (no runaway guard).
     public var stepLimit: Int = 2_000_000
+    /// SZ-EDITOR text body width (columns), not including line-number gutter / frame.
+    public var editorTextCols: Int = 80
+    /// SZ-EDITOR text body height (rows), not including status / borders / help.
+    public var editorTextRows: Int = 20
 
     public init() {}
 
@@ -24,7 +28,9 @@ public struct TZForthSettings: Codable, Equatable {
         defaultBlockCount: Int = 32,
         defaultMemoryMB: Int = 2,
         defaultBlocksFileName: String = "blocks.blk",
-        stepLimit: Int = 2_000_000
+        stepLimit: Int = 2_000_000,
+        editorTextCols: Int = 80,
+        editorTextRows: Int = 20
     ) {
         self.blockSize = blockSize
         self.blockBufferCount = blockBufferCount
@@ -32,6 +38,8 @@ public struct TZForthSettings: Codable, Equatable {
         self.defaultMemoryMB = defaultMemoryMB
         self.defaultBlocksFileName = defaultBlocksFileName
         self.stepLimit = stepLimit
+        self.editorTextCols = editorTextCols
+        self.editorTextRows = editorTextRows
     }
 
     /// Decode with defaults for keys missing from older settings.json files.
@@ -43,6 +51,8 @@ public struct TZForthSettings: Codable, Equatable {
         defaultMemoryMB = try c.decodeIfPresent(Int.self, forKey: .defaultMemoryMB) ?? 2
         defaultBlocksFileName = try c.decodeIfPresent(String.self, forKey: .defaultBlocksFileName) ?? "blocks.blk"
         stepLimit = try c.decodeIfPresent(Int.self, forKey: .stepLimit) ?? 2_000_000
+        editorTextCols = try c.decodeIfPresent(Int.self, forKey: .editorTextCols) ?? 80
+        editorTextRows = try c.decodeIfPresent(Int.self, forKey: .editorTextRows) ?? 20
     }
 
     /// Application Support settings file (macOS app); CLI uses the same path when writable.
@@ -92,6 +102,16 @@ public struct TZForthSettings: Codable, Equatable {
         }
         // 0 = disabled (unlimited). Negative values are treated as unlimited.
         if s.stepLimit < 0 { s.stepLimit = 0 }
+        // Editor text body geometry (gutter/frame/help are added by the editor).
+        if s.editorTextCols < 20 { s.editorTextCols = 20 }
+        if s.editorTextCols > 200 { s.editorTextCols = 200 }
+        if s.editorTextRows < 4 { s.editorTextRows = 4 }
+        if s.editorTextRows > 60 { s.editorTextRows = 60 }
         return s
     }
+
+    /// Facility terminal size for the current editor geometry (text + chrome).
+    /// Chrome: |gutter5|text|  → cols = text + 8; rows = textRows + status/borders/help (4).
+    public var editorFacilityCols: Int { editorTextCols + 8 }
+    public var editorFacilityRows: Int { editorTextRows + 4 }
 }

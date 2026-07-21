@@ -171,7 +171,7 @@ public final class TZForth {
     public var onOutput: ((String) -> Void)?
     /// Facility terminal screen refresh (PAGE / AT-XY / EMIT buffer). Host replaces
     /// or overlays console content when this fires. Geometry: `facilityCols` × `facilityRows`
-    /// (default 108×25 so SZ-EDITOR can show 100 text columns plus a line-number gutter).
+    /// (from SET-EDIT-WINDOW / settings; default 88×24 = 80×20 text + gutter/frame/help).
     public var onTerminalRefresh: ((String) -> Void)?
     /// Host should wipe the console view immediately (CLS). Distinct from facility PAGE refresh.
     public var onClearScreen: (() -> Void)?
@@ -181,6 +181,192 @@ public final class TZForth {
     /// Facility terminal geometry (host cursor highlight must match `render()` line width).
     public var facilityCols: Int { facilityTerminal.cols }
     public var facilityRows: Int { facilityTerminal.rows }
+
+    /// SZ-EDITOR buffer base and length, or nil if not loaded.
+    private func szEditorBufferRange() -> (base: Int, len: Int, tend: Int)? {
+        guard let baseAddr = self.valueStorageAddrIncludingEditor(named: "SZ-TBUF-ADDR"),
+              let lenAddr = self.valueStorageAddrIncludingEditor(named: "SZ-TLEN") else {
+            return nil
+        }
+        let base = Int(self.readCell(baseAddr))
+        let len = Int(self.readCell(lenAddr))
+        if base <= 0 || len < 0 { return nil }
+        return (base, len, base + len)
+    }
+
+    private func szEditorIsEOL(_ b: UInt8) -> Bool { b == 0x0A || b == 0x0D }
+
+    /// 1-based line number (CR, LF, or CRLF all end a line; CRLF counts as one).
+    private func szEditorLineNumber(at addr: Int) -> Int {
+        guard let (base, _, tend) = self.szEditorBufferRange() else { return 1 }
+        let target = min(max(addr, base), tend)
+        var n = 1
+        var p = base
+        while p < target {
+            let b = self.readByte(p)
+            if b == 0x0D {
+                n += 1
+                p += 1
+                if p < target && self.readByte(p) == 0x0A { p += 1 } // CRLF
+            } else if b == 0x0A {
+                n += 1
+                p += 1
+            } else {
+                p += 1
+            }
+        }
+        return n
+    }
+
+    /// Start of line containing `addr` (byte after previous EOL sequence, or buffer start).
+    /// EOL is CR, LF, or CRLF — never leaves a phantom empty line between CR and LF.
+    private func szEditorLineStart(at addr: Int) -> Int {
+        guard let (base, _, tend) = self.szEditorBufferRange() else { return addr }
+        var p = min(max(addr, base), tend)
+        if p <= base { return base }
+        // Examine the last byte strictly before addr.
+        p -= 1
+        // If that byte is the LF of a CRLF, step to the CR so we treat one EOL.
+        if p > base && self.readByte(p) == 0x0A && self.readByte(p - 1) == 0x0D {
+            p -= 1
+        }
+        while p >= base {
+            let b = self.readByte(p)
+            if b == 0x0A {
+                // LF ends previous line; content starts at p+1 (LF alone or end of CRLF).
+                return p + 1
+            }
+            if b == 0x0D {
+                // CR or start of CRLF: next line starts after the full sequence.
+                if p + 1 < tend && self.readByte(p + 1) == 0x0A {
+                    return p + 2
+                }
+                return p + 1
+            }
+            if p == base { return base }
+            p -= 1
+        }
+        return base
+    }
+
+    /// Address of next CR/LF at or after `addr`, or TEND if none.
+    private func szEditorNextEOL(from addr: Int) -> Int {
+        guard let (base, _, tend) = self.szEditorBufferRange() else { return addr }
+        var p = min(max(addr, base), tend)
+        while p < tend {
+            if self.szEditorIsEOL(self.readByte(p)) { return p }
+            p += 1
+        }
+        return tend
+    }
+
+    /// Skip one EOL at `addr` (CRLF, CR, or LF). If not on EOL, return addr unchanged.
+    private func szEditorSkipEOL(at addr: Int) -> Int {
+        guard let (base, _, tend) = self.szEditorBufferRange() else { return addr }
+        var p = min(max(addr, base), tend)
+        if p >= tend { return tend }
+        let b = self.readByte(p)
+        if b == 0x0D {
+            p += 1
+            if p < tend && self.readByte(p) == 0x0A { p += 1 }
+            return p
+        }
+        if b == 0x0A { return p + 1 }
+        return p
+    }
+
+    /// Start of the line immediately before the line that begins at `lineStart` (or base).
+    private func szEditorPrevLineStart(_ lineStart: Int) -> Int {
+        guard let (base, _, tend) = self.szEditorBufferRange() else { return lineStart }
+        let ls = min(max(lineStart, base), tend)
+        if ls <= base { return base }
+        // Byte before this line start is the previous line's last EOL (or last content byte).
+        return self.szEditorLineStart(at: ls - 1)
+    }
+
+    /// Next line start after the line beginning at `lineStart` (or tend).
+    private func szEditorNextLineStart(_ lineStart: Int) -> Int {
+        guard let (base, _, tend) = self.szEditorBufferRange() else { return lineStart }
+        let ls = min(max(lineStart, base), tend)
+        if ls >= tend { return tend }
+        let eol = self.szEditorNextEOL(from: ls)
+        return self.szEditorSkipEOL(at: eol)
+    }
+
+    /// How many line steps from `fromLineStart` to `toLineStart` (0 if same/at or before).
+    private func szEditorLineSteps(from fromLS: Int, to toLS: Int) -> Int {
+        guard let (base, _, tend) = self.szEditorBufferRange() else { return 0 }
+        var p = self.szEditorLineStart(at: min(max(fromLS, base), tend))
+        let target = self.szEditorLineStart(at: min(max(toLS, base), tend))
+        if target <= p { return 0 }
+        var n = 0
+        var safety = 0
+        while p < target && p < tend && safety < 10_000_000 {
+            safety += 1
+            let next = self.szEditorNextLineStart(p)
+            if next <= p { break }
+            n += 1
+            p = next
+        }
+        return n
+    }
+
+    /// New window-top line start so `cursor` stays in a window of `textRows` lines.
+    private func szEditorEnsureTop(cursor: Int, top: Int, textRows: Int) -> Int {
+        guard let (base, _, tend) = self.szEditorBufferRange() else { return top }
+        let rows = max(1, textRows)
+        var topLS = self.szEditorLineStart(at: min(max(top, base), tend))
+        let curLS = self.szEditorLineStart(at: min(max(cursor, base), tend))
+
+        // Cursor above window → snap top to cursor line
+        if curLS < topLS { return curLS }
+
+        // Visible if steps from top to cursor line < textRows
+        let steps = self.szEditorLineSteps(from: topLS, to: curLS)
+        if steps < rows { return topLS }
+
+        // Scroll so cursor line is on the last visible row
+        var t = curLS
+        let back = rows - 1
+        var k = 0
+        while k < back && t > base {
+            let prev = self.szEditorPrevLineStart(t)
+            if prev >= t { break }
+            t = prev
+            k += 1
+        }
+        return t
+    }
+
+    /// Clamp, apply facility size, and update `settings` for SZ-EDITOR text body geometry.
+    /// Chrome: facility cols = textCols+8, rows = textRows+4 (status, borders, help).
+    /// If the editor is loaded, also runs `SZ-APPLY-EDIT-WINDOW` to refresh layout variables.
+    @discardableResult
+    public func applyEditWindow(textCols: Int, textRows: Int, persist: Bool) -> (cols: Int, rows: Int) {
+        var s = self.settings
+        s.editorTextCols = textCols
+        s.editorTextRows = textRows
+        s = s.sanitizedForBoot()
+        self.settings = s
+        self.facilityTerminal.resize(cols: s.editorFacilityCols, rows: s.editorFacilityRows)
+        // Sync Forth layout variables when SZ-EDITOR is loaded (body lives in EDITOR vocab).
+        let applyHdr = self.findWordIncludingEditor("SZ-APPLY-EDIT-WINDOW")
+        if applyHdr != 0 && applyHdr != Cell(-1) {
+            self.push(Cell(s.editorTextCols))
+            self.push(Cell(s.editorTextRows))
+            let cfa = self.getCFA(applyHdr)
+            self.execute(cfa: cfa, firstCell: self.readCell(Int(cfa)))
+        }
+        if persist {
+            do {
+                try s.save()
+                self.tell("Edit window \(s.editorTextCols)×\(s.editorTextRows) (facility \(s.editorFacilityCols)×\(s.editorFacilityRows)). Settings saved.\n")
+            } catch {
+                self.tell("? SET-EDIT-WINDOW: geometry applied but save failed: \(error.localizedDescription)\n")
+            }
+        }
+        return (s.editorTextCols, s.editorTextRows)
+    }
 
     /// Facility cursor (0-based col/row) after the last PAGE/AT-XY/EMIT sequence.
     /// Host uses this to reverse-video the editor insert point in the console.
@@ -868,6 +1054,7 @@ public final class TZForth {
         ("SUBSTITUTE","( c-addr1 u1 c-addr2 u2 -- c-addr2 u3 n )", "apply %name% substitutions"),
         ("UNESCAPE", "( c-addr1 u1 c-addr2 -- c-addr2 u2 )", "double each % in string"),
         ("SEARCH",  "( c-addr1 u1 c-addr2 u2 -- c-addr3 u3 flag )", "search for substring"),
+        ("SCAN",    "( c-addr1 u1 char -- c-addr2 u2 )", "skip until char (or end); remainder starts at match"),
         ("SLITERAL","( c-addr u -- )",    "compile string literal (immediate; run-time c-addr u)"),
         ("ALLOCATE","( u -- a-addr ior )","allocate u bytes from heap (ior 0 = success)"),
         ("FREE",    "( a-addr -- ior )",  "free heap block at a-addr"),
@@ -1177,8 +1364,10 @@ public final class TZForth {
         ("DEFAULT-BLOCK-COUNT","( -- addr )", "variable: blocks in a newly auto-created default .blk file"),
         ("BLOCK-BUFFER-COUNT","( -- addr )", "variable: LRU buffer slots (default 4; SAVE-SETTINGS + restart)"),
         ("STEP-LIMIT","( -- addr )",      "variable: max inner-interpreter steps per run (0=unlimited; SAVE-SETTINGS to persist)"),
-        (".SETTINGS","( -- )",            "display block/memory/step-limit settings and how to change them"),
-        ("SAVE-SETTINGS","( -- )",         "persist BLOCK-SIZE, buffer count, default block count, memory MB, STEP-LIMIT"),
+        (".SETTINGS","( -- )",            "display block/memory/step-limit/editor-window settings and how to change them"),
+        ("SAVE-SETTINGS","( -- )",         "persist BLOCK-SIZE, buffer count, memory MB, STEP-LIMIT, edit window"),
+        ("SET-EDIT-WINDOW","( width height -- )", "SZ-EDITOR text body size (cols rows); live + SAVE-SETTINGS"),
+        ("EDIT-WINDOW","( -- width height )", "current SZ-EDITOR text body size (cols rows)"),
 
         // Library (Resources/Library; FROMLIB + existing FLOAD/INCLUDE/REQUIRE)
         ("FROM-LIBRARY","( -- addr )",    "variable: if non-zero, next FLOAD/INCLUDE/REQUIRE/EDIT/DIR/CHDIR uses Resources/Library"),
@@ -1293,6 +1482,11 @@ public final class TZForth {
         self.settings = settings.sanitizedForBoot()
         let memBytes = max(Self.DEFAULT_MEMORY_BYTES, self.settings.defaultMemoryMB * 1024 * 1024)
         memory = Array(repeating: 0, count: memBytes)
+        // Facility grid sized for SZ-EDITOR chrome around saved text body geometry.
+        self.facilityTerminal.resize(
+            cols: self.settings.editorFacilityCols,
+            rows: self.settings.editorFacilityRows
+        )
 
         // Layout fixed buffers (SOURCE, STRING_BUFFER, PAD) then data/return/float stacks above PAD.
         stackBase = (PAD_BUFFER + PAD_BUFFER_SIZE + 7) & ~7
@@ -4300,6 +4494,27 @@ public final class TZForth {
         return (hayCaddr, hayLen, false)
     }
 
+    /// Common SCAN extension: first occurrence of `byte` in (caddr, u).
+    /// Returns remainder starting at the match (including it), or zero-length at the end if absent.
+    private func scanCharacter(caddr: Int, u: Int, byte: UInt8) -> (caddr: Int, u: Int) {
+        if u <= 0 {
+            return (caddr, 0)
+        }
+        // Bounds: allow scan only within memory; clamp length if needed.
+        let maxU = max(0, min(u, self.memory.count - caddr))
+        if maxU <= 0 {
+            return (caddr, 0)
+        }
+        var i = 0
+        while i < maxU {
+            if self.readByte(caddr + i) == byte {
+                return (caddr + i, maxU - i)
+            }
+            i += 1
+        }
+        return (caddr + maxU, 0)
+    }
+
     private func alignAddressUnits(_ n: Int) -> Int {
         (n + self.CELL_SIZE - 1) & ~(self.CELL_SIZE - 1)
     }
@@ -6261,6 +6476,19 @@ public final class TZForth {
             self.push(hit.found ? -1 : 0)
         }
 
+        // SCAN ( c-addr1 u1 char -- c-addr2 u2 ) — common extension (Gforth, Win32Forth, …).
+        // Advance through the buffer until `char` is found (or the buffer ends). Leaves the
+        // remainder string starting at the match (match included), or zero-length at the end.
+        // Implemented in Swift for speed (editor line walks, delimiter search).
+        _ = register("SCAN") {
+            let ch = UInt8(truncatingIfNeeded: self.pop())
+            let u1 = Int(self.pop())
+            let caddr1 = Int(self.pop())
+            let hit = self.scanCharacter(caddr: caddr1, u: u1, byte: ch)
+            self.push(Cell(hit.caddr))
+            self.push(Cell(hit.u))
+        }
+
         _ = register("REPLACES") {
             if self.readCell(self.STATE) != 0 {
                 self.kernelThrow(StdThrow.compileOnly, message: "? REPLACES not allowed while compiling")
@@ -7300,6 +7528,72 @@ public final class TZForth {
             }
             self.push(Cell(slot))
             self.push(Cell(bytes.count))
+        }
+
+        /// ( width height -- )  SZ-EDITOR text body columns and rows (not including gutter/frame/help).
+        /// Updates facility terminal size, in-memory settings, and persists settings.json.
+        _ = register("SET-EDIT-WINDOW") {
+            let height = Int(self.pop())
+            let width = Int(self.pop())
+            self.applyEditWindow(textCols: width, textRows: height, persist: true)
+        }
+
+        /// ( -- width height )  Current SZ-EDITOR text body size.
+        _ = register("EDIT-WINDOW") {
+            self.push(Cell(self.settings.editorTextCols))
+            self.push(Cell(self.settings.editorTextRows))
+        }
+
+        /// ( addr -- n )  1-based line number of byte `addr` in the SZ-EDITOR buffer.
+        /// Host scan (not STEP-LIMIT-bound) so Ctrl-End / status stay in the editor.
+        _ = register("SZ-HOST-LINE-NO") {
+            let addr = Int(self.pop())
+            self.push(Cell(self.szEditorLineNumber(at: addr)))
+        }
+
+        /// ( addr -- addr' )  start of the line containing addr (after previous EOL, or buffer start).
+        _ = register("SZ-HOST-LINE-START") {
+            let addr = Int(self.pop())
+            self.push(Cell(self.szEditorLineStart(at: addr)))
+        }
+
+        /// ( addr -- addr' )  address of next CR or LF at/after addr, or SZ-TEND if none.
+        _ = register("SZ-HOST-NEXT-EOL") {
+            let addr = Int(self.pop())
+            self.push(Cell(self.szEditorNextEOL(from: addr)))
+        }
+
+        /// ( addr -- addr' )  skip one EOL sequence at addr (CR, LF, or CRLF); else unchanged.
+        _ = register("SZ-HOST-SKIP-EOL") {
+            let addr = Int(self.pop())
+            self.push(Cell(self.szEditorSkipEOL(at: addr)))
+        }
+
+        /// ( line-start -- line-start' )  previous line start (or buffer start).
+        _ = register("SZ-HOST-PREV-LINE") {
+            let ls = Int(self.pop())
+            self.push(Cell(self.szEditorPrevLineStart(ls)))
+        }
+
+        /// ( line-start -- line-start' )  next line start (or TEND).
+        _ = register("SZ-HOST-NEXT-LINE") {
+            let ls = Int(self.pop())
+            self.push(Cell(self.szEditorNextLineStart(ls)))
+        }
+
+        /// ( from-ls to-ls -- n )  line steps from from to to (0 if to at/before from).
+        _ = register("SZ-HOST-LINE-STEPS") {
+            let toLS = Int(self.pop())
+            let fromLS = Int(self.pop())
+            self.push(Cell(self.szEditorLineSteps(from: fromLS, to: toLS)))
+        }
+
+        /// ( cursor top rows -- newtop )  window top so cursor stays visible in `rows` text lines.
+        _ = register("SZ-HOST-ENSURE-TOP") {
+            let rows = Int(self.pop())
+            let top = Int(self.pop())
+            let cursor = Int(self.pop())
+            self.push(Cell(self.szEditorEnsureTop(cursor: cursor, top: top, textRows: rows)))
         }
 
         _ = register("WORDS") {
@@ -8372,9 +8666,9 @@ public final class TZForth {
     // MARK: - Facility terminal buffer (ANS 10.6.1 PAGE / AT-XY)
 
     private struct FacilityTerminal {
-        /// Wide enough for SZ-EDITOR: |gutter5|text100| + borders = 108 columns.
-        static let defaultCols = 108
-        static let defaultRows = 25
+        /// Default matches classic 80-col text body + gutter/frame (80+8) × (20+4).
+        static let defaultCols = 88
+        static let defaultRows = 24
 
         var cols: Int = defaultCols
         var rows: Int = defaultRows
@@ -8382,6 +8676,17 @@ public final class TZForth {
         private(set) var isActive = false
         var cursorCol = 0
         var cursorRow = 0
+
+        /// Resize the facility grid (SZ-EDITOR SET-EDIT-WINDOW / boot settings).
+        mutating func resize(cols newCols: Int, rows newRows: Int) {
+            let c = max(16, newCols)
+            let r = max(8, newRows)
+            self.cols = c
+            self.rows = r
+            self.cells = Array(repeating: 32, count: c * r)
+            self.cursorCol = min(self.cursorCol, c - 1)
+            self.cursorRow = min(self.cursorRow, r - 1)
+        }
 
         mutating func page() {
             self.isActive = true
@@ -8415,8 +8720,11 @@ public final class TZForth {
             guard self.isActive else { return }
             self.cursorCol = 0
             self.cursorRow += 1
+            // Full-screen PAGE/AT-XY apps (SZ-EDITOR): never scroll the buffer.
+            // Scrolling would wipe the status row and shift the whole frame when a
+            // long status/path wraps past the last row.
             if self.cursorRow >= self.rows {
-                self.scrollUp()
+                self.cursorRow = self.rows - 1
             }
         }
 
@@ -8426,11 +8734,14 @@ public final class TZForth {
                 self.cursorCol = 0
                 self.cursorRow += 1
                 if self.cursorRow >= self.rows {
-                    self.scrollUp()
+                    // Clip at bottom-right instead of scrollUp (see newline()).
+                    self.cursorRow = self.rows - 1
+                    self.cursorCol = self.cols - 1
                 }
             }
         }
 
+        /// Legacy helper (unused by PAGE paint). Kept for possible future console-TTY mode.
         private mutating func scrollUp() {
             guard self.rows > 1 else {
                 self.cursorRow = 0
@@ -8455,11 +8766,22 @@ public final class TZForth {
             lines.reserveCapacity(self.rows)
             for r in 0..<self.rows {
                 let start = r * self.cols
-                let slice = self.cells[start..<(start + self.cols)]
-                // Byte grid, not UTF-8: use Latin-1 so any 0x80-0xFF cell still paints.
-                // .ascii returns nil if any byte is non-ASCII, which used to blank an
-                // entire row (e.g. help line with a middle-dot "·" in source).
-                lines.append(String(bytes: slice, encoding: .isoLatin1)
+                // Map each cell to a single-column glyph. Tabs/controls must not reach
+                // NSTextView (TAB expands to stops and pulls the right border left).
+                var glyphs = [UInt8]()
+                glyphs.reserveCapacity(self.cols)
+                for c in 0..<self.cols {
+                    let b = self.cells[start + c]
+                    if b >= 32 && b <= 126 {
+                        glyphs.append(b)
+                    } else if b == 32 {
+                        glyphs.append(32)
+                    } else {
+                        // C0 controls, DEL, and high bytes → printable placeholder
+                        glyphs.append(b == 0 ? 32 : 0x2E) // space or '.'
+                    }
+                }
+                lines.append(String(bytes: glyphs, encoding: .ascii)
                     ?? String(repeating: " ", count: self.cols))
             }
             return lines.joined(separator: "\n")

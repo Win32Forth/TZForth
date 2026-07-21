@@ -111,6 +111,8 @@ ANS word set 17.6.1 (character-string operations). Core `MOVE`/`FILL` remain; `C
 | `SEARCH` | `( c-addr1 u1 c-addr2 u2 -- c-addr3 u3 flag )` — first match; empty needle matches |
 | `SLITERAL` | `( c-addr u -- )` immediate — compile `(S")` + inline literal |
 
+**Common extension (not ANS):** `SCAN` `( c-addr1 u1 char -- c-addr2 u2 )` — Swift primitive; remainder starts at first matching byte (or zero length at end). Used by SZ-EDITOR `SZ-NEXTLF` and other buffer walks.
+
 `ENVIRONMENT?` answers `STRING`. FTEST / `ANS-VALIDATE` cover compare, search, trailing, blank, `/STRING`, and `SLITERAL` via `[ ]`.
 
 ### String extensions (17.6.2)

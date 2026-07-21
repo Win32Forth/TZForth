@@ -38,6 +38,7 @@ FLOAD sz-edit.fth
    .( Phases 1-5: edit + navigation + framed screen) CR
    .( File menu: Cmd-N New  Cmd-O Open  Cmd-S Save  Cmd-W Close  or  SZEDIT file) CR
    .( Keys: arrows  Home/End  ^Home/^End  PgUp/Dn  BS Del  type) CR
+   .( Size: width height SET-EDIT-WINDOW  - default 80 20, saved in settings) CR
    .( Cmd-Q quits TZForth   Cmd-W closes the editor only) CR
    CR
 ;

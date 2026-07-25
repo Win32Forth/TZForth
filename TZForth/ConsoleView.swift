@@ -42,7 +42,7 @@ extension Notification.Name {
     static let fileClose = Notification.Name("FileClose")
 }
 
-let consoleMessage = "=== TZForth (based on Leif Bruder's lbForth) ===\n\n"
+let consoleMessage = "=== TZForth 1.2.2 (based on Leif Bruder's lbForth) ===\n\n"
 
 /// A reusable console view that mimics the classic Forth REPL feel.
 /// This version drives the real TZForth engine (Leif Bruder's public-domain lbForth model).

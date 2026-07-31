@@ -1,5 +1,7 @@
 # TZForth
 
+Note: I am archiving TZForth today. Portions of TZForth have been used in a new project 64Forth along with portions of PickeForth. No further development will be done on this project. Please look at 64Forth for further evolution of this project.
+
 An ANS 2012 Standard Forth computer language development environment based on Leif Bruder's public-domain lbForth system.
 
 **GitHub:** https://github.com/Win32Forth/TZForth

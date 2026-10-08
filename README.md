@@ -9,7 +9,7 @@ An ANS 2012 Standard Forth computer language development environment based on Le
 
 ## About
 
-This project aims to bring the powerful, traditional Forth kernel sources into a modern SwiftUI application on Apple platforms for the M1, M2, M3, M4, M5, etc. processor families.
+This project aims to bring the powerful, traditional Forth kernel sources into a modern SwiftUI application on Apple platforms for the M1, M2, M3, M4, M5, etc. processor families. Also, the last version that supports the X86-64 architecture, so if you are running an older Mac, then this is the Forth for you. It is not as mature as 64Forth, or EditForth, but you have this project, and the source, so you can continue to fork and update it if you want to.
 
 ## Current State
 
